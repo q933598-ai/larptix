@@ -1760,33 +1760,51 @@ async function displayEncryptedMessage(message, bodyElement) {
     }
     return;
   }
+
   if (!cryptoEnabled) {
     bodyElement.textContent = "Encrypted. Set up E2E to read messages.";
     return;
   }
+
   try {
     await cryptoReady;
-    if (!cryptoDevice) throw new Error("Unlock E2E with your recovery key to read messages.");
-    const bundle = await api("GET", `/api/users/${encodeURIComponent(message.sender_id)}/crypto-key`);
-    const sender = users.find((item) => item.user_id === message.sender_id)
-      || { user_id: message.sender_id, display_name: message.sender_name };
-    if (!(await ensurePeerFingerprint(sender, bundle))) {
-      bodyElement.textContent = "Encrypted. Device was not verified; message was not decrypted.";
-      return;
+    if (!cryptoDevice) {
+      throw new Error("Unlock E2E with your recovery key to read messages.");
     }
-    const envelope = parseCryptoEnvelope(message.body);
-    const encryptedBody = envelope?.message_type === "group"
-      ? envelope.ciphertexts[me.user_id]
-      : message.body;
-    if (typeof encryptedBody !== "string") throw new Error("No encrypted copy was addressed to this account.");
-    console.log("[E2E] incoming", {
-      sender: message.sender_id,
-      type: envelope?.message_type,
-      hasSession: cryptoDevice.has_session(message.sender_id),
-    });
 
-    const plaintext = await withCryptoStateLock(async () => {
-      const result = cryptoDevice.decrypt(
+    // The whole incoming crypto operation is serialized.
+    // This is important for history because fetching crypto-key before
+    // entering the queue can cause messages to reach the Olm ratchet
+    // in a different order than the history itself.
+    const result = await withCryptoStateLock(async () => {
+      const bundle = await api(
+        "GET",
+        `/api/users/${encodeURIComponent(message.sender_id)}/crypto-key`
+      );
+
+      const sender = users.find((item) => item.user_id === message.sender_id)
+        || { user_id: message.sender_id, display_name: message.sender_name };
+
+      if (!(await ensurePeerFingerprint(sender, bundle))) {
+        throw new Error("Encrypted. Device was not verified; message was not decrypted.");
+      }
+
+      const envelope = parseCryptoEnvelope(message.body);
+      const encryptedBody = envelope?.message_type === "group"
+        ? envelope.ciphertexts[me.user_id]
+        : message.body;
+
+      if (typeof encryptedBody !== "string") {
+        throw new Error("No encrypted copy was addressed to this account.");
+      }
+
+      console.log("[E2E] incoming", {
+        sender: message.sender_id,
+        type: envelope?.message_type,
+        hasSession: cryptoDevice.has_session(message.sender_id),
+      });
+
+      const plaintext = cryptoDevice.decrypt(
         message.sender_id,
         encryptedBody,
         JSON.stringify(bundle),
@@ -1795,11 +1813,11 @@ async function displayEncryptedMessage(message, bodyElement) {
 
       await persistCryptoState();
 
-      return result;
+      return plaintext;
     });
 
-    const payload = parseEncryptedPayload(plaintext);
-    bodyElement.textContent = payload?.text ?? plaintext;
+    const payload = parseEncryptedPayload(result);
+    bodyElement.textContent = payload?.text ?? result;
 
     if (payload?.file && message.attachment) {
       try {
