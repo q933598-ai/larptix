@@ -151,9 +151,7 @@ impl CryptoDevice {
     }
 
     pub fn session_count(&self, peer_id: &str) -> usize {
-        self.sessions
-            .get(peer_id)
-            .map_or(0, Vec::len)
+        self.sessions.get(peer_id).map_or(0, Vec::len)
     }
 
     pub fn establish_session(
@@ -230,10 +228,17 @@ impl CryptoDevice {
                         .map_err(|_| JsValue::from_str("decrypted message is not valid UTF-8"));
                 }
             }
+            let available_one_time_keys = self.account.one_time_keys().len();
+
             let result = self
                 .account
                 .create_inbound_session(SessionConfig::version_1(), sender_identity, &pre_key)
-                .map_err(|_| JsValue::from_str("could not establish incoming encrypted session"))?;
+                .map_err(|_| {
+                    JsValue::from_str(&format!(
+                        "could not establish incoming encrypted session (available one-time keys: {})",
+                        available_one_time_keys
+                    ))
+                })?;
             let plaintext = String::from_utf8(result.plaintext)
                 .map_err(|_| JsValue::from_str("decrypted message is not valid UTF-8"))?;
             self.sessions
