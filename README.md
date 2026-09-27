@@ -66,38 +66,25 @@ for a real deployment.
 
 ### Automated Debian Install
 
-To make the VPS fetch the project itself, publish the source in a **public GitHub
-repository**. Create a new empty repository on GitHub (do not add a README/license
-there), then from the project root run:
-
-```bash
-git add .gitignore .dockerignore .env.example Cargo.lock Cargo.toml Dockerfile \
-     README.md compose.yaml client crates deploy desktop rust-toolchain.toml
-git status --short
-git commit -m "Publish Larptrix VPS installer"
-git branch -M main
-git remote add origin https://github.com/USERNAME/REPOSITORY.git
-git push -u origin main
-```
-
-The `git status` review is important: do not publish `.env`, database files, or
-real user uploads. They are excluded by `.gitignore`; never add them explicitly.
+The project is published at
+https://github.com/q933598-ai/larptix. The repository must remain public so the
+VPS can download the installer and source without GitHub credentials.
 
 Point a DNS `A` record such as `chat.example.com` to the VPS public IPv4 address.
 Allow inbound TCP ports 80 and 443 in the VPS and provider firewalls. Then run this
-single command from your computer, replacing `USERNAME`, `REPOSITORY`, and the
-domain with yours:
+single command from your computer, replacing `VPS_IP` and `chat.example.com` with
+yours:
 
 ```bash
-ssh admin@VPS_IP 'sudo bash -s -- chat.example.com https://github.com/USERNAME/REPOSITORY.git' \
-     < <(curl -fsSL https://raw.githubusercontent.com/USERNAME/REPOSITORY/main/deploy/install-debian.sh)
+ssh admin@VPS_IP 'sudo bash -s -- chat.example.com https://github.com/q933598-ai/larptix.git' \
+     < <(curl -fsSL https://raw.githubusercontent.com/q933598-ai/larptix/main/deploy/install-debian.sh)
 ```
 
 Or log into the VPS first and run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/USERNAME/REPOSITORY/main/deploy/install-debian.sh \
-     | sudo bash -s -- chat.example.com https://github.com/USERNAME/REPOSITORY.git
+curl -fsSL https://raw.githubusercontent.com/q933598-ai/larptix/main/deploy/install-debian.sh \
+     | sudo bash -s -- chat.example.com https://github.com/q933598-ai/larptix.git
 ```
 
 The script installs Docker Engine and Compose from Docker's Debian repository,
