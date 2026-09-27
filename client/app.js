@@ -120,6 +120,14 @@ let cryptoDialogMode = null;
 let cryptoEnabled = false;
 let cryptoReady = Promise.resolve();
 let cryptoLoadResolve = null;
+
+let cryptoStateQueue = Promise.resolve();
+
+function withCryptoStateLock(task) {
+  const run = cryptoStateQueue.then(task, task);
+  cryptoStateQueue = run.catch(() => {});
+  return run;
+}
 let peerVerificationResolve = null;
 const sentPlaintextByCiphertext = new Map();
 let peerConnection = null;
@@ -461,27 +469,65 @@ composer.addEventListener("submit", async (event) => {
       }
       const payload = JSON.stringify({ text: body, file: encryptedFile });
       let encryptedBody;
-      if (peer.is_group) {
-        const ciphertexts = {};
-        for (const memberId of peer.group_member_ids.filter((id) => id !== me.user_id)) {
-          const bundle = await api("GET", `/api/users/${encodeURIComponent(memberId)}/crypto-key`);
-          const member = users.find((item) => item.user_id === memberId);
-          if (!member || !(await ensurePeerFingerprint(member, bundle))) return;
-          if (!cryptoDevice.has_session(memberId)) {
-            cryptoDevice.establish_session(memberId, JSON.stringify(bundle), bundle.fingerprint);
+
+      await withCryptoStateLock(async () => {
+        if (peer.is_group) {
+          const ciphertexts = {};
+
+          for (const memberId of peer.group_member_ids.filter((id) => id !== me.user_id)) {
+            const bundle = await api(
+              "GET",
+              `/api/users/${encodeURIComponent(memberId)}/crypto-key`
+            );
+
+            const member = users.find((item) => item.user_id === memberId);
+
+            if (!member || !(await ensurePeerFingerprint(member, bundle))) {
+              throw new Error("Group member device could not be verified.");
+            }
+
+            if (!cryptoDevice.has_session(memberId)) {
+              cryptoDevice.establish_session(
+                memberId,
+                JSON.stringify(bundle),
+                bundle.fingerprint
+              );
+            }
+
+            ciphertexts[memberId] = cryptoDevice.encrypt(memberId, payload);
           }
-          ciphertexts[memberId] = cryptoDevice.encrypt(memberId, payload);
+
+          encryptedBody = JSON.stringify({
+            version: 1,
+            message_type: "group",
+            ciphertexts,
+          });
+        } else {
+          const bundle = await api(
+            "GET",
+            `/api/users/${encodeURIComponent(peerId)}/crypto-key`
+          );
+
+          if (!(await ensurePeerFingerprint(peer, bundle))) {
+            throw new Error("Peer device could not be verified.");
+          }
+
+          if (!cryptoDevice.has_session(peerId)) {
+            cryptoDevice.establish_session(
+              peerId,
+              JSON.stringify(bundle),
+              bundle.fingerprint
+            );
+          }
+
+          encryptedBody = cryptoDevice.encrypt(
+            peerId,
+            payload
+          );
         }
-        encryptedBody = JSON.stringify({ version: 1, message_type: "group", ciphertexts });
-      } else {
-        const bundle = await api("GET", `/api/users/${encodeURIComponent(peerId)}/crypto-key`);
-        if (!(await ensurePeerFingerprint(peer, bundle))) return;
-        if (!cryptoDevice.has_session(peerId)) {
-          cryptoDevice.establish_session(peerId, JSON.stringify(bundle), bundle.fingerprint);
-        }
-        encryptedBody = cryptoDevice.encrypt(peerId, payload);
-      }
-      await persistCryptoState();
+
+        await persistCryptoState();
+      });
       sentPlaintextByCiphertext.set(encryptedBody, payload);
       socket.send(JSON.stringify({
         type: "send",
@@ -537,7 +583,12 @@ avatarFile.addEventListener("change", async () => {
   if (!file) return;
   try {
     const user = await uploadFile("/api/me/avatar", file);
-    me = user;
+    me = {
+      ...user,
+      avatar_url: user.avatar_url
+        ? `${user.avatar_url}?v=${Date.now()}`
+        : user.avatar_url,
+    };
     renderMe();
   } catch (err) {
     appendSystem(err.message);
@@ -1023,7 +1074,8 @@ function connect() {
 }
 
 function openChat(id) {
-  if (callPeerId && callPeerId !== id) endCall(true);
+  // Switching chats must not terminate an active call.
+  // Calls live independently from the currently opened chat.
   peerId = id;
   const selected = [...users, ...groups].find((user) => user.user_id === id);
   peerVerified.hidden = true;
@@ -1594,7 +1646,8 @@ function paintAvatar(el, user) {
   el.classList.toggle("emoji-avatar", !user.avatar_url);
   if (user.avatar_url) {
     const img = document.createElement("img");
-    img.src = user.avatar_url;
+    const cacheKey = user.avatar_id || user.updated_at || user.avatar_version || Date.now();
+    img.src = `${user.avatar_url}${user.avatar_url.includes("?") ? "&" : "?"}v=${encodeURIComponent(cacheKey)}`;
     img.alt = "";
     el.append(img);
   } else {
@@ -1726,22 +1779,34 @@ async function displayEncryptedMessage(message, bodyElement) {
       ? envelope.ciphertexts[me.user_id]
       : message.body;
     if (typeof encryptedBody !== "string") throw new Error("No encrypted copy was addressed to this account.");
-    const plaintext = cryptoDevice.decrypt(
-      message.sender_id,
-      encryptedBody,
-      JSON.stringify(bundle),
-      bundle.fingerprint,
-    );
+    const plaintext = await withCryptoStateLock(async () => {
+      const result = cryptoDevice.decrypt(
+        message.sender_id,
+        encryptedBody,
+        JSON.stringify(bundle),
+        bundle.fingerprint,
+      );
+
+      await persistCryptoState();
+
+      return result;
+    });
+
     const payload = parseEncryptedPayload(plaintext);
     bodyElement.textContent = payload?.text ?? plaintext;
+
     if (payload?.file && message.attachment) {
       try {
-        await renderEncryptedAttachment(message.attachment, payload.file, bodyElement.parentElement);
+        await renderEncryptedAttachment(
+          message.attachment,
+          payload.file,
+          bodyElement.parentElement
+        );
       } catch (err) {
-        bodyElement.textContent = `Could not open encrypted attachment: ${err?.message || String(err)}`;
+        bodyElement.textContent =
+          `Could not open encrypted attachment: ${err?.message || String(err)}`;
       }
     }
-    await persistCryptoState();
   } catch (err) {
     bodyElement.textContent = `Could not decrypt message: ${err?.message || String(err)}`;
   }
