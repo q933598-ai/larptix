@@ -1,12 +1,42 @@
 {
   "name": "larptrix-linux",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.4.0",
+  "description": "End-to-end encrypted Larptrix desktop messenger",
+  "desktopName": "Larptrix",
+  "main": "electron/main.cjs",
   "scripts": {
-    "dev": "tauri dev",
-    "build": "tauri build"
+    "dev": "electron .",
+    "build": "electron-builder --linux AppImage",
+    "build:windows": "electron-builder --win zip --x64",
+    "dev:tauri": "tauri dev",
+    "build:tauri": "tauri build"
+  },
+  "build": {
+    "appId": "com.larptrix.desktop",
+    "productName": "Larptrix",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Network",
+      "syncDesktopName": true,
+      "icon": "src-tauri/icons/icon.png",
+      "artifactName": "Larptrix-${version}-${arch}.${ext}"
+    },
+    "win": {
+      "target": ["zip"],
+      "artifactName": "Larptrix-${version}-win-x64.${ext}"
+    }
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.5.0"
+    "@tauri-apps/cli": "^2.5.0",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3"
   }
 }

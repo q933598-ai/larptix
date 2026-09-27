@@ -39,6 +39,15 @@ const profileUsername = document.getElementById("profile-username");
 const profileAbout = document.getElementById("profile-about");
 const profileEmail = document.getElementById("profile-email");
 const profileEmailLabel = document.getElementById("profile-email-label");
+const profileMusicFile = document.getElementById("profile-music-file");
+const profileMusicPlayer = document.getElementById("profile-music-player");
+const profileMusicName = document.getElementById("profile-music-name");
+const profileMusicError = document.getElementById("profile-music-error");
+const profileMusicRemove = document.getElementById("profile-music-remove");
+const forgetE2eDeviceButton = document.getElementById("forget-e2e-device");
+const profileCardName = document.getElementById("profile-card-name");
+const profileCardHandle = document.getElementById("profile-card-handle");
+const profileCardActivity = document.getElementById("profile-card-activity");
 const profileError = document.getElementById("profile-error");
 const issueAccessKeyButton = document.getElementById("issue-access-key");
 const enableE2eButton = document.getElementById("enable-e2e");
@@ -49,6 +58,8 @@ const cryptoDialogTitle = document.getElementById("crypto-dialog-title");
 const cryptoDialogDescription = document.getElementById("crypto-dialog-description");
 const cryptoRecoveryDisplay = document.getElementById("crypto-recovery-key");
 const cryptoRecoveryInput = document.getElementById("crypto-recovery-input");
+const rememberCryptoDevice = document.getElementById("remember-crypto-device");
+const rememberCryptoDeviceLabel = document.getElementById("remember-crypto-device-label");
 const cryptoConfirmLabel = document.getElementById("crypto-confirm-label");
 const cryptoConfirm = document.getElementById("crypto-confirm");
 const cryptoError = document.getElementById("crypto-error");
@@ -66,6 +77,7 @@ const attachmentPreview = document.getElementById("attachment-preview");
 const recordAudioButton = document.getElementById("record-audio");
 const emptyEl = document.getElementById("empty");
 const peerName = document.getElementById("peer-name");
+const peerVerified = document.getElementById("peer-verified");
 const chatTitlebar = document.getElementById("chat-titlebar");
 const callStage = document.getElementById("call-stage");
 const callStatus = document.getElementById("call-status");
@@ -118,6 +130,7 @@ let callPeerId = null;
 let callMediaKind = null;
 let callMediaNotice = "";
 let pendingIceCandidates = [];
+const iceCandidatesBeforeOffer = new Map();
 
 tabLogin.addEventListener("click", () => setMode("login"));
 tabRegister.addEventListener("click", () => setMode("register"));
@@ -187,6 +200,9 @@ profileOpen.addEventListener("click", async () => {
     profileName.value = profile.display_name;
     profileUsername.value = profile.username;
     profileAbout.value = profile.about;
+    updateOwnProfileCard(profile);
+    setProfileMusic(profile.music);
+    profileMusicError.hidden = true;
     profileDialog.showModal();
   } catch (err) {
     profileError.textContent = err.message;
@@ -197,6 +213,36 @@ document.getElementById("peer-profile-open").addEventListener("click", () => {
   if (peerId) void showPeerProfile(peerId);
 });
 document.getElementById("peer-profile-close").addEventListener("click", () => peerProfileDialog.close());
+profileMusicFile.addEventListener("change", async () => {
+  const file = profileMusicFile.files[0];
+  if (!file) return;
+  profileMusicError.hidden = true;
+  try {
+    const music = await uploadFile("/api/me/music", file);
+    setProfileMusic(music);
+  } catch (err) {
+    profileMusicError.textContent = err.message;
+    profileMusicError.hidden = false;
+  } finally {
+    profileMusicFile.value = "";
+  }
+});
+profileMusicRemove.addEventListener("click", async () => {
+  profileMusicError.hidden = true;
+  try {
+    await api("DELETE", "/api/me/music");
+    setProfileMusic(null);
+  } catch (err) {
+    profileMusicError.textContent = err.message;
+    profileMusicError.hidden = false;
+  }
+});
+forgetE2eDeviceButton.addEventListener("click", async () => {
+  if (!me) return;
+  await forgetRememberedCryptoKey(me.user_id);
+  cryptoProfileStatus.textContent = "This device will ask for the recovery key at the next sign-in.";
+  forgetE2eDeviceButton.hidden = true;
+});
 document.getElementById("create-group-open").addEventListener("click", () => {
   renderGroupMemberChoices();
   document.getElementById("group-create-error").hidden = true;
@@ -312,6 +358,7 @@ verifyDeviceContinue.addEventListener("click", () => {
   if (!verifyDeviceConfirm.checked) return;
   const peerIdToVerify = verifyDeviceDialog.dataset.peerId;
   localStorage.setItem(verifiedFingerprintKey(peerIdToVerify), verifyDeviceFingerprint.textContent);
+  setPeerVerified(peerIdToVerify, true);
   verifyDeviceDialog.close();
   peerVerificationResolve?.(true);
   peerVerificationResolve = null;
@@ -327,6 +374,7 @@ profileForm.addEventListener("submit", async (event) => {
       about: profileAbout.value.trim(),
     });
     renderMe();
+    updateOwnProfileCard({ ...me, activity: profileCardActivity.textContent });
     profileDialog.close();
   } catch (err) {
     profileError.textContent = err.message;
@@ -368,6 +416,8 @@ authForm.addEventListener("submit", async (event) => {
 logoutBtn.addEventListener("click", async () => {
   reconnect = false;
   if (socket) socket.close();
+  const signedOutUserId = me?.user_id;
+  if (signedOutUserId) await api("POST", "/api/me/activity", { activity: "" }).catch(() => {});
   await api("POST", "/api/logout", {});
   me = null;
   peerId = null;
@@ -532,6 +582,8 @@ function openCryptoDialog(mode) {
   copyRecoveryButton.hidden = mode !== "enable";
   copyRecoveryButton.textContent = "Copy recovery key";
   cryptoRecoveryInput.hidden = mode !== "unlock";
+  rememberCryptoDeviceLabel.hidden = mode !== "unlock";
+  rememberCryptoDevice.checked = true;
   cryptoConfirmLabel.hidden = mode !== "enable";
   if (mode === "enable") {
     cryptoDialogTitle.textContent = "Save your E2E recovery key";
@@ -568,6 +620,12 @@ async function completeCryptoDialog() {
       cryptoOwnFingerprint.hidden = false;
       cryptoDialog.close();
       cryptoDialogMode = null;
+      try {
+        await rememberRecoveryKey(me.user_id, cryptoRecoveryKey);
+        forgetE2eDeviceButton.hidden = false;
+      } catch {
+        cryptoProfileStatus.textContent = "E2E is enabled, but this device could not be remembered.";
+      }
       cryptoLoadResolve?.(true);
       cryptoLoadResolve = null;
       if (peerId) openChat(peerId);
@@ -592,6 +650,17 @@ async function completeCryptoDialog() {
     cryptoDialog.close();
     cryptoDialogMode = null;
     await persistCryptoState();
+    try {
+      if (rememberCryptoDevice.checked) {
+        await rememberRecoveryKey(me.user_id, recoveryKey);
+        forgetE2eDeviceButton.hidden = false;
+      } else {
+        await forgetRememberedCryptoKey(me.user_id);
+        forgetE2eDeviceButton.hidden = true;
+      }
+    } catch {
+      cryptoProfileStatus.textContent = "E2E is unlocked, but this device could not be remembered.";
+    }
     cryptoLoadResolve?.(true);
     cryptoLoadResolve = null;
     if (peerId) openChat(peerId);
@@ -625,6 +694,32 @@ async function loadCryptoStatus() {
   cryptoDeviceBundle = bundle;
   cryptoOwnFingerprint.textContent = bundle.fingerprint;
   cryptoOwnFingerprint.hidden = false;
+  let rememberedKey = null;
+  try {
+    rememberedKey = await loadRememberedRecoveryKey(me.user_id);
+  } catch {
+    await forgetRememberedCryptoKey(me.user_id);
+  }
+  if (rememberedKey) {
+    try {
+      const restored = CryptoDevice.restore(rememberedKey, cryptoStoredState.encrypted_state);
+      const restoredBundle = JSON.parse(restored.public_bundle_json());
+      if (restoredBundle.fingerprint !== bundle.fingerprint) {
+        restored.free();
+        throw new Error("Remembered key does not match this device.");
+      }
+      cryptoDevice?.free();
+      cryptoDevice = restored;
+      cryptoRecoveryKey = rememberedKey;
+      cryptoDeviceBundle = restoredBundle;
+      cryptoProfileStatus.textContent = "E2E enabled and unlocked on this device.";
+      enableE2eButton.textContent = "E2E enabled";
+      forgetE2eDeviceButton.hidden = false;
+      return true;
+    } catch {
+      await forgetRememberedCryptoKey(me.user_id);
+    }
+  }
   cryptoProfileStatus.textContent = "E2E enabled. Enter your recovery key to unlock encrypted chats.";
   enableE2eButton.textContent = "Unlock E2E device";
   cryptoDialogMode = "unlock";
@@ -647,13 +742,120 @@ async function persistCryptoState() {
   });
 }
 
+function openLocalCryptoDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open("larptrix-e2e-device", 1);
+    request.addEventListener("upgradeneeded", () => {
+      request.result.createObjectStore("items", { keyPath: "id" });
+    });
+    request.addEventListener("success", () => resolve(request.result), { once: true });
+    request.addEventListener("error", () => reject(request.error), { once: true });
+  });
+}
+
+async function readLocalCryptoRecord(id) {
+  const db = await openLocalCryptoDb();
+  try {
+    const request = db.transaction("items", "readonly").objectStore("items").get(id);
+    return await new Promise((resolve, reject) => {
+      request.addEventListener("success", () => resolve(request.result), { once: true });
+      request.addEventListener("error", () => reject(request.error), { once: true });
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function writeLocalCryptoRecord(record) {
+  const db = await openLocalCryptoDb();
+  try {
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction("items", "readwrite");
+      transaction.objectStore("items").put(record);
+      transaction.addEventListener("complete", resolve, { once: true });
+      transaction.addEventListener("error", () => reject(transaction.error), { once: true });
+      transaction.addEventListener("abort", () => reject(transaction.error), { once: true });
+    });
+  } finally {
+    db.close();
+  }
+}
+
+function rememberedKeyOptOut(userId) {
+  return `larptrix_e2e_remember_disabled_${userId}`;
+}
+
+async function rememberRecoveryKey(userId, recoveryKey) {
+  let wrappingKey = (await readLocalCryptoRecord("wrapping-key"))?.value;
+  if (!wrappingKey) {
+    wrappingKey = await crypto.subtle.generateKey(
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"],
+    );
+    await writeLocalCryptoRecord({ id: "wrapping-key", value: wrappingKey });
+  }
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    wrappingKey,
+    new TextEncoder().encode(recoveryKey),
+  );
+  await writeLocalCryptoRecord({
+    id: `recovery-key:${userId}`,
+    iv: bytesToBase64(iv),
+    ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
+  });
+  localStorage.removeItem(rememberedKeyOptOut(userId));
+}
+
+async function loadRememberedRecoveryKey(userId) {
+  if (typeof indexedDB === "undefined" || localStorage.getItem(rememberedKeyOptOut(userId)) === "1") {
+    return null;
+  }
+  const [keyRecord, savedRecord] = await Promise.all([
+    readLocalCryptoRecord("wrapping-key"),
+    readLocalCryptoRecord(`recovery-key:${userId}`),
+  ]);
+  if (!keyRecord?.value || !savedRecord?.iv || !savedRecord?.ciphertext) return null;
+  const plaintext = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: base64ToBytes(savedRecord.iv) },
+    keyRecord.value,
+    base64ToBytes(savedRecord.ciphertext),
+  );
+  return new TextDecoder().decode(plaintext);
+}
+
+async function forgetRememberedCryptoKey(userId) {
+  localStorage.setItem(rememberedKeyOptOut(userId), "1");
+  if (typeof indexedDB === "undefined") return;
+  let db;
+  try {
+    db = await openLocalCryptoDb();
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction("items", "readwrite");
+      transaction.objectStore("items").delete(`recovery-key:${userId}`);
+      transaction.addEventListener("complete", resolve, { once: true });
+      transaction.addEventListener("error", () => reject(transaction.error), { once: true });
+      transaction.addEventListener("abort", () => reject(transaction.error), { once: true });
+    });
+  } catch {
+    return;
+  } finally {
+    db?.close();
+  }
+}
+
 function verifiedFingerprintKey(userId) {
   return `larptrix_verified_device_${me.user_id}_${userId}`;
 }
 
 async function ensurePeerFingerprint(peerUser, bundle) {
   const key = verifiedFingerprintKey(peerUser.user_id);
-  if (localStorage.getItem(key) === bundle.fingerprint) return true;
+  if (localStorage.getItem(key) === bundle.fingerprint) {
+    setPeerVerified(peerUser.user_id, true);
+    return true;
+  }
   verifyDeviceDescription.textContent = `Compare this full device fingerprint with ${peerUser.display_name} through another trusted channel, then confirm. A mismatch may mean the server substituted a device key.`;
   verifyDeviceFingerprint.textContent = bundle.fingerprint;
   verifyDeviceDialog.dataset.peerId = peerUser.user_id;
@@ -665,8 +867,24 @@ async function ensurePeerFingerprint(peerUser, bundle) {
   });
 }
 
+function setPeerVerified(userId, verified) {
+  if (peerId === userId) peerVerified.hidden = !verified;
+}
+
+async function refreshPeerVerification(userId) {
+  peerVerified.hidden = true;
+  try {
+    const bundle = await api("GET", `/api/users/${encodeURIComponent(userId)}/crypto-key`);
+    const verified = localStorage.getItem(verifiedFingerprintKey(userId)) === bundle.fingerprint;
+    setPeerVerified(userId, verified);
+  } catch {
+    setPeerVerified(userId, false);
+  }
+}
+
 function signedIn(user) {
   me = user;
+  forgetE2eDeviceButton.hidden = true;
   gate.close();
   logoutBtn.hidden = false;
   profileOpen.hidden = false;
@@ -735,7 +953,18 @@ function connect() {
         renderMe();
         renderUsers();
         void loadGroups();
-        if (peerId) openChat(peerId);
+        const deepLink = new URLSearchParams(location.search);
+        const deepLinkPeer = deepLink.get("peer");
+        const deepLinkCall = deepLink.get("call");
+        if (deepLinkPeer && users.some((user) => user.user_id === deepLinkPeer)) {
+          history.replaceState(null, "", location.pathname);
+          openChat(deepLinkPeer);
+          if (["audio", "video"].includes(deepLinkCall)) {
+            setTimeout(() => void startCall(deepLinkCall), 250);
+          }
+        } else if (peerId) {
+          openChat(peerId);
+        }
         break;
       case "directory":
         users = msg.users;
@@ -757,6 +986,7 @@ function connect() {
         peerName.hidden = false;
         composer.hidden = false;
         peerName.textContent = msg.peer.display_name;
+        if (!msg.peer.is_group) void refreshPeerVerification(msg.peer.user_id);
         if (msg.peer.is_group && !groups.some((group) => group.user_id === msg.peer.user_id)) {
           groups.push({ ...msg.peer });
           renderUsers();
@@ -796,6 +1026,8 @@ function openChat(id) {
   if (callPeerId && callPeerId !== id) endCall(true);
   peerId = id;
   const selected = [...users, ...groups].find((user) => user.user_id === id);
+  peerVerified.hidden = true;
+  if (!selected?.is_group) void refreshPeerVerification(id);
   document.getElementById("start-audio-call").hidden = Boolean(selected?.is_group);
   document.getElementById("start-video-call").hidden = Boolean(selected?.is_group);
   applyChatWallpaper(id);
@@ -808,6 +1040,15 @@ function openChat(id) {
 
 async function startCall(kind) {
   if (!peerId || !socket || socket.readyState !== WebSocket.OPEN) return;
+  if (typeof globalThis.RTCPeerConnection !== "function") {
+    const handoff = await openCallInSystemBrowser(peerId, kind);
+    if (handoff.opened) {
+      appendSystem("This desktop WebKit has no WebRTC support. The chat opened in your browser; sign in there if asked, then retry the call.");
+      return;
+    }
+    appendSystem(`This desktop WebKit has no WebRTC support, and browser handoff failed: ${handoff.error}. Open this server in Firefox or Chromium to call.`);
+    return;
+  }
   if (peerConnection) endCall(true);
   callPeerId = peerId;
   callMediaKind = kind;
@@ -823,6 +1064,7 @@ async function startCall(kind) {
     if (!localMediaStream.getAudioTracks().length && peerConnection.addTransceiver) {
       peerConnection.addTransceiver("audio", { direction: "recvonly" });
     }
+    applyCallCodecPreferences(peerConnection);
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
     sendCallSignal("offer", {
@@ -830,16 +1072,41 @@ async function startCall(kind) {
       media: kind,
     });
   } catch (err) {
-    appendSystem(err.message || "Could not start the call. Check camera and microphone permissions.");
+    appendSystem(`Call setup failed: ${err.message || "Check camera and microphone permissions."}`);
     endCall(false);
   }
 }
 
+async function openCallInSystemBrowser(targetPeerId, kind) {
+  const invoke = globalThis.__TAURI__?.core?.invoke;
+  if (typeof invoke !== "function") return { opened: false, error: "desktop bridge unavailable" };
+  const url = new URL(location.href);
+  url.search = new URLSearchParams({ peer: targetPeerId, call: kind }).toString();
+  try {
+    await invoke("open_call_in_browser", { url: url.toString() });
+    return { opened: true, error: "" };
+  } catch (err) {
+    return { opened: false, error: err?.message || String(err) };
+  }
+}
+
 async function createPeerConnection() {
+  if (typeof globalThis.RTCPeerConnection !== "function") {
+    throw new Error("Calls are unavailable in this desktop runtime. Install WebRTC support for WebKitGTK, including the GStreamer webrtc plugin (gst-plugins-bad), then restart the app.");
+  }
   const config = await api("GET", "/api/rtc-config");
-  const connection = new RTCPeerConnection({ iceServers: config.ice_servers });
+  if (!Array.isArray(config.ice_servers) || config.ice_servers.length === 0) {
+    throw new Error("The server returned no ICE servers. Configure STUN/TURN and restart the server.");
+  }
+  const connection = new globalThis.RTCPeerConnection({ iceServers: config.ice_servers });
   connection.addEventListener("icecandidate", (event) => {
     if (event.candidate) sendCallSignal("ice_candidate", event.candidate.toJSON());
+  });
+  connection.addEventListener("icecandidateerror", (event) => {
+    if (connection !== peerConnection) return;
+    const server = event.url || "configured ICE server";
+    const code = event.errorCode ? ` (${event.errorCode})` : "";
+    callStatus.textContent = `Could not reach ${server}${code}; checking available network routes.${callMediaNotice}`;
   });
   connection.addEventListener("track", (event) => {
     if (event.track.kind === "audio") {
@@ -870,7 +1137,31 @@ async function createPeerConnection() {
       endCall(false);
     }
   });
+  connection.addEventListener("iceconnectionstatechange", () => {
+    if (connection !== peerConnection) return;
+    if (connection.iceConnectionState === "checking") {
+      callStatus.textContent = `Checking network path${callMediaNotice}`;
+    } else if (connection.iceConnectionState === "failed") {
+      callStatus.textContent = `ICE failed. This network may require TURN.${callMediaNotice}`;
+    } else if (connection.iceConnectionState === "disconnected") {
+      callStatus.textContent = `ICE connection interrupted${callMediaNotice}`;
+    }
+  });
   return connection;
+}
+
+function applyCallCodecPreferences(connection) {
+  if (typeof RTCRtpReceiver === "undefined" || !RTCRtpReceiver.getCapabilities) return;
+  for (const transceiver of connection.getTransceivers()) {
+    const kind = transceiver.receiver.track?.kind || transceiver.sender.track?.kind;
+    if (!kind || !transceiver.setCodecPreferences) continue;
+    const codecs = RTCRtpReceiver.getCapabilities(kind)?.codecs;
+    if (!codecs) continue;
+    const compatibleCodecs = codecs.filter((codec) => {
+      return !(kind === "audio" && codec.mimeType.toLowerCase() === "audio/telephone-event");
+    });
+    if (compatibleCodecs.length) transceiver.setCodecPreferences(compatibleCodecs);
+  }
 }
 
 async function handleCallSignal(signal) {
@@ -878,18 +1169,32 @@ async function handleCallSignal(signal) {
   if (signal.kind === "offer" && !peerConnection) {
     pendingIncomingCall = signal;
     callPeerId = signal.sender_id;
+    pendingIceCandidates = iceCandidatesBeforeOffer.get(signal.sender_id) || [];
+    iceCandidatesBeforeOffer.delete(signal.sender_id);
     callMediaKind = signal.payload.media === "video" ? "video" : "audio";
     const caller = users.find((user) => user.user_id === signal.sender_id);
     incomingCallTitle.textContent = `Call from ${caller?.display_name || "Larptrix user"}`;
-    incomingCallKind.textContent = callMediaKind === "video" ? "Video call" : "Voice call";
+    const requestedKind = callMediaKind === "video" ? "Video call" : "Voice call";
+    incomingCallKind.textContent = typeof globalThis.RTCPeerConnection === "function"
+      ? requestedKind
+      : `${requestedKind} · open the browser client and ask the caller to retry`;
+    document.getElementById("accept-call").textContent = typeof globalThis.RTCPeerConnection === "function"
+      ? "Accept"
+      : "Open browser";
     incomingCallDialog.showModal();
     return;
   }
-  if (signal.sender_id !== callPeerId) return;
-  if (signal.kind === "ice_candidate" && !peerConnection && pendingIncomingCall) {
-    pendingIceCandidates.push(signal.payload);
+  if (signal.kind === "ice_candidate" && !peerConnection) {
+    if (pendingIncomingCall && signal.sender_id === callPeerId) {
+      pendingIceCandidates.push(signal.payload);
+    } else if (!pendingIncomingCall) {
+      const candidates = iceCandidatesBeforeOffer.get(signal.sender_id) || [];
+      if (candidates.length < 128) candidates.push(signal.payload);
+      iceCandidatesBeforeOffer.set(signal.sender_id, candidates);
+    }
     return;
   }
+  if (signal.sender_id !== callPeerId) return;
   if (!peerConnection) return;
   if (signal.kind === "answer") {
     await peerConnection.setRemoteDescription(signal.payload);
@@ -901,6 +1206,7 @@ async function handleCallSignal(signal) {
   } else if (signal.kind === "offer") {
     await peerConnection.setRemoteDescription(signal.payload.description);
     await flushIceCandidates();
+    applyCallCodecPreferences(peerConnection);
     const answer = await peerConnection.createAnswer();
     await peerConnection.setLocalDescription(answer);
     sendCallSignal("answer", peerConnection.localDescription);
@@ -912,6 +1218,15 @@ async function handleCallSignal(signal) {
 
 async function acceptIncomingCall() {
   if (!pendingIncomingCall) return;
+  if (typeof globalThis.RTCPeerConnection !== "function") {
+    const callerId = pendingIncomingCall.sender_id;
+    const handoff = await openCallInSystemBrowser(callerId, "");
+    callStatus.textContent = "This desktop cannot answer calls. Open the same chat in your browser and ask the caller to try again.";
+    appendSystem(handoff.opened
+      ? "The same chat opened in your browser. Sign in there if asked, then ask the caller to retry."
+      : `Could not open the browser (${handoff.error}). Open this server in Firefox or Chromium and ask the caller to retry.`);
+    return;
+  }
   const incoming = pendingIncomingCall;
   incomingCallDialog.close();
   peerId = incoming.sender_id;
@@ -926,6 +1241,7 @@ async function acceptIncomingCall() {
     callStatus.textContent = `Connecting…${callMediaNotice}`;
     peerConnection = await createPeerConnection();
     for (const track of localMediaStream.getTracks()) peerConnection.addTrack(track, localMediaStream);
+    applyCallCodecPreferences(peerConnection);
     await peerConnection.setRemoteDescription(incoming.payload.description);
     await flushIceCandidates();
     const answer = await peerConnection.createAnswer();
@@ -941,8 +1257,10 @@ async function acceptIncomingCall() {
 
 function rejectIncomingCall() {
   if (pendingIncomingCall) {
+    const rejectedPeerId = pendingIncomingCall.sender_id;
     callPeerId = pendingIncomingCall.sender_id;
     sendCallSignal("reject", {});
+    iceCandidatesBeforeOffer.delete(rejectedPeerId);
   }
   pendingIncomingCall = null;
   incomingCallDialog.close();
@@ -1062,6 +1380,7 @@ async function toggleScreenShare() {
       renegotiate = true;
     }
     if (renegotiate) {
+      applyCallCodecPreferences(peerConnection);
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
       sendCallSignal("offer", { description: peerConnection.localDescription, media: callMediaKind });
@@ -1110,6 +1429,7 @@ async function stopScreenShare() {
 
 function endCall(notifyPeer) {
   if (notifyPeer && callPeerId) sendCallSignal("hangup", {});
+  const endedPeerId = callPeerId;
   if (incomingCallDialog.open) incomingCallDialog.close();
   screenMediaStream?.getTracks().forEach((track) => track.stop());
   localMediaStream?.getTracks().forEach((track) => track.stop());
@@ -1119,6 +1439,7 @@ function endCall(notifyPeer) {
   screenMediaStream = null;
   pendingIncomingCall = null;
   pendingIceCandidates = [];
+  if (endedPeerId) iceCandidatesBeforeOffer.delete(endedPeerId);
   callPeerId = null;
   callMediaKind = null;
   localVideo.srcObject = null;
@@ -1162,6 +1483,7 @@ function renderMe() {
   profileEmail.hidden = !me.email;
   profileEmailLabel.hidden = !me.email;
   paintAvatar(meAvatar, me);
+  updateOwnProfileCard(me);
 }
 
 function renderUsers() {
@@ -1188,6 +1510,12 @@ function renderUsers() {
     const displayName = document.createElement("span");
     displayName.textContent = user.is_group ? `👥 ${user.display_name}` : user.display_name;
     name.append(displayName);
+    if (user.activity && !user.is_group) {
+      const activity = document.createElement("small");
+      activity.className = "person-activity";
+      activity.textContent = user.activity;
+      name.append(activity);
+    }
     if (user.username && !user.is_group) {
       const handle = document.createElement("small");
       handle.textContent = `@${user.username}`;
@@ -1587,6 +1915,47 @@ function openImageViewer(src, alt) {
   imageViewer.showModal();
 }
 
+function setProfileMusic(music) {
+  profileMusicName.textContent = music?.name || "";
+  profileMusicPlayer.hidden = !music;
+  profileMusicRemove.hidden = !music;
+  profileMusicError.hidden = true;
+  if (music) {
+    profileMusicPlayer.src = music.url;
+    profileMusicPlayer.load();
+    profileMusicPlayer.onplay = () => void setMyActivity(`Listening to ${music.name}`);
+    profileMusicPlayer.onpause = () => void setMyActivity("");
+    profileMusicPlayer.onended = () => void setMyActivity("");
+    profileMusicPlayer.onerror = () => {
+      profileMusicError.textContent = "This audio format is not supported here. Try MP3, OGG, or WAV.";
+      profileMusicError.hidden = false;
+    };
+  } else {
+    profileMusicPlayer.onplay = null;
+    profileMusicPlayer.onpause = null;
+    profileMusicPlayer.onended = null;
+    profileMusicPlayer.onerror = null;
+    profileMusicPlayer.pause();
+    profileMusicPlayer.removeAttribute("src");
+    profileMusicPlayer.load();
+  }
+}
+
+function updateOwnProfileCard(profile) {
+  profileCardName.textContent = profile.display_name || "";
+  profileCardHandle.textContent = profile.username ? `@${profile.username}` : "";
+  profileCardActivity.textContent = profile.activity || "No activity";
+}
+
+async function setMyActivity(activity) {
+  try {
+    const result = await api("POST", "/api/me/activity", { activity });
+    profileCardActivity.textContent = result.activity || "No activity";
+  } catch {
+    return;
+  }
+}
+
 function chatWallpaperKey(id) {
   return `larptrix_chat_wallpaper_${me.user_id}_${id}`;
 }
@@ -1623,6 +1992,27 @@ async function showPeerProfile(id) {
     document.getElementById("peer-profile-name").textContent = profile.display_name;
     document.getElementById("peer-profile-username").textContent = profile.username ? `@${profile.username}` : "";
     document.getElementById("peer-profile-about").textContent = profile.about || "No profile description";
+    const musicSection = document.getElementById("peer-music-section");
+    const musicName = document.getElementById("peer-profile-music-name");
+    const musicPlayer = document.getElementById("peer-profile-music");
+    document.getElementById("peer-profile-activity").textContent = profile.activity || "No activity";
+    musicSection.hidden = !profile.music;
+    musicName.textContent = profile.music?.name || "";
+    musicPlayer.hidden = !profile.music;
+    musicPlayer.pause();
+    if (profile.music) {
+      musicPlayer.src = profile.music.url;
+      musicPlayer.load();
+      musicPlayer.onplay = () => void setMyActivity(`Listening to ${profile.music.name}`);
+      musicPlayer.onpause = () => void setMyActivity("");
+      musicPlayer.onended = () => void setMyActivity("");
+    } else {
+      musicPlayer.onplay = null;
+      musicPlayer.onpause = null;
+      musicPlayer.onended = null;
+      musicPlayer.removeAttribute("src");
+      musicPlayer.load();
+    }
     peerProfileDialog.showModal();
   } catch (err) {
     appendSystem(err.message || "Could not load profile.");

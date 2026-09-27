@@ -222,7 +222,8 @@ impl Database {
         let conn = self.conn.lock().expect("db lock");
         let mut stmt = conn.prepare(
             "SELECT id, display_name, avatar_id, username,
-                    EXISTS(SELECT 1 FROM crypto_devices WHERE crypto_devices.user_id = users.id)
+                    EXISTS(SELECT 1 FROM crypto_devices WHERE crypto_devices.user_id = users.id),
+                    activity
                  FROM users ORDER BY display_name COLLATE NOCASE",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -231,19 +232,40 @@ impl Database {
             let avatar_id: Option<String> = row.get(2)?;
             let username: String = row.get(3)?;
             let e2e_enabled: bool = row.get(4)?;
+            let activity: String = row.get(5)?;
+            let online = online_ids.iter().any(|online| online == &id);
             Ok(UserInfo {
                 user_id: id.clone(),
                 display_name,
                 username,
                 email: None,
-                online: online_ids.iter().any(|online| online == &id),
+                online,
                 avatar_url: avatar_id.map(|_| avatar_url(&id)),
+                activity: (online && !activity.is_empty()).then_some(activity),
                 is_group: false,
                 e2e_enabled,
                 group_member_ids: Vec::new(),
             })
         })?;
         rows.collect()
+    }
+
+    pub fn set_activity(&self, user_id: &str, activity: &str) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "UPDATE users SET activity = ?1 WHERE id = ?2",
+            params![activity, user_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn activity(&self, user_id: &str) -> rusqlite::Result<String> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.query_row(
+            "SELECT activity FROM users WHERE id = ?1",
+            [user_id],
+            |row| row.get(0),
+        )
     }
 
     pub fn set_avatar(&self, user_id: &str, avatar_id: &str) -> rusqlite::Result<()> {
@@ -253,6 +275,63 @@ impl Database {
             params![avatar_id, user_id],
         )?;
         Ok(())
+    }
+
+    pub fn music_track(&self, user_id: &str) -> rusqlite::Result<Option<(String, String)>> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.query_row(
+            "SELECT a.id, a.file_name FROM users u
+             JOIN attachments a ON a.id = u.music_attachment_id WHERE u.id = ?1",
+            [user_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+    }
+
+    pub fn set_music_track(
+        &self,
+        user_id: &str,
+        attachment_id: Option<&str>,
+    ) -> rusqlite::Result<Option<(String, String)>> {
+        let mut conn = self.conn.lock().expect("db lock");
+        let transaction = conn.transaction()?;
+        let previous: Option<String> = transaction.query_row(
+            "SELECT music_attachment_id FROM users WHERE id = ?1",
+            [user_id],
+            |row| row.get(0),
+        )?;
+        transaction.execute(
+            "UPDATE users SET music_attachment_id = ?1 WHERE id = ?2",
+            params![attachment_id, user_id],
+        )?;
+
+        let removed_file = if previous
+            .as_deref()
+            .is_some_and(|old| Some(old) != attachment_id)
+        {
+            let old_id = previous.as_deref().unwrap();
+            let ext: Option<String> = transaction
+                .query_row(
+                    "SELECT ext FROM attachments WHERE id = ?1",
+                    [old_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(ext) = ext {
+                let deleted = transaction.execute(
+                    "DELETE FROM attachments WHERE id = ?1
+                     AND NOT EXISTS (SELECT 1 FROM messages WHERE attachment_id = ?1)",
+                    [old_id],
+                )?;
+                (deleted == 1).then(|| (old_id.to_string(), ext))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        transaction.commit()?;
+        Ok(removed_file)
     }
 
     pub fn update_display_name(&self, user_id: &str, display_name: &str) -> rusqlite::Result<()> {
@@ -839,6 +918,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             password_hash TEXT NOT NULL,
             display_name TEXT NOT NULL,
             avatar_id TEXT,
+            music_attachment_id TEXT,
             created_at INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS sessions (
@@ -922,6 +1002,8 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     for (column, definition) in [
         ("username", "TEXT NOT NULL DEFAULT ''"),
         ("about", "TEXT NOT NULL DEFAULT ''"),
+        ("music_attachment_id", "TEXT"),
+        ("activity", "TEXT NOT NULL DEFAULT ''"),
     ] {
         let exists: i64 = conn.query_row(
             "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = ?1",
@@ -1002,6 +1084,48 @@ mod tests {
             "alice_a"
         );
         assert!(db.update_profile(&bob.id, "Bob", "ALICE_A", "").is_err());
+    }
+
+    #[test]
+    fn profile_music_can_be_replaced_and_removed() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        let alice = db.create_key_user("Alice", "hash-a", 1).unwrap();
+        let first = db
+            .insert_attachment(&alice.id, "audio/mpeg", "mp3", "first.mp3", 4, 1)
+            .unwrap();
+        assert_eq!(db.set_music_track(&alice.id, Some(&first)).unwrap(), None);
+        assert_eq!(
+            db.music_track(&alice.id).unwrap(),
+            Some((first.clone(), "first.mp3".to_string()))
+        );
+
+        let second = db
+            .insert_attachment(&alice.id, "audio/ogg", "ogg", "second.ogg", 5, 2)
+            .unwrap();
+        assert_eq!(
+            db.set_music_track(&alice.id, Some(&second)).unwrap(),
+            Some((first.clone(), "mp3".to_string()))
+        );
+        assert!(db.attachment(&first).unwrap().is_none());
+        assert_eq!(
+            db.set_music_track(&alice.id, None).unwrap(),
+            Some((second.clone(), "ogg".to_string()))
+        );
+        assert!(db.music_track(&alice.id).unwrap().is_none());
+        assert!(db.attachment(&second).unwrap().is_none());
+    }
+
+    #[test]
+    fn activity_is_only_published_for_online_users() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        let alice = db.create_key_user("Alice", "hash-a", 1).unwrap();
+        db.set_activity(&alice.id, "Listening to song.mp3").unwrap();
+
+        let online = db.list_users(std::slice::from_ref(&alice.id)).unwrap();
+        assert_eq!(online[0].activity.as_deref(), Some("Listening to song.mp3"));
+
+        let offline = db.list_users(&[]).unwrap();
+        assert_eq!(offline[0].activity, None);
     }
 
     #[test]

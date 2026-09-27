@@ -74,6 +74,8 @@ pub struct UserInfo {
     pub online: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub avatar_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity: Option<String>,
     #[serde(default)]
     pub is_group: bool,
     #[serde(default)]

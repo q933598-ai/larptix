@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use vodozemac::olm::{
     Account, AccountPickle, Message, OlmMessage, PreKeyMessage, Session, SessionConfig,
@@ -29,15 +29,40 @@ struct CipherEnvelope {
 #[derive(Serialize, Deserialize)]
 struct PersistedState {
     account_pickle: String,
-    sessions: BTreeMap<String, String>,
+    #[serde(deserialize_with = "deserialize_sessions")]
+    sessions: BTreeMap<String, Vec<String>>,
     one_time_key: String,
     one_time_signature: String,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PersistedSessionList {
+    Legacy(String),
+    Current(Vec<String>),
+}
+
+fn deserialize_sessions<'de, D>(deserializer: D) -> Result<BTreeMap<String, Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let stored = BTreeMap::<String, PersistedSessionList>::deserialize(deserializer)?;
+    Ok(stored
+        .into_iter()
+        .map(|(peer_id, sessions)| {
+            let sessions = match sessions {
+                PersistedSessionList::Legacy(session) => vec![session],
+                PersistedSessionList::Current(sessions) => sessions,
+            };
+            (peer_id, sessions)
+        })
+        .collect())
 }
 
 #[wasm_bindgen]
 pub struct CryptoDevice {
     account: Account,
-    sessions: BTreeMap<String, Session>,
+    sessions: BTreeMap<String, Vec<Session>>,
     recovery_key: [u8; 32],
     one_time_key: String,
     one_time_signature: String,
@@ -77,10 +102,18 @@ impl CryptoDevice {
         let sessions = state
             .sessions
             .into_iter()
-            .map(|(peer_id, ciphertext)| {
-                let pickle = SessionPickle::from_encrypted(&ciphertext, &recovery_key)
-                    .map_err(|_| JsValue::from_str("could not restore encrypted session"))?;
-                Ok((peer_id, Session::from(pickle)))
+            .map(|(peer_id, ciphertexts)| {
+                let sessions = ciphertexts
+                    .into_iter()
+                    .map(|ciphertext| {
+                        let pickle = SessionPickle::from_encrypted(&ciphertext, &recovery_key)
+                            .map_err(|_| {
+                                JsValue::from_str("could not restore encrypted session")
+                            })?;
+                        Ok(Session::from(pickle))
+                    })
+                    .collect::<Result<Vec<_>, JsValue>>()?;
+                Ok((peer_id, sessions))
             })
             .collect::<Result<BTreeMap<_, _>, JsValue>>()?;
         Ok(Self {
@@ -112,7 +145,9 @@ impl CryptoDevice {
     }
 
     pub fn has_session(&self, peer_id: &str) -> bool {
-        self.sessions.contains_key(peer_id)
+        self.sessions
+            .get(peer_id)
+            .is_some_and(|sessions| !sessions.is_empty())
     }
 
     pub fn establish_session(
@@ -130,7 +165,10 @@ impl CryptoDevice {
             .account
             .create_outbound_session(SessionConfig::version_1(), identity_key, one_time_key)
             .map_err(|_| JsValue::from_str("could not establish encrypted session"))?;
-        self.sessions.insert(peer_id.to_string(), session);
+        self.sessions
+            .entry(peer_id.to_string())
+            .or_default()
+            .push(session);
         Ok(())
     }
 
@@ -138,6 +176,7 @@ impl CryptoDevice {
         let session = self
             .sessions
             .get_mut(peer_id)
+            .and_then(|sessions| sessions.last_mut())
             .ok_or_else(|| JsValue::from_str("encrypted session is not established"))?;
         let message = session
             .encrypt(plaintext.as_bytes())
@@ -167,11 +206,6 @@ impl CryptoDevice {
             return Err(JsValue::from_str("unsupported encrypted message version"));
         }
         if envelope.message_type == "prekey" {
-            if self.sessions.contains_key(peer_id) {
-                return Err(JsValue::from_str(
-                    "unexpected pre-key message for existing session",
-                ));
-            }
             let bundle = parse_and_verify_bundle(sender_bundle_json, expected_fingerprint)?;
             let sender_identity = Curve25519PublicKey::from_base64(&bundle.curve_key)
                 .map_err(|_| JsValue::from_str("invalid sender identity key"))?;
@@ -182,13 +216,24 @@ impl CryptoDevice {
                     "sender identity does not match verified key",
                 ));
             }
+            if let Some(sessions) = self.sessions.get_mut(peer_id) {
+                if let Some(plaintext) =
+                    decrypt_prekey_with_sessions(sessions, &envelope.ciphertext)
+                {
+                    return String::from_utf8(plaintext)
+                        .map_err(|_| JsValue::from_str("decrypted message is not valid UTF-8"));
+                }
+            }
             let result = self
                 .account
                 .create_inbound_session(SessionConfig::version_1(), sender_identity, &pre_key)
                 .map_err(|_| JsValue::from_str("could not establish incoming encrypted session"))?;
             let plaintext = String::from_utf8(result.plaintext)
                 .map_err(|_| JsValue::from_str("decrypted message is not valid UTF-8"))?;
-            self.sessions.insert(peer_id.to_string(), result.session);
+            self.sessions
+                .entry(peer_id.to_string())
+                .or_default()
+                .push(result.session);
             self.account.generate_one_time_keys(1);
             let (_, next_key) = self
                 .account
@@ -204,15 +249,13 @@ impl CryptoDevice {
         if envelope.message_type != "message" {
             return Err(JsValue::from_str("unsupported encrypted message type"));
         }
-        let session = self
+        let sessions = self
             .sessions
             .get_mut(peer_id)
             .ok_or_else(|| JsValue::from_str("encrypted session is not established"))?;
-        let message = Message::from_base64(&envelope.ciphertext)
-            .map_err(|_| JsValue::from_str("invalid encrypted message"))?;
-        let plaintext = session
-            .decrypt(&OlmMessage::Normal(message))
-            .map_err(|_| JsValue::from_str("could not decrypt message"))?;
+        let plaintext = decrypt_with_sessions(sessions, &envelope.ciphertext).ok_or_else(|| {
+            JsValue::from_str("could not decrypt message with any existing session")
+        })?;
         String::from_utf8(plaintext)
             .map_err(|_| JsValue::from_str("decrypted message is not valid UTF-8"))
     }
@@ -222,10 +265,13 @@ impl CryptoDevice {
         let sessions = self
             .sessions
             .iter()
-            .map(|(peer_id, session)| {
+            .map(|(peer_id, sessions)| {
                 (
                     peer_id.clone(),
-                    session.pickle().encrypt(&self.recovery_key),
+                    sessions
+                        .iter()
+                        .map(|session| session.pickle().encrypt(&self.recovery_key))
+                        .collect(),
                 )
             })
             .collect();
@@ -237,6 +283,26 @@ impl CryptoDevice {
         })
         .map_err(|_| JsValue::from_str("could not encrypt crypto state"))
     }
+}
+
+fn decrypt_with_sessions(sessions: &mut [Session], ciphertext: &str) -> Option<Vec<u8>> {
+    for session in sessions.iter_mut().rev() {
+        let message = Message::from_base64(ciphertext).ok()?;
+        if let Ok(plaintext) = session.decrypt(&OlmMessage::Normal(message)) {
+            return Some(plaintext);
+        }
+    }
+    None
+}
+
+fn decrypt_prekey_with_sessions(sessions: &mut [Session], ciphertext: &str) -> Option<Vec<u8>> {
+    for session in sessions.iter_mut().rev() {
+        let message = PreKeyMessage::from_base64(ciphertext).ok()?;
+        if let Ok(plaintext) = session.decrypt(&OlmMessage::PreKey(message)) {
+            return Some(plaintext);
+        }
+    }
+    None
 }
 
 fn decode_recovery_key(encoded: &str) -> Result<[u8; 32], JsValue> {
@@ -291,6 +357,13 @@ fn fingerprint(curve_key: &Curve25519PublicKey, ed_key: &Ed25519PublicKey) -> St
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use super::{
+        decrypt_prekey_with_sessions, decrypt_with_sessions, deserialize_sessions, CryptoDevice,
+    };
+    use serde::Deserialize;
+    use vodozemac::base64_encode;
     use vodozemac::olm::{Account, OlmMessage, SessionConfig};
 
     #[test]
@@ -335,5 +408,89 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(restored.curve25519_key(), alice.curve25519_key());
+    }
+
+    #[test]
+    fn fresh_prekey_keeps_older_sessions_for_delayed_messages() {
+        let recovery_key = base64_encode(&[7u8; 32]);
+        let mut alice = CryptoDevice::create(&recovery_key).unwrap();
+        let mut bob = CryptoDevice::create(&recovery_key).unwrap();
+        let alice_bundle = alice.public_bundle_json().unwrap();
+        let alice_fingerprint = alice.fingerprint();
+        let bob_bundle = bob.public_bundle_json().unwrap();
+        let bob_fingerprint = bob.fingerprint();
+
+        alice
+            .establish_session("bob", &bob_bundle, &bob_fingerprint)
+            .unwrap();
+        let first_prekey = alice.encrypt("bob", "first session").unwrap();
+        assert_eq!(
+            bob.decrypt("alice", &first_prekey, &alice_bundle, &alice_fingerprint)
+                .unwrap(),
+            "first session"
+        );
+        let repeated_prekey = alice
+            .encrypt("bob", "another message before reply")
+            .unwrap();
+        let repeated_envelope: super::CipherEnvelope =
+            serde_json::from_str(&repeated_prekey).unwrap();
+        assert_eq!(repeated_envelope.message_type, "prekey");
+        assert_eq!(
+            String::from_utf8(
+                decrypt_prekey_with_sessions(
+                    bob.sessions.get_mut("alice").unwrap(),
+                    &repeated_envelope.ciphertext,
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            "another message before reply"
+        );
+
+        let reply = bob.encrypt("alice", "session reply").unwrap();
+        assert_eq!(
+            alice
+                .decrypt("bob", &reply, &bob_bundle, &bob_fingerprint)
+                .unwrap(),
+            "session reply"
+        );
+        let delayed_message = alice.encrypt("bob", "delayed on old session").unwrap();
+        let delayed_envelope: super::CipherEnvelope =
+            serde_json::from_str(&delayed_message).unwrap();
+        assert_eq!(delayed_envelope.message_type, "message");
+
+        let refreshed_bob_bundle = bob.public_bundle_json().unwrap();
+        alice
+            .establish_session("bob", &refreshed_bob_bundle, &bob_fingerprint)
+            .unwrap();
+        let second_prekey = alice.encrypt("bob", "second session").unwrap();
+        assert_eq!(
+            bob.decrypt("alice", &second_prekey, &alice_bundle, &alice_fingerprint)
+                .unwrap(),
+            "second session"
+        );
+
+        let saved_state = bob.encrypted_state_json().unwrap();
+        let mut restored_bob = CryptoDevice::restore(&recovery_key, &saved_state).unwrap();
+        assert_eq!(
+            String::from_utf8(
+                decrypt_with_sessions(
+                    restored_bob.sessions.get_mut("alice").unwrap(),
+                    &delayed_envelope.ciphertext,
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            "delayed on old session"
+        );
+
+        #[derive(Deserialize)]
+        struct LegacyState {
+            #[serde(deserialize_with = "deserialize_sessions")]
+            sessions: BTreeMap<String, Vec<String>>,
+        }
+        let legacy: LegacyState =
+            serde_json::from_str(r#"{"sessions":{"alice":"old-pickle"}}"#).unwrap();
+        assert_eq!(legacy.sessions["alice"], ["old-pickle"]);
     }
 }

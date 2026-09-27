@@ -35,6 +35,7 @@
         <div id="empty" class="empty">Pick someone to start a private chat.</div>
         <div class="chat-titlebar" id="chat-titlebar" hidden>
           <h2 id="peer-name" class="peer-name"></h2>
+          <span id="peer-verified" class="verified-badge" title="Device verified" aria-label="Device verified" hidden>Verified ✓</span>
           <div class="call-actions">
             <button id="peer-profile-open" type="button" class="ghost">Profile</button>
             <label class="photo-btn" title="Set a background for this chat">
@@ -108,41 +109,82 @@
     </div>
 
     <dialog id="profile-dialog">
-      <form id="profile-form">
-        <h2>Account profile</h2>
-        <label class="avatar-btn" title="Change avatar">
-          <input id="avatar-file" type="file" accept="image/jpeg,image/png,image/gif,image/webp" hidden />
-          <span id="me-avatar" class="avatar">?</span>
-          <span>Change avatar</span>
-        </label>
-        <label for="profile-name">Display name</label>
-        <input id="profile-name" type="text" maxlength="32" required />
-        <label for="profile-username">Username</label>
-        <input id="profile-username" type="text" maxlength="24" placeholder="username" autocomplete="username" />
-        <label for="profile-about">About</label>
-        <textarea id="profile-about" rows="3" maxlength="160" placeholder="A little about you"></textarea>
-        <label id="profile-email-label" for="profile-email">Email</label>
-        <input id="profile-email" type="email" readonly />
-        <p class="key-warning">You can create or replace your sign-in key here. The old key stops working after replacement.</p>
-        <button id="issue-access-key" type="button" class="ghost">Create / replace sign-in key</button>
-        <h3>End-to-end encryption</h3>
-        <p id="crypto-profile-status" class="crypto-status">End-to-end encryption is required for all messages.</p>
-        <code id="crypto-own-fingerprint" class="crypto-fingerprint" hidden></code>
-        <button id="enable-e2e" type="button" class="ghost">Set up / unlock E2E</button>
+      <form id="profile-form" class="profile-form">
+        <div class="profile-banner"></div>
+        <div class="profile-identity">
+          <label class="avatar-btn" title="Change avatar">
+            <input id="avatar-file" type="file" accept="image/jpeg,image/png,image/gif,image/webp" hidden />
+            <span id="me-avatar" class="avatar">?</span>
+          </label>
+          <div class="profile-identity-copy">
+            <h2 id="profile-card-name"></h2>
+            <p id="profile-card-handle"></p>
+            <p id="profile-card-activity" class="profile-activity"></p>
+          </div>
+          <button id="profile-close" type="button" class="ghost profile-dismiss" aria-label="Close profile">×</button>
+        </div>
+        <section class="profile-section">
+          <h3>About me</h3>
+          <label for="profile-name">Display name</label>
+          <input id="profile-name" type="text" maxlength="32" required />
+          <label for="profile-username">Username</label>
+          <input id="profile-username" type="text" maxlength="24" placeholder="username" autocomplete="username" />
+          <label for="profile-about">About</label>
+          <textarea id="profile-about" rows="3" maxlength="160" placeholder="A little about you"></textarea>
+        </section>
+        <section class="profile-section profile-music-section">
+          <h3>Music</h3>
+          <p id="profile-music-name" class="crypto-status">No track selected</p>
+          <audio id="profile-music-player" controls preload="none" hidden></audio>
+          <div class="profile-actions profile-music-actions">
+            <label class="photo-btn profile-music-upload">
+              Choose track
+              <input id="profile-music-file" type="file" accept="audio/mpeg,audio/ogg,audio/wav,audio/webm,audio/mp4" hidden />
+            </label>
+            <button id="profile-music-remove" type="button" class="ghost" hidden>Remove</button>
+          </div>
+          <p id="profile-music-error" class="error" hidden></p>
+        </section>
+        <section class="profile-section">
+          <h3>Account</h3>
+          <label id="profile-email-label" for="profile-email">Email</label>
+          <input id="profile-email" type="email" readonly />
+          <button id="issue-access-key" type="button" class="ghost">Create / replace sign-in key</button>
+        </section>
+        <section class="profile-section">
+          <h3>End-to-end encryption</h3>
+          <p id="crypto-profile-status" class="crypto-status">End-to-end encryption is required for all messages.</p>
+          <code id="crypto-own-fingerprint" class="crypto-fingerprint" hidden></code>
+          <button id="enable-e2e" type="button" class="ghost">Set up / unlock E2E</button>
+          <button id="forget-e2e-device" type="button" class="ghost" hidden>Forget this device</button>
+        </section>
         <p id="profile-error" class="error" hidden></p>
-        <div class="profile-actions">
-          <button id="profile-close" type="button" class="ghost">Close</button>
+        <div class="profile-actions profile-footer">
           <button type="submit">Save changes</button>
         </div>
       </form>
     </dialog>
 
     <dialog id="peer-profile-dialog" class="profile-view-dialog">
-      <button id="peer-profile-close" type="button" class="ghost">Close</button>
-      <img id="peer-profile-avatar" alt="" />
-      <h2 id="peer-profile-name"></h2>
-      <p id="peer-profile-username"></p>
-      <p id="peer-profile-about"></p>
+      <div class="profile-banner"></div>
+      <button id="peer-profile-close" type="button" class="ghost profile-dismiss" aria-label="Close profile">×</button>
+      <div class="profile-identity">
+        <img id="peer-profile-avatar" alt="" />
+        <div class="profile-identity-copy">
+          <h2 id="peer-profile-name"></h2>
+          <p id="peer-profile-username"></p>
+          <p id="peer-profile-activity" class="profile-activity"></p>
+        </div>
+      </div>
+      <section class="profile-section">
+        <h3>About me</h3>
+        <p id="peer-profile-about"></p>
+      </section>
+      <section id="peer-music-section" class="profile-section" hidden>
+        <h3>Music</h3>
+        <p id="peer-profile-music-name"></p>
+        <audio id="peer-profile-music" controls preload="none" hidden></audio>
+      </section>
     </dialog>
 
     <dialog id="create-group-dialog">
@@ -229,6 +271,10 @@
       <code id="crypto-recovery-key" class="generated-key" hidden></code>
       <button id="copy-crypto-recovery" type="button" class="ghost" hidden>Copy recovery key</button>
       <textarea id="crypto-recovery-input" rows="3" placeholder="Paste your E2E recovery key" hidden></textarea>
+      <label id="remember-crypto-device-label" class="key-saved-label" hidden>
+        <input id="remember-crypto-device" type="checkbox" checked />
+        Remember E2E on this device
+      </label>
       <p id="crypto-fingerprint-hint" class="crypto-fingerprint-hint" hidden></p>
       <label id="crypto-confirm-label" class="key-saved-label" hidden>
         <input id="crypto-confirm" type="checkbox" />

@@ -31,7 +31,15 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/logout", post(logout))
         .route("/api/me", get(me))
         .route("/api/me", patch(update_profile))
+        .route("/api/me/activity", post(update_activity))
         .route("/api/users/{id}/profile", get(get_user_profile))
+        .route("/api/users/{id}/music", get(get_user_music))
+        .route(
+            "/api/me/music",
+            post(set_music)
+                .delete(clear_music)
+                .layer(DefaultBodyLimit::max(MAX_ATTACHMENT_BYTES + 64 * 1024)),
+        )
         .route("/api/groups", get(list_groups).post(create_group))
         .route("/api/me/access-key", post(create_access_key))
         .route(
@@ -78,6 +86,11 @@ pub struct UpdateProfileBody {
     pub username: String,
     #[serde(default)]
     pub about: String,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateActivityBody {
+    pub activity: String,
 }
 
 #[derive(Deserialize)]
@@ -206,12 +219,22 @@ async fn rtc_config(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_user(&state, &headers)?;
-    let ice_servers = std::env::var("LARPTRIX_ICE_SERVERS")
-        .ok()
-        .and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok())
-        .filter(|value| value.is_array())
-        .unwrap_or_else(|| serde_json::json!([]));
+    let raw = std::env::var("LARPTRIX_ICE_SERVERS").ok();
+    let ice_servers = parse_ice_servers(raw.as_deref()).map_err(ApiError::internal)?;
     Ok(Json(serde_json::json!({ "ice_servers": ice_servers })))
+}
+
+fn parse_ice_servers(raw: Option<&str>) -> Result<serde_json::Value, &'static str> {
+    const DEFAULT_ICE_SERVERS: &str = r#"[{"urls":"stun:stun.l.google.com:19302"}]"#;
+    let value = match raw {
+        Some(raw) if !raw.trim().is_empty() => serde_json::from_str::<serde_json::Value>(raw)
+            .map_err(|_| "LARPTRIX_ICE_SERVERS must be a JSON array")?,
+        _ => serde_json::from_str(DEFAULT_ICE_SERVERS).expect("built-in ICE config is valid"),
+    };
+    if !value.is_array() {
+        return Err("LARPTRIX_ICE_SERVERS must be a JSON array");
+    }
+    Ok(value)
 }
 
 async fn get_crypto_device(
@@ -321,6 +344,28 @@ async fn update_profile(
     Ok(Json(info))
 }
 
+async fn update_activity(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<UpdateActivityBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let activity = body.activity.trim();
+    if activity.chars().count() > 80 {
+        return Err(ApiError::bad("activity must be 80 characters or fewer"));
+    }
+    state
+        .db
+        .set_activity(&user.id, activity)
+        .map_err(ApiError::db)?;
+    let users = state
+        .db
+        .list_users(&state.hub.online_ids())
+        .map_err(ApiError::db)?;
+    state.hub.broadcast(ServerMessage::Directory { users });
+    Ok(Json(serde_json::json!({ "activity": activity })))
+}
+
 async fn get_user_profile(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -332,13 +377,84 @@ async fn get_user_profile(
         .profile_fields(&id)
         .map_err(ApiError::db)?
         .ok_or_else(|| ApiError::not_found("user not found"))?;
+    let music = state
+        .db
+        .music_track(&id)
+        .map_err(ApiError::db)?
+        .map(|(_, name)| {
+            serde_json::json!({
+                "url": format!("/api/users/{id}/music"),
+                "name": name,
+            })
+        });
+    let online = state
+        .hub
+        .online_ids()
+        .iter()
+        .any(|online_id| online_id == &id);
+    let activity = if online {
+        state.db.activity(&id).map_err(ApiError::db)?
+    } else {
+        String::new()
+    };
     Ok(Json(serde_json::json!({
         "user_id": id,
         "display_name": display_name,
         "username": username,
         "about": about,
+        "activity": activity,
         "avatar_url": avatar_id.map(|_| avatar_url(&id)),
+        "music": music,
     })))
+}
+
+async fn get_user_music(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    require_user(&state, &headers)?;
+    let (attachment_id, _) = state
+        .db
+        .music_track(&id)
+        .map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::not_found("no profile music"))?;
+    file_response(&state, &attachment_id)
+}
+
+async fn set_music(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    multipart: Multipart,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let saved = save_audio(&state, &user.id, multipart).await?;
+    if let Some((old_id, old_ext)) = state
+        .db
+        .set_music_track(&user.id, Some(&saved.id))
+        .map_err(ApiError::db)?
+    {
+        let _ = std::fs::remove_file(upload_path(&state.upload_dir, &old_id, &old_ext));
+    }
+    Ok(Json(serde_json::json!({
+        "name": saved.name,
+        "url": format!("/api/users/{}/music", user.id),
+    })))
+}
+
+async fn clear_music(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    if let Some((id, ext)) = state
+        .db
+        .set_music_track(&user.id, None)
+        .map_err(ApiError::db)?
+    {
+        let _ = std::fs::remove_file(upload_path(&state.upload_dir, &id, &ext));
+    }
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 async fn list_groups(
@@ -622,6 +738,39 @@ async fn save_image(
     })
 }
 
+async fn save_audio(
+    state: &AppState,
+    owner_id: &str,
+    mut multipart: Multipart,
+) -> Result<SavedAttachment, ApiError> {
+    let field = multipart
+        .next_field()
+        .await
+        .map_err(|_| ApiError::bad("invalid upload"))?
+        .ok_or_else(|| ApiError::bad("missing file"))?;
+    let name = safe_filename(field.file_name());
+    let bytes = field
+        .bytes()
+        .await
+        .map_err(|_| ApiError::bad("invalid upload"))?;
+    if bytes.len() > MAX_ATTACHMENT_BYTES {
+        return Err(ApiError::bad("file is too large (25 MiB maximum)"));
+    }
+    let kind = detect_audio(&bytes).ok_or_else(|| ApiError::bad("unsupported audio format"))?;
+    let size_bytes = bytes.len() as i64;
+    let id = state
+        .db
+        .insert_attachment(owner_id, kind.mime, kind.ext, &name, size_bytes, now_ms())
+        .map_err(ApiError::db)?;
+    write_upload(&state.upload_dir, &id, kind.ext, &bytes).map_err(ApiError::internal)?;
+    Ok(SavedAttachment {
+        id,
+        mime: kind.mime.to_string(),
+        name,
+        size_bytes,
+    })
+}
+
 pub fn require_user(state: &AppState, headers: &HeaderMap) -> Result<UserRow, ApiError> {
     let token = session_token(headers).ok_or_else(|| ApiError::unauthorized("not signed in"))?;
     state
@@ -682,6 +831,7 @@ fn public_me(user: &UserRow) -> UserInfo {
         email: (!user.email.ends_with("@key.larptrix.invalid")).then(|| user.email.clone()),
         online: true,
         avatar_url: user.avatar_id.as_ref().map(|_| avatar_url(&user.id)),
+        activity: None,
         is_group: false,
         e2e_enabled: false,
         group_member_ids: Vec::new(),
@@ -750,9 +900,9 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::{
-        create_access_key, login, put_crypto_device, register, register_password,
-        sanitize_username, session_cookie, CryptoDeviceBody, LoginBody, PasswordRegisterBody,
-        RegisterBody,
+        create_access_key, login, parse_ice_servers, put_crypto_device, register,
+        register_password, sanitize_username, session_cookie, CryptoDeviceBody, LoginBody,
+        PasswordRegisterBody, RegisterBody,
     };
     use crate::db::Database;
     use crate::hub::Hub;
@@ -778,6 +928,18 @@ mod tests {
         assert_eq!(sanitize_username("").unwrap(), "");
         assert!(sanitize_username("ab").is_err());
         assert!(sanitize_username("alice.name").is_err());
+    }
+
+    #[test]
+    fn rtc_config_defaults_to_stun_and_rejects_invalid_values() {
+        let default = parse_ice_servers(None).unwrap();
+        assert_eq!(default[0]["urls"], "stun:stun.l.google.com:19302");
+        assert!(parse_ice_servers(Some("not-json")).is_err());
+        assert!(parse_ice_servers(Some("{} ")).is_err());
+        assert_eq!(
+            parse_ice_servers(Some("[]")).unwrap(),
+            serde_json::json!([])
+        );
     }
 
     #[tokio::test]

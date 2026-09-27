@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"Larptrix desktop webview access to its local server and browser fallback.","remote":{"urls":["http://127.0.0.1:8080/*","http://localhost:8080/*","http://*/*","https://*/*"]},"local":true,"windows":["main"],"permissions":["core:default","allow-open-call-in-browser"]}}

@@ -1,13 +1,14 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Larptrix",
-  "version": "0.2.0",
+  "version": "0.2.4",
   "identifier": "com.larptrix.desktop",
   "build": {
     "frontendDist": "../../client"
   },
   "app": {
     "windows": [],
+    "withGlobalTauri": true,
     "security": {
       "csp": null
     }

@@ -6,7 +6,7 @@ services:
     restart: unless-stopped
     environment:
       LARPTRIX_COOKIE_SECURE: "1"
-      LARPTRIX_ICE_SERVERS: ${LARPTRIX_ICE_SERVERS:-[]}
+      LARPTRIX_ICE_SERVERS: ${LARPTRIX_ICE_SERVERS:-}
     volumes:
       - larptrix-data:/app/data
     expose:

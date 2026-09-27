@@ -52,6 +52,8 @@ downloads. Uploads are limited to 25 MiB.
 
 ## Run
 
+Run this from the repository root:
+
 ```bash
 cargo run -p larptrix-server
 ```
@@ -113,11 +115,15 @@ For calls between users behind different NATs, configure reachable STUN/TURN in
 some peer-to-peer calls may not connect. TURN credentials should be short-lived;
 do not put a permanent shared secret in this browser-readable setting.
 
-## Linux Desktop
+## Desktop clients
 
-`desktop/` contains a Tauri 2 Linux desktop client. It connects to an existing
-Larptrix server; the server and desktop window are separate processes. Start the
-server with `cargo run -p larptrix-server`, then launch the desktop client:
+`desktop/` contains a Linux desktop client using Electron's Chromium runtime, so
+WebRTC calls work inside the app window. It connects to an existing Larptrix server;
+the server and desktop window are separate processes. Start the server with
+`cargo run -p larptrix-server` from the repository root, then launch the desktop
+client. The desktop window loads its UI and WebAssembly crypto bundle from that
+running server, so after updating the client or crypto code, rebuild and restart
+the server before reopening the desktop app:
 
 ```bash
 cd desktop
@@ -125,18 +131,24 @@ npm install
 npm run dev
 ```
 
-To build Linux `.deb` and AppImage packages, run `npm run build` from `desktop/`.
-Tauri requires the system WebKitGTK 4.1 development package and the Rust/C compiler
-toolchain. On Arch-based systems install the WebKit and GStreamer plugins required
-for WebKit media playback and capture:
+To build the Linux AppImage, run `npm run build` from `desktop/`.
+Electron packages Chromium with the app. To build a portable Windows x64 package,
+run `npm run build:windows`; extract `dist/Larptrix-0.4.0-win-x64.zip` and launch
+`Larptrix.exe`. The Windows ZIP can be built from Linux without Wine. Tauri remains
+available as the optional `npm run dev:tauri` / `npm run build:tauri` WebKitGTK
+variant. On Arch-based systems install the media libraries needed for desktop
+capture and playback:
+
+To build the portable Windows x64 ZIP from Linux or Windows, run `npm run build:windows`
+from `desktop/`. Extract the ZIP and run `larptrix-linux.exe`.
 
 ```bash
-sudo pacman -S --needed webkit2gtk-4.1 gst-plugins-base gst-plugins-good base-devel curl file openssl librsvg
+sudo pacman -S --needed webkit2gtk-4.1 gst-plugins-base gst-plugins-good gst-plugins-bad libnice base-devel curl file openssl librsvg
 ```
 
-`gst-plugins-good` provides the `autoaudiosink` element reported by WebKit. On
-Wayland the client disables WebKit's DMA-BUF renderer to avoid a compositor protocol
-error; GTK still uses the native Wayland backend. Set
+`gst-plugins-good` provides the `autoaudiosink` element reported by WebKit. On Wayland
+the optional Tauri client disables WebKit's DMA-BUF renderer to avoid a compositor
+protocol error; GTK still uses the native Wayland backend. Set
 `LARPTRIX_SERVER_URL` to connect to another server; it defaults to
 `http://127.0.0.1:8080`.
 
@@ -158,12 +170,12 @@ WS server: `welcome`, `directory`, `chat`, `message`, `call_signal`, `error`
 ### Calls
 
 1:1 audio/video calls and screen sharing use browser WebRTC with ephemeral signaling
-relayed over the authenticated WebSocket. Signaling payloads are not stored. Set
-`LARPTRIX_ICE_SERVERS` to a JSON array of `RTCIceServer` objects for STUN/TURN, for
-example `[{"urls":"stun:stun.example.net:3478"}]`. Without ICE servers, calls may
-work on a LAN but often cannot cross NAT. Do not place long-lived TURN passwords in
-this value; authenticated clients can read it. Deploy short-lived TURN credentials
-before exposing the service publicly.
+relayed over the authenticated WebSocket. Signaling payloads are not stored. The
+server uses Google's public STUN server by default. For restrictive NATs or networks
+that block direct UDP, set `LARPTRIX_ICE_SERVERS` to a JSON array containing your own
+STUN/TURN service, for example `[{"urls":"turn:turn.example.net:3478","username":"...","credential":"..."}]`.
+TURN credentials are delivered to authenticated clients, so use short-lived credentials
+and never put a permanent shared TURN secret in this setting.
 
 WebRTC provides DTLS-SRTP transport encryption, but calls are not yet protected by
 Larptrix device-verified E2E keys. A server that controls signaling could potentially

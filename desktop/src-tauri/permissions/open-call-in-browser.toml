@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-open-call-in-browser"
+description = "Allows opening the current Larptrix chat in the system browser."
+commands.allow = ["open_call_in_browser"]

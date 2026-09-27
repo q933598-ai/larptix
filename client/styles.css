@@ -73,6 +73,12 @@ h1 {
   color: #8fd9a8;
 }
 
+.verified-badge {
+  color: #8fd9a8;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
 .people {
   border-right: 1px solid var(--line);
   padding: 16px;
@@ -690,9 +696,12 @@ dialog form {
 }
 
 .profile-view-dialog {
-  display: grid;
-  gap: 12px;
-  justify-items: start;
+  display: block;
+  position: relative;
+  width: min(480px, 94vw);
+  max-width: none;
+  padding: 0 0 18px;
+  overflow-x: hidden;
 }
 
 .profile-view-dialog:not([open]) {
@@ -700,15 +709,132 @@ dialog form {
 }
 
 .profile-view-dialog > button {
-  justify-self: end;
+  position: absolute;
+  z-index: 2;
+  top: 10px;
+  right: 10px;
 }
 
-.profile-view-dialog > img {
-  width: 96px;
-  height: 96px;
+.profile-view-dialog > .profile-identity,
+.profile-view-dialog > .profile-section {
+  margin-left: 20px;
+  margin-right: 20px;
+}
+
+.profile-form {
+  gap: 0;
+  margin: -24px;
+}
+
+.profile-dialog,
+#profile-dialog {
+  width: min(520px, 94vw);
+  max-width: none;
+  padding: 24px;
+  overflow-x: hidden;
+}
+
+.profile-banner {
+  height: 112px;
+  background: linear-gradient(115deg, #2e635b, #293843 62%, #382f3b);
+}
+
+.profile-identity {
+  display: flex;
+  align-items: end;
+  gap: 14px;
+  min-width: 0;
+  margin: -38px 20px 16px;
+}
+
+.profile-identity .avatar,
+.profile-identity > img {
+  display: grid;
+  place-items: center;
+  flex: 0 0 82px;
+  width: 82px;
+  height: 82px;
   border-radius: 50%;
   object-fit: cover;
-  background: var(--me);
+  border: 6px solid var(--panel);
+  background: #35443f;
+  font-size: 1.8rem;
+}
+
+.profile-identity-copy {
+  flex: 1;
+  min-width: 0;
+  padding-bottom: 4px;
+}
+
+.profile-identity-copy h2 {
+  overflow-wrap: anywhere;
+}
+
+.profile-identity-copy p,
+.profile-section p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.profile-activity {
+  color: #a7d9bc !important;
+  font-size: 0.86rem;
+}
+
+.profile-dismiss {
+  position: absolute;
+  top: 128px;
+  right: 16px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  font-size: 1.3rem;
+}
+
+.profile-section {
+  display: grid;
+  gap: 8px;
+  margin: 0 20px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+
+.profile-section h3 {
+  margin: 0 0 3px;
+  color: #c7cad4;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+}
+
+.profile-section input,
+.profile-section textarea {
+  width: 100%;
+}
+
+.profile-section audio {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+}
+
+.profile-section audio[hidden],
+.profile-view-dialog audio[hidden] {
+  display: none;
+}
+
+.profile-music-actions {
+  justify-content: flex-start;
+}
+
+.profile-music-upload {
+  min-height: 38px;
+}
+
+.profile-footer {
+  padding: 12px 20px 0;
 }
 
 .profile-view-dialog > p {
@@ -716,6 +842,14 @@ dialog form {
   overflow-wrap: anywhere;
   color: var(--muted);
   white-space: pre-wrap;
+}
+
+.person-activity {
+  overflow: hidden;
+  color: #a7d9bc;
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 #legacy-credentials:not([hidden]) {
