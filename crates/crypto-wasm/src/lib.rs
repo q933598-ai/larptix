@@ -252,6 +252,7 @@ impl CryptoDevice {
             let available_one_time_keys = self.account.stored_one_time_key_count();
 
             let required_one_time_key = pre_key.one_time_key().to_base64();
+            let current_one_time_key = self.one_time_key.clone();
 
             let existing_sessions = self
                 .sessions
@@ -273,9 +274,10 @@ impl CryptoDevice {
                 .create_inbound_session(SessionConfig::version_1(), sender_identity, &pre_key)
                 .map_err(|_| {
                     JsValue::from_str(&format!(
-                        "could not establish incoming encrypted session (available one-time keys: {}, required one-time key: {}, existing sessions: {})",
+                        "could not establish incoming encrypted session (available one-time keys: {}, required one-time key: {}, current one-time key: {}, existing sessions: {})",
                         available_one_time_keys,
                         required_one_time_key,
+                        current_one_time_key,
                         existing_sessions
                     ))
                 })?;
