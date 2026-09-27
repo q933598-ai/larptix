@@ -1187,13 +1187,13 @@ async function handleCallSignal(signal) {
   if (signal.kind === "ice_candidate" && !peerConnection) {
     if (pendingIncomingCall && signal.sender_id === callPeerId) {
       pendingIceCandidates.push(signal.payload);
-    } else if (!pendingIncomingCall) {
-      const candidates = iceCandidatesBeforeOffer.get(signal.sender_id) || [];
-      if (candidates.length < 128) candidates.push(signal.payload);
-      iceCandidatesBeforeOffer.set(signal.sender_id, candidates);
     }
+
+    // Ignore ICE candidates that arrive without a pending offer.
+    // They may belong to a previous/ended ICE generation.
     return;
   }
+
   if (signal.sender_id !== callPeerId) return;
   if (!peerConnection) return;
   if (signal.kind === "answer") {

@@ -36,38 +36,58 @@ pub fn detect_image(bytes: &[u8]) -> Option<UploadKind> {
 }
 
 pub fn detect_audio(bytes: &[u8]) -> Option<UploadKind> {
+    // Ogg / Opus / Vorbis
     if bytes.starts_with(b"OggS") {
         return Some(UploadKind {
             mime: "audio/ogg",
             ext: "ogg",
         });
     }
-    if bytes.starts_with(b"ID3")
-        || (bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] & 0xE0 == 0xE0)
+
+    // MP3 with ID3 metadata.
+    if bytes.starts_with(b"ID3") {
+        return Some(UploadKind {
+            mime: "audio/mpeg",
+            ext: "mp3",
+        });
+    }
+
+    // MP3 MPEG frame sync.
+    if bytes.len() >= 2
+        && bytes[0] == 0xFF
+        && (bytes[1] & 0xE0) == 0xE0
+        && (bytes[1] & 0x06) != 0x00
     {
         return Some(UploadKind {
             mime: "audio/mpeg",
             ext: "mp3",
         });
     }
+
+    // WAV / RIFF.
     if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WAVE" {
         return Some(UploadKind {
             mime: "audio/wav",
             ext: "wav",
         });
     }
+
+    // WebM / Matroska (EBML).
     if bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
         return Some(UploadKind {
             mime: "audio/webm",
             ext: "webm",
         });
     }
-    if bytes.len() >= 8 && &bytes[4..8] == b"ftyp" {
+
+    // MP4 / M4A. The `ftyp` box normally starts at byte 4.
+    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
         return Some(UploadKind {
             mime: "audio/mp4",
             ext: "m4a",
         });
     }
+
     None
 }
 
