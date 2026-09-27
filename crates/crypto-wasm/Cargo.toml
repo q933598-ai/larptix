@@ -1,0 +1,16 @@
+[package]
+name = "larptrix-crypto-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Browser WebAssembly E2E cryptography based on Matrix vodozemac"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json.workspace = true
+sha2 = "0.10"
+vodozemac = { version = "0.11", features = ["wasm_js"] }
+wasm-bindgen = "0.2.129"

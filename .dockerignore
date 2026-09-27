@@ -1,0 +1,9 @@
+.git
+.env
+.env.*
+!.env.example
+target
+desktop
+data
+node_modules
+**/node_modules

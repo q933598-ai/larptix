@@ -1,0 +1,10 @@
+/target
+/desktop/node_modules/
+/desktop/src-tauri/target/
+/.env
+/data/*.db
+/data/*.db-*
+/data/uploads/
+/desktop/data/
+.DS_Store
+*.swp
