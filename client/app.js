@@ -1779,6 +1779,12 @@ async function displayEncryptedMessage(message, bodyElement) {
       ? envelope.ciphertexts[me.user_id]
       : message.body;
     if (typeof encryptedBody !== "string") throw new Error("No encrypted copy was addressed to this account.");
+    console.log("[E2E] incoming", {
+      sender: message.sender_id,
+      type: envelope?.message_type,
+      hasSession: cryptoDevice.has_session(message.sender_id),
+    });
+
     const plaintext = await withCryptoStateLock(async () => {
       const result = cryptoDevice.decrypt(
         message.sender_id,
