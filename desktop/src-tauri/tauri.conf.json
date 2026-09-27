@@ -4,7 +4,7 @@
   "version": "0.2.4",
   "identifier": "com.larptrix.desktop",
   "build": {
-    "frontendDist": "../../client"
+    "frontendDist": "../../desktop/bootstrap"
   },
   "app": {
     "windows": [],
