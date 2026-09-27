@@ -684,23 +684,26 @@ async function completeCryptoDialog() {
     }
 
     const recoveryKey = cryptoRecoveryInput.value.trim();
-    const restored = CryptoDevice.restore(recoveryKey, cryptoStoredState.encrypted_state);
-    const bundle = JSON.parse(cryptoStoredState.bundle_json);
-    const restoredBundle = JSON.parse(restored.public_bundle_json());
-    if (restoredBundle.fingerprint !== bundle.fingerprint) {
-      restored.free();
-      throw new Error("Recovery key restored a different device identity. Check the recovery key and backup.");
-    }
-    cryptoDevice?.free();
-    cryptoDevice = restored;
-    cryptoRecoveryKey = recoveryKey;
-    cryptoDeviceBundle = restoredBundle;
-    cryptoOwnFingerprint.textContent = restoredBundle.fingerprint;
-    cryptoOwnFingerprint.hidden = false;
-    cryptoProfileStatus.textContent = "E2E enabled and unlocked on this device.";
-    cryptoDialog.close();
-    cryptoDialogMode = null;
-    await persistCryptoState();
+
+    await withCryptoStateLock(async () => {
+      const restored = CryptoDevice.restore(recoveryKey, cryptoStoredState.encrypted_state);
+      const bundle = JSON.parse(cryptoStoredState.bundle_json);
+      const restoredBundle = JSON.parse(restored.public_bundle_json());
+      if (restoredBundle.fingerprint !== bundle.fingerprint) {
+        restored.free();
+        throw new Error("Recovery key restored a different device identity. Check the recovery key and backup.");
+      }
+      cryptoDevice?.free();
+      cryptoDevice = restored;
+      cryptoRecoveryKey = recoveryKey;
+      cryptoDeviceBundle = restoredBundle;
+      cryptoOwnFingerprint.textContent = restoredBundle.fingerprint;
+      cryptoOwnFingerprint.hidden = false;
+      cryptoProfileStatus.textContent = "E2E enabled and unlocked on this device.";
+      cryptoDialog.close();
+      cryptoDialogMode = null;
+      await persistCryptoState();
+    });
     try {
       if (rememberCryptoDevice.checked) {
         await rememberRecoveryKey(me.user_id, recoveryKey);
