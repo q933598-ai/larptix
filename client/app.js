@@ -1807,12 +1807,38 @@ async function displayEncryptedMessage(message, bodyElement) {
         sessionCount: cryptoDevice.session_count(message.sender_id),
       });
 
-      const plaintext = cryptoDevice.decrypt(
-        message.sender_id,
-        encryptedBody,
-        JSON.stringify(bundle),
-        bundle.fingerprint,
-      );
+      const sessionCountBefore = cryptoDevice.session_count(message.sender_id);
+
+      console.log("[E2E] decrypt start", {
+        sender: message.sender_id,
+        type: envelope?.message_type,
+        sessionCountBefore,
+      });
+
+      let plaintext;
+
+      try {
+        plaintext = cryptoDevice.decrypt(
+          message.sender_id,
+          encryptedBody,
+          JSON.stringify(bundle),
+          bundle.fingerprint,
+        );
+
+        console.log("[E2E] decrypt success", {
+          sender: message.sender_id,
+          type: envelope?.message_type,
+          sessionCountAfter: cryptoDevice.session_count(message.sender_id),
+        });
+      } catch (err) {
+        console.error("[E2E] decrypt FAILED", {
+          sender: message.sender_id,
+          type: envelope?.message_type,
+          sessionCountAfter: cryptoDevice.session_count(message.sender_id),
+          error: err?.message || String(err),
+        });
+        throw err;
+      }
 
       await persistCryptoState();
 
