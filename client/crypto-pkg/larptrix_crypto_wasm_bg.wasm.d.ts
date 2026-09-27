@@ -11,6 +11,7 @@ export const cryptodevice_fingerprint: (a: number) => [number, number];
 export const cryptodevice_has_session: (a: number, b: number, c: number) => number;
 export const cryptodevice_public_bundle_json: (a: number) => [number, number, number, number];
 export const cryptodevice_restore: (a: number, b: number, c: number, d: number) => [number, number, number];
+export const cryptodevice_session_count: (a: number, b: number, c: number) => number;
 export const __wbindgen_exn_store: (a: number) => void;
 export const __externref_table_alloc: () => number;
 export const __wbindgen_externrefs: WebAssembly.Table;

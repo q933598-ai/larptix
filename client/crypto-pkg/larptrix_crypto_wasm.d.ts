@@ -13,6 +13,7 @@ export class CryptoDevice {
     has_session(peer_id: string): boolean;
     public_bundle_json(): string;
     static restore(recovery_key_base64: string, state_json: string): CryptoDevice;
+    session_count(peer_id: string): number;
 }
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -29,6 +30,7 @@ export interface InitOutput {
     readonly cryptodevice_has_session: (a: number, b: number, c: number) => number;
     readonly cryptodevice_public_bundle_json: (a: number) => [number, number, number, number];
     readonly cryptodevice_restore: (a: number, b: number, c: number, d: number) => [number, number, number];
+    readonly cryptodevice_session_count: (a: number, b: number, c: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;

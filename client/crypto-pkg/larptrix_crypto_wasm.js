@@ -191,6 +191,16 @@ export class CryptoDevice {
         }
         return CryptoDevice.__wrap(ret[0]);
     }
+    /**
+     * @param {string} peer_id
+     * @returns {number}
+     */
+    session_count(peer_id) {
+        const ptr0 = passStringToWasm0(peer_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.cryptodevice_session_count(this.__wbg_ptr, ptr0, len0);
+        return ret >>> 0;
+    }
 }
 if (Symbol.dispose) CryptoDevice.prototype[Symbol.dispose] = CryptoDevice.prototype.free;
 function __wbg_get_imports() {

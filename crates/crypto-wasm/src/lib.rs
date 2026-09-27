@@ -150,6 +150,12 @@ impl CryptoDevice {
             .is_some_and(|sessions| !sessions.is_empty())
     }
 
+    pub fn session_count(&self, peer_id: &str) -> usize {
+        self.sessions
+            .get(peer_id)
+            .map_or(0, Vec::len)
+    }
+
     pub fn establish_session(
         &mut self,
         peer_id: &str,
@@ -286,12 +292,14 @@ impl CryptoDevice {
 }
 
 fn decrypt_with_sessions(sessions: &mut [Session], ciphertext: &str) -> Option<Vec<u8>> {
+    let message = Message::from_base64(ciphertext).ok()?;
+
     for session in sessions.iter_mut().rev() {
-        let message = Message::from_base64(ciphertext).ok()?;
-        if let Ok(plaintext) = session.decrypt(&OlmMessage::Normal(message)) {
+        if let Ok(plaintext) = session.decrypt(&OlmMessage::Normal(message.clone())) {
             return Some(plaintext);
         }
     }
+
     None
 }
 

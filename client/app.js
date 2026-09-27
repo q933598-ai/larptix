@@ -1804,6 +1804,7 @@ async function displayEncryptedMessage(message, bodyElement) {
         sender: message.sender_id,
         type: envelope?.message_type,
         hasSession: cryptoDevice.has_session(message.sender_id),
+        sessionCount: cryptoDevice.session_count(message.sender_id),
       });
 
       const plaintext = cryptoDevice.decrypt(
