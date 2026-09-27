@@ -1747,6 +1747,8 @@ function parseCryptoEnvelope(raw) {
   }
 }
 
+console.log("[E2E] displayEncryptedMessage loaded");
+
 async function displayEncryptedMessage(message, bodyElement) {
   if (message.sender_id === me?.user_id) {
     const payload = parseEncryptedPayload(sentPlaintextByCiphertext.get(message.body));
