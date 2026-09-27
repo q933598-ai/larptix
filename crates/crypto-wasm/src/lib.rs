@@ -130,7 +130,7 @@ impl CryptoDevice {
     }
 
     fn ensure_one_time_key(&mut self) -> Result<(), JsValue> {
-        if self.account.one_time_keys().is_empty() {
+        if self.account.stored_one_time_key_count() == 0 {
             self.account.generate_one_time_keys(1);
 
             let (_, one_time_key) = self
@@ -249,7 +249,7 @@ impl CryptoDevice {
                         .map_err(|_| JsValue::from_str("decrypted message is not valid UTF-8"));
                 }
             }
-            let available_one_time_keys = self.account.one_time_keys().len();
+            let available_one_time_keys = self.account.stored_one_time_key_count();
 
             let result = self
                 .account
