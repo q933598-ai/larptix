@@ -129,7 +129,28 @@ impl CryptoDevice {
         fingerprint(&self.account.curve25519_key(), &self.account.ed25519_key())
     }
 
-    pub fn public_bundle_json(&self) -> Result<String, JsValue> {
+    fn ensure_one_time_key(&mut self) -> Result<(), JsValue> {
+        if self.account.one_time_keys().is_empty() {
+            self.account.generate_one_time_keys(1);
+
+            let (_, one_time_key) = self
+                .account
+                .one_time_keys()
+                .into_iter()
+                .next()
+                .ok_or_else(|| JsValue::from_str("could not generate one-time key"))?;
+
+            self.one_time_signature = self.account.sign(one_time_key.as_bytes()).to_base64();
+            self.one_time_key = one_time_key.to_base64();
+            self.account.mark_keys_as_published();
+        }
+
+        Ok(())
+    }
+
+    pub fn public_bundle_json(&mut self) -> Result<String, JsValue> {
+        self.ensure_one_time_key()?;
+
         let curve_key = self.account.curve25519_key();
         let ed25519_key = self.account.ed25519_key();
         let identity_signature = self.account.sign(curve_key.as_bytes()).to_base64();
@@ -245,16 +266,9 @@ impl CryptoDevice {
                 .entry(peer_id.to_string())
                 .or_default()
                 .push(result.session);
-            self.account.generate_one_time_keys(1);
-            let (_, next_key) = self
-                .account
-                .one_time_keys()
-                .into_iter()
-                .next()
-                .ok_or_else(|| JsValue::from_str("could not replenish one-time key"))?;
-            self.one_time_signature = self.account.sign(next_key.as_bytes()).to_base64();
-            self.one_time_key = next_key.to_base64();
-            self.account.mark_keys_as_published();
+
+            self.ensure_one_time_key()?;
+
             return Ok(plaintext);
         }
         if envelope.message_type != "message" {
