@@ -496,18 +496,16 @@ async fn list_user_crypto_devices(
         .crypto_devices_for_user(&id)
         .map_err(ApiError::db)?;
 
+    let bundles = devices
+        .into_iter()
+        .map(|device| {
+            serde_json::from_str::<serde_json::Value>(&device.bundle_json)
+                .map_err(|_| ApiError::internal("stored public device bundle is invalid"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
     Ok(Json(serde_json::json!({
-        "devices": devices
-            .into_iter()
-            .map(|device| serde_json::json!({
-                "device_id": device.device_id,
-                "user_id": device.user_id,
-                "bundle_json": device.bundle_json,
-                "state_version": device.state_version,
-                "created_at": device.created_at,
-                "updated_at": device.updated_at
-            }))
-            .collect::<Vec<_>>()
+        "devices": bundles
     })))
 }
 
