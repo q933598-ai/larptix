@@ -5,15 +5,17 @@ export class CryptoDevice {
     free(): void;
     [Symbol.dispose](): void;
     constructor(recovery_key_base64: string);
-    decrypt(peer_id: string, envelope_json: string, sender_bundle_json: string, expected_fingerprint: string): string;
-    encrypt(peer_id: string, plaintext: string): string;
+    decrypt(peer_device_id: string, envelope_json: string, sender_bundle_json: string, expected_fingerprint: string): string;
+    device_id(): string;
+    encrypt(peer_device_id: string, plaintext: string): string;
     encrypted_state_json(): string;
-    establish_session(peer_id: string, bundle_json: string, expected_fingerprint: string): void;
+    establish_session(peer_device_id: string, bundle_json: string, expected_fingerprint: string): void;
     fingerprint(): string;
-    has_session(peer_id: string): boolean;
+    has_session(peer_device_id: string): boolean;
+    mark_one_time_keys_as_published(): void;
     public_bundle_json(): string;
     static restore(recovery_key_base64: string, state_json: string): CryptoDevice;
-    session_count(peer_id: string): number;
+    session_count(peer_device_id: string): number;
 }
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -23,11 +25,13 @@ export interface InitOutput {
     readonly __wbg_cryptodevice_free: (a: number, b: number) => void;
     readonly cryptodevice_create: (a: number, b: number) => [number, number, number];
     readonly cryptodevice_decrypt: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number, number, number];
+    readonly cryptodevice_device_id: (a: number) => [number, number];
     readonly cryptodevice_encrypt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly cryptodevice_encrypted_state_json: (a: number) => [number, number, number, number];
     readonly cryptodevice_establish_session: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly cryptodevice_fingerprint: (a: number) => [number, number];
     readonly cryptodevice_has_session: (a: number, b: number, c: number) => number;
+    readonly cryptodevice_mark_one_time_keys_as_published: (a: number) => [number, number];
     readonly cryptodevice_public_bundle_json: (a: number) => [number, number, number, number];
     readonly cryptodevice_restore: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly cryptodevice_session_count: (a: number, b: number, c: number) => number;

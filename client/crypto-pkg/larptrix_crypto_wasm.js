@@ -32,17 +32,17 @@ export class CryptoDevice {
         return this;
     }
     /**
-     * @param {string} peer_id
+     * @param {string} peer_device_id
      * @param {string} envelope_json
      * @param {string} sender_bundle_json
      * @param {string} expected_fingerprint
      * @returns {string}
      */
-    decrypt(peer_id, envelope_json, sender_bundle_json, expected_fingerprint) {
+    decrypt(peer_device_id, envelope_json, sender_bundle_json, expected_fingerprint) {
         let deferred6_0;
         let deferred6_1;
         try {
-            const ptr0 = passStringToWasm0(peer_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const ptr0 = passStringToWasm0(peer_device_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(envelope_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
@@ -65,15 +65,30 @@ export class CryptoDevice {
         }
     }
     /**
-     * @param {string} peer_id
+     * @returns {string}
+     */
+    device_id() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.cryptodevice_device_id(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @param {string} peer_device_id
      * @param {string} plaintext
      * @returns {string}
      */
-    encrypt(peer_id, plaintext) {
+    encrypt(peer_device_id, plaintext) {
         let deferred4_0;
         let deferred4_1;
         try {
-            const ptr0 = passStringToWasm0(peer_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const ptr0 = passStringToWasm0(peer_device_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(plaintext, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
@@ -113,12 +128,12 @@ export class CryptoDevice {
         }
     }
     /**
-     * @param {string} peer_id
+     * @param {string} peer_device_id
      * @param {string} bundle_json
      * @param {string} expected_fingerprint
      */
-    establish_session(peer_id, bundle_json, expected_fingerprint) {
-        const ptr0 = passStringToWasm0(peer_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    establish_session(peer_device_id, bundle_json, expected_fingerprint) {
+        const ptr0 = passStringToWasm0(peer_device_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(bundle_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
@@ -145,14 +160,20 @@ export class CryptoDevice {
         }
     }
     /**
-     * @param {string} peer_id
+     * @param {string} peer_device_id
      * @returns {boolean}
      */
-    has_session(peer_id) {
-        const ptr0 = passStringToWasm0(peer_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    has_session(peer_device_id) {
+        const ptr0 = passStringToWasm0(peer_device_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.cryptodevice_has_session(this.__wbg_ptr, ptr0, len0);
         return ret !== 0;
+    }
+    mark_one_time_keys_as_published() {
+        const ret = wasm.cryptodevice_mark_one_time_keys_as_published(this.__wbg_ptr);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
     }
     /**
      * @returns {string}
@@ -192,11 +213,11 @@ export class CryptoDevice {
         return CryptoDevice.__wrap(ret[0]);
     }
     /**
-     * @param {string} peer_id
+     * @param {string} peer_device_id
      * @returns {number}
      */
-    session_count(peer_id) {
-        const ptr0 = passStringToWasm0(peer_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    session_count(peer_device_id) {
+        const ptr0 = passStringToWasm0(peer_device_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.cryptodevice_session_count(this.__wbg_ptr, ptr0, len0);
         return ret >>> 0;
@@ -210,6 +231,9 @@ function __wbg_get_imports() {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
         __wbg_getRandomValues_436a51d0629d84e1: function() { return handleError(function (arg0, arg1) {
+            globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
+        }, arguments); },
+        __wbg_getRandomValues_a678b7300e8ed57f: function() { return handleError(function (arg0, arg1) {
             globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
         }, arguments); },
         __wbindgen_generic_0000000000000001: function(arg0, arg1) {

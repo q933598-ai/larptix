@@ -12,4 +12,4 @@ repository = "https://github.com/example/larptrix"
 larptrix-protocol = { path = "crates/protocol" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "serde", "js"] }
