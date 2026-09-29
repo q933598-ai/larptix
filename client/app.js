@@ -825,11 +825,42 @@ async function persistCryptoState() {
   cryptoDeviceBundle = JSON.parse(bundleJson);
   cryptoOwnFingerprint.textContent = cryptoDeviceBundle.fingerprint;
 
-  await api("PUT", "/api/me/crypto-device", {
+  const encryptedState = cryptoDevice.encrypted_state_json();
+  const deviceId = cryptoDevice.device_id();
+
+  if (!cryptoStoredState) {
+    const created = await api("POST", "/api/me/crypto-devices", {
+      device_id: deviceId,
+      bundle_json: bundleJson,
+      encrypted_state: encryptedState,
+    });
+
+    cryptoStoredState = {
+      device_id: created.device_id,
+      bundle_json: bundleJson,
+      encrypted_state: encryptedState,
+      state_version: created.state_version,
+    };
+    return;
+  }
+
+  const updated = await api(
+    "PUT",
+    `/api/me/crypto-devices/${encodeURIComponent(deviceId)}`,
+    {
+      bundle_json: bundleJson,
+      encrypted_state: encryptedState,
+      expected_version: cryptoStoredState.state_version,
+    }
+  );
+
+  cryptoStoredState = {
+    ...cryptoStoredState,
     bundle_json: bundleJson,
-    encrypted_state: cryptoDevice.encrypted_state_json(),
-    clear_old_history: false,
-  });
+    encrypted_state: encryptedState,
+    state_version: updated.state_version,
+    updated_at: updated.updated_at,
+  };
 }
 
 function openLocalCryptoDb() {
