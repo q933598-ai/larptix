@@ -16,9 +16,13 @@ pub struct UserRow {
 
 #[derive(Debug, Clone)]
 pub struct CryptoDeviceRow {
+    pub device_id: String,
     pub user_id: String,
     pub bundle_json: String,
     pub encrypted_state: String,
+    pub state_version: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -120,71 +124,172 @@ impl Database {
         .optional()
     }
 
-    pub fn crypto_device(&self, user_id: &str) -> rusqlite::Result<Option<CryptoDeviceRow>> {
+    pub fn crypto_device(&self, device_id: &str) -> rusqlite::Result<Option<CryptoDeviceRow>> {
         let conn = self.conn.lock().expect("db lock");
+
         conn.query_row(
-            "SELECT user_id, bundle_json, encrypted_state FROM crypto_devices WHERE user_id = ?1",
-            [user_id],
+            "SELECT device_id, user_id, bundle_json, encrypted_state,
+                    state_version, created_at, updated_at
+             FROM crypto_devices
+             WHERE device_id = ?1",
+            [device_id],
             |row| {
                 Ok(CryptoDeviceRow {
-                    user_id: row.get(0)?,
-                    bundle_json: row.get(1)?,
-                    encrypted_state: row.get(2)?,
+                    device_id: row.get(0)?,
+                    user_id: row.get(1)?,
+                    bundle_json: row.get(2)?,
+                    encrypted_state: row.get(3)?,
+                    state_version: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
                 })
             },
         )
         .optional()
     }
 
-    pub fn save_crypto_device(
-        &self,
-        user_id: &str,
-        bundle_json: &str,
-        encrypted_state: &str,
-    ) -> rusqlite::Result<()> {
+    pub fn crypto_devices_for_user(&self, user_id: &str) -> rusqlite::Result<Vec<CryptoDeviceRow>> {
         let conn = self.conn.lock().expect("db lock");
-        conn.execute(
-            "INSERT INTO crypto_devices (user_id, bundle_json, encrypted_state, updated_at)
-             VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(user_id) DO UPDATE SET
-                bundle_json = excluded.bundle_json,
-                encrypted_state = excluded.encrypted_state,
-                updated_at = excluded.updated_at",
-            params![user_id, bundle_json, encrypted_state, crate::now_ms()],
+
+        let mut stmt = conn.prepare(
+            "SELECT device_id, user_id, bundle_json, encrypted_state,
+                    state_version, created_at, updated_at
+             FROM crypto_devices
+             WHERE user_id = ?1
+             ORDER BY created_at ASC",
         )?;
-        Ok(())
+
+        let rows = stmt.query_map([user_id], |row| {
+            Ok(CryptoDeviceRow {
+                device_id: row.get(0)?,
+                user_id: row.get(1)?,
+                bundle_json: row.get(2)?,
+                encrypted_state: row.get(3)?,
+                state_version: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        })?;
+
+        rows.collect()
     }
 
-    pub fn activate_crypto_device(
-        &self,
-        user_id: &str,
-        bundle_json: &str,
-        encrypted_state: &str,
-        _clear_history: bool,
-    ) -> rusqlite::Result<Vec<StoredFile>> {
-        let mut conn = self.conn.lock().expect("db lock");
-        let tx = conn.transaction()?;
-        let existing: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM crypto_devices WHERE user_id = ?1)",
+    pub fn user_has_crypto_devices(&self, user_id: &str) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("db lock");
+
+        conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM crypto_devices
+                WHERE user_id = ?1
+            )",
             [user_id],
             |row| row.get(0),
+        )
+    }
+
+    pub fn create_crypto_device(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        bundle_json: &str,
+        encrypted_state: &str,
+    ) -> rusqlite::Result<CryptoDeviceRow> {
+        let now = crate::now_ms();
+        let conn = self.conn.lock().expect("db lock");
+
+        conn.execute(
+            "INSERT INTO crypto_devices (
+                device_id,
+                user_id,
+                bundle_json,
+                encrypted_state,
+                state_version,
+                created_at,
+                updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5)",
+            params![device_id, user_id, bundle_json, encrypted_state, now],
         )?;
-        if existing {
-            tx.execute(
-                "UPDATE crypto_devices SET bundle_json = ?1, encrypted_state = ?2, updated_at = ?3
-                 WHERE user_id = ?4",
-                params![bundle_json, encrypted_state, crate::now_ms(), user_id],
-            )?;
-            tx.commit()?;
-            return Ok(Vec::new());
+
+        Ok(CryptoDeviceRow {
+            device_id: device_id.to_string(),
+            user_id: user_id.to_string(),
+            bundle_json: bundle_json.to_string(),
+            encrypted_state: encrypted_state.to_string(),
+            state_version: 1,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub fn update_crypto_device(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        expected_version: i64,
+        bundle_json: &str,
+        encrypted_state: &str,
+    ) -> rusqlite::Result<Option<CryptoDeviceRow>> {
+        let now = crate::now_ms();
+        let new_version = expected_version + 1;
+
+        let conn = self.conn.lock().expect("db lock");
+
+        let changed = conn.execute(
+            "UPDATE crypto_devices
+             SET bundle_json = ?1,
+                 encrypted_state = ?2,
+                 state_version = ?3,
+                 updated_at = ?4
+             WHERE device_id = ?5
+               AND user_id = ?6
+               AND state_version = ?7",
+            params![
+                bundle_json,
+                encrypted_state,
+                new_version,
+                now,
+                device_id,
+                user_id,
+                expected_version
+            ],
+        )?;
+
+        if changed == 0 {
+            return Ok(None);
         }
-        tx.execute(
-            "INSERT INTO crypto_devices (user_id, bundle_json, encrypted_state, updated_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![user_id, bundle_json, encrypted_state, crate::now_ms()],
+
+        let created_at = conn.query_row(
+            "SELECT created_at
+             FROM crypto_devices
+             WHERE device_id = ?1",
+            [device_id],
+            |row| row.get(0),
         )?;
-        tx.commit()?;
-        Ok(Vec::new())
+
+        Ok(Some(CryptoDeviceRow {
+            device_id: device_id.to_string(),
+            user_id: user_id.to_string(),
+            bundle_json: bundle_json.to_string(),
+            encrypted_state: encrypted_state.to_string(),
+            state_version: new_version,
+            created_at,
+            updated_at: now,
+        }))
+    }
+
+    pub fn delete_crypto_device(&self, user_id: &str, device_id: &str) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("db lock");
+
+        let deleted = conn.execute(
+            "DELETE FROM crypto_devices
+             WHERE device_id = ?1
+               AND user_id = ?2",
+            params![device_id, user_id],
+        )?;
+
+        Ok(deleted != 0)
     }
 
     pub fn set_access_key_hash(&self, user_id: &str, key_hash: &str) -> rusqlite::Result<()> {
@@ -928,12 +1033,18 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             FOREIGN KEY (user_id) REFERENCES users(id)
         );
         CREATE TABLE IF NOT EXISTS crypto_devices (
-            user_id TEXT PRIMARY KEY,
+            device_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
             bundle_json TEXT NOT NULL,
             encrypted_state TEXT NOT NULL,
+            state_version INTEGER NOT NULL DEFAULT 1,
+            created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
-            FOREIGN KEY (user_id) REFERENCES users(id)
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
+
+        CREATE INDEX IF NOT EXISTS idx_crypto_devices_user_id
+            ON crypto_devices(user_id);
         CREATE TABLE IF NOT EXISTS conversations (
             id TEXT PRIMARY KEY,
             user_a TEXT NOT NULL,
@@ -1036,6 +1147,7 @@ fn group_conversation_key(group_id: &str) -> String {
 mod tests {
     use super::Database;
     use std::path::Path;
+    use uuid::Uuid;
 
     #[test]
     fn key_account_is_found_by_hash_only() {
@@ -1181,15 +1293,77 @@ mod tests {
         db.insert_dm(&bob.id, &carol.id, "preserved history", None, 3)
             .unwrap();
 
-        let deleted = db
-            .activate_crypto_device(&alice.id, "{}", "encrypted-state", true)
+        let device_id_1 = Uuid::new_v4().to_string();
+
+        let device_1 = db
+            .create_crypto_device(
+                &alice.id,
+                &device_id_1,
+                &format!(
+                    r#"{{"version":2,"device_id":"{}","fingerprint":"alice-device-1"}}"#,
+                    device_id_1
+                ),
+                "encrypted-state-1",
+            )
             .unwrap();
-        assert!(deleted.is_empty());
+
+        assert_eq!(device_1.device_id, device_id_1);
+        assert_eq!(device_1.user_id, alice.id);
+        assert_eq!(device_1.state_version, 1);
+
         assert!(db.attachment(&avatar_id).unwrap().is_some());
         assert_eq!(db.dm_history(&alice.id, &bob.id, 100).unwrap().len(), 2);
         assert!(db.attachment(&file_id).unwrap().is_some());
         assert_eq!(db.dm_history(&bob.id, &carol.id, 100).unwrap().len(), 1);
-        assert!(db.crypto_device(&alice.id).unwrap().is_some());
+
+        let device_id_2 = Uuid::new_v4().to_string();
+
+        let device_2 = db
+            .create_crypto_device(
+                &alice.id,
+                &device_id_2,
+                &format!(
+                    r#"{{"version":2,"device_id":"{}","fingerprint":"alice-device-2"}}"#,
+                    device_id_2
+                ),
+                "encrypted-state-2",
+            )
+            .unwrap();
+
+        assert_eq!(device_2.state_version, 1);
+        assert_ne!(device_1.device_id, device_2.device_id);
+
+        let devices = db.crypto_devices_for_user(&alice.id).unwrap();
+
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].user_id, alice.id);
+        assert_eq!(devices[1].user_id, alice.id);
+
+        let updated = db
+            .update_crypto_device(
+                &alice.id,
+                &device_id_1,
+                1,
+                &format!(
+                    r#"{{"version":2,"device_id":"{}","fingerprint":"alice-device-1-updated"}}"#,
+                    device_id_1
+                ),
+                "encrypted-state-1-updated",
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(updated.state_version, 2);
+
+        let stale_update = db
+            .update_crypto_device(&alice.id, &device_id_1, 1, "{}", "stale-state")
+            .unwrap();
+
+        assert!(stale_update.is_none());
+
+        assert!(db.crypto_device(&device_id_1).unwrap().is_some());
+        assert!(db.user_has_crypto_devices(&alice.id).unwrap());
+
         let directory = db.list_users(&[]).unwrap();
         assert!(
             directory

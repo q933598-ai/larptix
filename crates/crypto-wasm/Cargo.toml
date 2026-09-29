@@ -14,3 +14,4 @@ serde_json.workspace = true
 sha2 = "0.10"
 vodozemac = { version = "0.11", features = ["wasm_js"] }
 wasm-bindgen = "0.2.129"
+uuid.workspace = true

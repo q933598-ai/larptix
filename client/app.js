@@ -365,7 +365,15 @@ verifyDeviceDialog.addEventListener("cancel", (event) => {
 verifyDeviceContinue.addEventListener("click", () => {
   if (!verifyDeviceConfirm.checked) return;
   const peerIdToVerify = verifyDeviceDialog.dataset.peerId;
-  localStorage.setItem(verifiedFingerprintKey(peerIdToVerify), verifyDeviceFingerprint.textContent);
+  const peerDeviceIdToVerify = verifyDeviceDialog.dataset.peerDeviceId;
+
+  if (!peerIdToVerify || !peerDeviceIdToVerify) return;
+
+  localStorage.setItem(
+    verifiedFingerprintKey(peerIdToVerify, peerDeviceIdToVerify),
+    verifyDeviceFingerprint.textContent
+  );
+
   setPeerVerified(peerIdToVerify, true);
   verifyDeviceDialog.close();
   peerVerificationResolve?.(true);
@@ -503,27 +511,50 @@ composer.addEventListener("submit", async (event) => {
             ciphertexts,
           });
         } else {
-          const bundle = await api(
+          const result = await api(
             "GET",
-            `/api/users/${encodeURIComponent(peerId)}/crypto-key`
+            `/api/users/${encodeURIComponent(peerId)}/crypto-devices`
           );
 
-          if (!(await ensurePeerFingerprint(peer, bundle))) {
-            throw new Error("Peer device could not be verified.");
+          const devices = Array.isArray(result?.devices) ? result.devices : [];
+
+          if (devices.length === 0) {
+            throw new Error("Peer has no E2E devices.");
           }
 
-          if (!cryptoDevice.has_session(peerId)) {
-            cryptoDevice.establish_session(
-              peerId,
-              JSON.stringify(bundle),
-              bundle.fingerprint
+          const ciphertexts = {};
+
+          for (const bundle of devices) {
+            if (!bundle || typeof bundle.device_id !== "string" || !bundle.device_id) {
+              throw new Error("Peer has an invalid E2E device bundle.");
+            }
+
+            if (!(await ensurePeerFingerprint(peer, bundle))) {
+              throw new Error(`Device ${bundle.device_id} could not be verified.`);
+            }
+
+            const deviceId = bundle.device_id;
+
+            if (!cryptoDevice.has_session(deviceId)) {
+              cryptoDevice.establish_session(
+                deviceId,
+                JSON.stringify(bundle),
+                bundle.fingerprint
+              );
+            }
+
+            ciphertexts[deviceId] = cryptoDevice.encrypt(
+              deviceId,
+              payload
             );
           }
 
-          encryptedBody = cryptoDevice.encrypt(
-            peerId,
-            payload
-          );
+          encryptedBody = JSON.stringify({
+            version: 2,
+            message_type: "message",
+            sender_device_id: cryptoDevice.device_id(),
+            ciphertexts,
+          });
         }
 
         await persistCryptoState();
@@ -656,14 +687,7 @@ async function completeCryptoDialog() {
   cryptoError.hidden = true;
   try {
     if (cryptoDialogMode === "enable") {
-      const bundleJson = cryptoDevice.public_bundle_json();
-      const encryptedState = cryptoDevice.encrypted_state_json();
-      await api("PUT", "/api/me/crypto-device", {
-        bundle_json: bundleJson,
-        encrypted_state: encryptedState,
-        clear_old_history: false,
-      });
-      cryptoDeviceBundle = JSON.parse(bundleJson);
+      await persistCryptoState();
       cryptoEnabled = true;
       cryptoProfileStatus.textContent = "E2E is required for every chat. Verify each peer fingerprint before messaging.";
       enableE2eButton.textContent = "E2E enabled";
@@ -785,10 +809,22 @@ async function loadCryptoStatus() {
 }
 
 async function persistCryptoState() {
-  if (!cryptoDevice || !cryptoDeviceBundle) return;
+  if (!cryptoDevice) return;
+
+  // Build the public bundle before publishing so all currently
+  // available unpublished OTKs are included in the bundle.
   const bundleJson = cryptoDevice.public_bundle_json();
+
+  // Move those OTKs into the published public-key cache.
+  // The private OTK material remains inside AccountPickle.
+  cryptoDevice.mark_one_time_keys_as_published();
+
+  // Persist the exact public bundle together with the updated
+  // encrypted state. This keeps the published OTK metadata and
+  // the private Account state synchronized.
   cryptoDeviceBundle = JSON.parse(bundleJson);
   cryptoOwnFingerprint.textContent = cryptoDeviceBundle.fingerprint;
+
   await api("PUT", "/api/me/crypto-device", {
     bundle_json: bundleJson,
     encrypted_state: cryptoDevice.encrypted_state_json(),
@@ -900,22 +936,32 @@ async function forgetRememberedCryptoKey(userId) {
   }
 }
 
-function verifiedFingerprintKey(userId) {
-  return `larptrix_verified_device_${me.user_id}_${userId}`;
+function verifiedFingerprintKey(userId, deviceId) {
+  return `larptrix_verified_device_${me.user_id}_${userId}_${deviceId}`;
 }
 
 async function ensurePeerFingerprint(peerUser, bundle) {
-  const key = verifiedFingerprintKey(peerUser.user_id);
+  if (!bundle || typeof bundle.device_id !== "string" || !bundle.device_id) {
+    return false;
+  }
+
+  const key = verifiedFingerprintKey(peerUser.user_id, bundle.device_id);
+
   if (localStorage.getItem(key) === bundle.fingerprint) {
     setPeerVerified(peerUser.user_id, true);
     return true;
   }
-  verifyDeviceDescription.textContent = `Compare this full device fingerprint with ${peerUser.display_name} through another trusted channel, then confirm. A mismatch may mean the server substituted a device key.`;
+
+  verifyDeviceDescription.textContent =
+    `Compare this full device fingerprint with ${peerUser.display_name} through another trusted channel, then confirm. This verifies device ${bundle.device_id}. A mismatch may mean the server substituted a device key.`;
+
   verifyDeviceFingerprint.textContent = bundle.fingerprint;
   verifyDeviceDialog.dataset.peerId = peerUser.user_id;
+  verifyDeviceDialog.dataset.peerDeviceId = bundle.device_id;
   verifyDeviceConfirm.checked = false;
   verifyDeviceContinue.disabled = true;
   verifyDeviceDialog.showModal();
+
   return new Promise((resolve) => {
     peerVerificationResolve = resolve;
   });
@@ -927,9 +973,23 @@ function setPeerVerified(userId, verified) {
 
 async function refreshPeerVerification(userId) {
   peerVerified.hidden = true;
+
   try {
-    const bundle = await api("GET", `/api/users/${encodeURIComponent(userId)}/crypto-key`);
-    const verified = localStorage.getItem(verifiedFingerprintKey(userId)) === bundle.fingerprint;
+    const result = await api(
+      "GET",
+      `/api/users/${encodeURIComponent(userId)}/crypto-devices`
+    );
+
+    const devices = Array.isArray(result?.devices) ? result.devices : [];
+
+    const verified = devices.length > 0 && devices.every((bundle) =>
+      bundle
+      && typeof bundle.device_id === "string"
+      && localStorage.getItem(
+        verifiedFingerprintKey(userId, bundle.device_id)
+      ) === bundle.fingerprint
+    );
+
     setPeerVerified(userId, verified);
   } catch {
     setPeerVerified(userId, false);
@@ -1739,12 +1799,38 @@ async function attachLocalMediaPreview() {
 function parseCryptoEnvelope(raw) {
   try {
     const envelope = JSON.parse(raw);
-    return envelope?.version === 1
-      && (["message", "prekey"].includes(envelope.message_type)
-        ? typeof envelope.ciphertext === "string"
-        : envelope.message_type === "group" && envelope.ciphertexts && typeof envelope.ciphertexts === "object")
-      ? envelope
-      : null;
+
+    if (
+      envelope?.version === 2
+      && envelope.message_type === "message"
+      && typeof envelope.sender_device_id === "string"
+      && envelope.sender_device_id
+      && envelope.ciphertexts
+      && typeof envelope.ciphertexts === "object"
+      && !Array.isArray(envelope.ciphertexts)
+    ) {
+      return envelope;
+    }
+
+    if (
+      envelope?.version === 1
+      && envelope.message_type === "group"
+      && envelope.ciphertexts
+      && typeof envelope.ciphertexts === "object"
+      && !Array.isArray(envelope.ciphertexts)
+    ) {
+      return envelope;
+    }
+
+    if (
+      envelope?.version === 1
+      && ["message", "prekey"].includes(envelope.message_type)
+      && typeof envelope.ciphertext === "string"
+    ) {
+      return envelope;
+    }
+
+    return null;
   } catch {
     return null;
   }
@@ -1782,39 +1868,91 @@ async function displayEncryptedMessage(message, bodyElement) {
     // entering the queue can cause messages to reach the Olm ratchet
     // in a different order than the history itself.
     const result = await withCryptoStateLock(async () => {
-      const bundle = await api(
-        "GET",
-        `/api/users/${encodeURIComponent(message.sender_id)}/crypto-key`
-      );
+      const envelope = parseCryptoEnvelope(message.body);
+
+      if (!envelope) {
+        throw new Error("Invalid encrypted message envelope.");
+      }
 
       const sender = users.find((item) => item.user_id === message.sender_id)
         || { user_id: message.sender_id, display_name: message.sender_name };
 
-      if (!(await ensurePeerFingerprint(sender, bundle))) {
-        throw new Error("Encrypted. Device was not verified; message was not decrypted.");
-      }
+      let encryptedBody;
+      let senderDeviceId;
+      let senderBundle;
 
-      const envelope = parseCryptoEnvelope(message.body);
-      const encryptedBody = envelope?.message_type === "group"
-        ? envelope.ciphertexts[me.user_id]
-        : message.body;
+      if (envelope.version === 2 && envelope.message_type === "message") {
+        senderDeviceId = envelope.sender_device_id;
+        encryptedBody = envelope.ciphertexts[cryptoDevice.device_id()];
 
-      if (typeof encryptedBody !== "string") {
-        throw new Error("No encrypted copy was addressed to this account.");
+        if (typeof encryptedBody !== "string") {
+          throw new Error("No encrypted copy was addressed to this device.");
+        }
+
+        const senderDevices = await api(
+          "GET",
+          `/api/users/${encodeURIComponent(message.sender_id)}/crypto-devices`
+        );
+
+        const devices = Array.isArray(senderDevices?.devices)
+          ? senderDevices.devices
+          : [];
+
+        senderBundle = devices.find(
+          (bundle) => bundle?.device_id === senderDeviceId
+        );
+
+        if (!senderBundle) {
+          throw new Error("Sender device was not found.");
+        }
+
+        if (!(await ensurePeerFingerprint(sender, senderBundle))) {
+          throw new Error("Encrypted. Sender device was not verified; message was not decrypted.");
+        }
+      } else if (envelope.version === 1 && envelope.message_type === "group") {
+        senderBundle = await api(
+          "GET",
+          `/api/users/${encodeURIComponent(message.sender_id)}/crypto-key`
+        );
+
+        if (!(await ensurePeerFingerprint(sender, senderBundle))) {
+          throw new Error("Encrypted. Device was not verified; message was not decrypted.");
+        }
+
+        senderDeviceId = message.sender_id;
+        encryptedBody = envelope.ciphertexts[me.user_id];
+
+        if (typeof encryptedBody !== "string") {
+          throw new Error("No encrypted copy was addressed to this account.");
+        }
+      } else {
+        senderBundle = await api(
+          "GET",
+          `/api/users/${encodeURIComponent(message.sender_id)}/crypto-key`
+        );
+
+        if (!(await ensurePeerFingerprint(sender, senderBundle))) {
+          throw new Error("Encrypted. Device was not verified; message was not decrypted.");
+        }
+
+        senderDeviceId = senderBundle.device_id;
+        encryptedBody = message.body;
       }
 
       console.log("[E2E] incoming", {
         sender: message.sender_id,
-        type: envelope?.message_type,
-        hasSession: cryptoDevice.has_session(message.sender_id),
-        sessionCount: cryptoDevice.session_count(message.sender_id),
+        senderDevice: senderDeviceId,
+        type: envelope.message_type,
+        hasSession: cryptoDevice.has_session(senderDeviceId),
+        sessionCount: cryptoDevice.session_count(senderDeviceId),
       });
 
-      const sessionCountBefore = cryptoDevice.session_count(message.sender_id);
+      const sessionCountBefore = cryptoDevice.session_count(senderDeviceId);
 
       console.log("[E2E] decrypt start", {
         sender: message.sender_id,
-        type: envelope?.message_type,
+        senderDevice: senderDeviceId,
+        type: envelope.message_type,
         sessionCountBefore,
       });
 
@@ -1822,22 +1960,24 @@ async function displayEncryptedMessage(message, bodyElement) {
 
       try {
         plaintext = cryptoDevice.decrypt(
-          message.sender_id,
+          senderDeviceId,
           encryptedBody,
-          JSON.stringify(bundle),
-          bundle.fingerprint,
+          JSON.stringify(senderBundle),
+          senderBundle.fingerprint,
         );
 
         console.log("[E2E] decrypt success", {
           sender: message.sender_id,
-          type: envelope?.message_type,
-          sessionCountAfter: cryptoDevice.session_count(message.sender_id),
+          senderDevice: senderDeviceId,
+          type: envelope.message_type,
+          sessionCountAfter: cryptoDevice.session_count(senderDeviceId),
         });
       } catch (err) {
         console.error("[E2E] decrypt FAILED", {
           sender: message.sender_id,
-          type: envelope?.message_type,
-          sessionCountAfter: cryptoDevice.session_count(message.sender_id),
+          senderDevice: senderDeviceId,
+          type: envelope.message_type,
+          sessionCountAfter: cryptoDevice.session_count(senderDeviceId),
           error: err?.message || String(err),
         });
         throw err;

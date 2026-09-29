@@ -46,6 +46,20 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/me/crypto-device",
             get(get_crypto_device).put(put_crypto_device),
         )
+        .route(
+            "/api/me/crypto-devices",
+            get(list_crypto_devices).post(create_crypto_device),
+        )
+        .route(
+            "/api/me/crypto-devices/{device_id}",
+            get(get_my_crypto_device)
+                .put(update_crypto_device)
+                .delete(delete_crypto_device),
+        )
+        .route(
+            "/api/users/{id}/crypto-devices",
+            get(list_user_crypto_devices),
+        )
         .route("/api/users/{id}/crypto-key", get(get_crypto_key))
         .route("/api/rtc-config", get(rtc_config))
         .route("/api/users/{id}/avatar", get(user_avatar))
@@ -99,6 +113,20 @@ pub struct CryptoDeviceBody {
     pub encrypted_state: String,
     #[serde(default)]
     pub clear_old_history: bool,
+}
+
+#[derive(Deserialize)]
+pub struct CreateCryptoDeviceBody {
+    pub device_id: String,
+    pub bundle_json: String,
+    pub encrypted_state: String,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateCryptoDeviceBody {
+    pub bundle_json: String,
+    pub encrypted_state: String,
+    pub expected_version: i64,
 }
 
 async fn register(
@@ -242,14 +270,24 @@ async fn get_crypto_device(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let user = require_user(&state, &headers)?;
-    let device = state
+
+    let devices = state
         .db
-        .crypto_device(&user.id)
-        .map_err(ApiError::db)?
+        .crypto_devices_for_user(&user.id)
+        .map_err(ApiError::db)?;
+
+    let device = devices
+        .into_iter()
+        .next()
         .ok_or_else(|| ApiError::not_found("E2E device is not enabled"))?;
+
     Ok(Json(serde_json::json!({
+        "device_id": device.device_id,
         "bundle_json": device.bundle_json,
-        "encrypted_state": device.encrypted_state
+        "encrypted_state": device.encrypted_state,
+        "state_version": device.state_version,
+        "created_at": device.created_at,
+        "updated_at": device.updated_at
     })))
 }
 
@@ -259,34 +297,253 @@ async fn put_crypto_device(
     Json(body): Json<CryptoDeviceBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let user = require_user(&state, &headers)?;
+
     if body.bundle_json.len() > 16 * 1024 || body.encrypted_state.len() > 2 * 1024 * 1024 {
         return Err(ApiError::bad("encrypted device data is too large"));
     }
+
     let bundle: serde_json::Value = serde_json::from_str(&body.bundle_json)
         .map_err(|_| ApiError::bad("invalid public device bundle"))?;
+
+    let device_id = bundle
+        .get("device_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| ApiError::bad("device bundle is missing its device_id"))?;
+
     if !bundle
         .get("fingerprint")
         .is_some_and(serde_json::Value::is_string)
     {
         return Err(ApiError::bad("device bundle is missing its fingerprint"));
     }
-    let files = state
+
+    let existing = state.db.crypto_device(device_id).map_err(ApiError::db)?;
+
+    if existing.is_some() {
+        return Err(ApiError::bad("crypto device already exists"));
+    }
+
+    let device = state
         .db
-        .activate_crypto_device(
+        .create_crypto_device(
             &user.id,
+            device_id,
             &body.bundle_json,
             &body.encrypted_state,
-            body.clear_old_history,
         )
         .map_err(ApiError::db)?;
-    for file in &files {
-        let path = upload_path(&state.upload_dir, &file.id, &file.ext);
-        let _ = std::fs::remove_file(path);
-    }
+
     Ok(Json(serde_json::json!({
         "e2e_enabled": true,
+        "device_id": device.device_id,
+        "state_version": device.state_version,
         "old_history_deleted": false
     })))
+}
+
+async fn create_crypto_device(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<CreateCryptoDeviceBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+
+    validate_crypto_device_payload(&body.device_id, &body.bundle_json, &body.encrypted_state)?;
+
+    if state
+        .db
+        .crypto_device(&body.device_id)
+        .map_err(ApiError::db)?
+        .is_some()
+    {
+        return Err(ApiError::bad("crypto device already exists"));
+    }
+
+    let device = state
+        .db
+        .create_crypto_device(
+            &user.id,
+            &body.device_id,
+            &body.bundle_json,
+            &body.encrypted_state,
+        )
+        .map_err(ApiError::db)?;
+
+    Ok(Json(serde_json::json!({
+        "device_id": device.device_id,
+        "user_id": device.user_id,
+        "bundle_json": device.bundle_json,
+        "state_version": device.state_version,
+        "created_at": device.created_at,
+        "updated_at": device.updated_at
+    })))
+}
+
+async fn list_crypto_devices(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+
+    let devices = state
+        .db
+        .crypto_devices_for_user(&user.id)
+        .map_err(ApiError::db)?;
+
+    Ok(Json(serde_json::json!({
+        "devices": devices
+            .into_iter()
+            .map(|device| serde_json::json!({
+                "device_id": device.device_id,
+                "bundle_json": device.bundle_json,
+                "state_version": device.state_version,
+                "created_at": device.created_at,
+                "updated_at": device.updated_at
+            }))
+            .collect::<Vec<_>>()
+    })))
+}
+
+async fn get_my_crypto_device(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(device_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+
+    let device = state
+        .db
+        .crypto_device(&device_id)
+        .map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::not_found("crypto device not found"))?;
+
+    if device.user_id != user.id {
+        return Err(ApiError::not_found("crypto device not found"));
+    }
+
+    Ok(Json(serde_json::json!({
+        "device_id": device.device_id,
+        "user_id": device.user_id,
+        "bundle_json": device.bundle_json,
+        "encrypted_state": device.encrypted_state,
+        "state_version": device.state_version,
+        "created_at": device.created_at,
+        "updated_at": device.updated_at
+    })))
+}
+
+async fn update_crypto_device(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(device_id): Path<String>,
+    Json(body): Json<UpdateCryptoDeviceBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+
+    validate_crypto_device_payload(&device_id, &body.bundle_json, &body.encrypted_state)?;
+
+    let device = state
+        .db
+        .update_crypto_device(
+            &user.id,
+            &device_id,
+            body.expected_version,
+            &body.bundle_json,
+            &body.encrypted_state,
+        )
+        .map_err(ApiError::db)?;
+
+    let device = device.ok_or_else(|| ApiError::bad("crypto device state version conflict"))?;
+
+    Ok(Json(serde_json::json!({
+        "device_id": device.device_id,
+        "state_version": device.state_version,
+        "updated_at": device.updated_at
+    })))
+}
+
+async fn delete_crypto_device(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(device_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+
+    let deleted = state
+        .db
+        .delete_crypto_device(&user.id, &device_id)
+        .map_err(ApiError::db)?;
+
+    if !deleted {
+        return Err(ApiError::not_found("crypto device not found"));
+    }
+
+    Ok(Json(serde_json::json!({
+        "deleted": true,
+        "device_id": device_id
+    })))
+}
+
+async fn list_user_crypto_devices(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_user(&state, &headers)?;
+
+    let devices = state
+        .db
+        .crypto_devices_for_user(&id)
+        .map_err(ApiError::db)?;
+
+    Ok(Json(serde_json::json!({
+        "devices": devices
+            .into_iter()
+            .map(|device| serde_json::json!({
+                "device_id": device.device_id,
+                "user_id": device.user_id,
+                "bundle_json": device.bundle_json,
+                "state_version": device.state_version,
+                "created_at": device.created_at,
+                "updated_at": device.updated_at
+            }))
+            .collect::<Vec<_>>()
+    })))
+}
+
+fn validate_crypto_device_payload(
+    device_id: &str,
+    bundle_json: &str,
+    encrypted_state: &str,
+) -> Result<(), ApiError> {
+    if device_id.is_empty() || device_id.len() > 256 {
+        return Err(ApiError::bad("invalid device_id"));
+    }
+
+    if bundle_json.len() > 16 * 1024 || encrypted_state.len() > 2 * 1024 * 1024 {
+        return Err(ApiError::bad("encrypted device data is too large"));
+    }
+
+    let bundle: serde_json::Value = serde_json::from_str(bundle_json)
+        .map_err(|_| ApiError::bad("invalid public device bundle"))?;
+
+    let bundle_device_id = bundle
+        .get("device_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| ApiError::bad("device bundle is missing its device_id"))?;
+
+    if bundle_device_id != device_id {
+        return Err(ApiError::bad("device_id does not match device bundle"));
+    }
+
+    if !bundle
+        .get("fingerprint")
+        .is_some_and(serde_json::Value::is_string)
+    {
+        return Err(ApiError::bad("device bundle is missing its fingerprint"));
+    }
+
+    Ok(())
 }
 
 async fn get_crypto_key(
@@ -295,14 +552,27 @@ async fn get_crypto_key(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_user(&state, &headers)?;
-    let device = state
+
+    let devices = state
         .db
-        .crypto_device(&id)
-        .map_err(ApiError::db)?
-        .ok_or_else(|| ApiError::not_found("peer has not enabled E2E"))?;
-    let bundle: serde_json::Value = serde_json::from_str(&device.bundle_json)
-        .map_err(|_| ApiError::internal("stored public device bundle is invalid"))?;
-    Ok(Json(bundle))
+        .crypto_devices_for_user(&id)
+        .map_err(ApiError::db)?;
+
+    if devices.is_empty() {
+        return Err(ApiError::not_found("peer has not enabled E2E"));
+    }
+
+    let bundles = devices
+        .into_iter()
+        .map(|device| {
+            serde_json::from_str::<serde_json::Value>(&device.bundle_json)
+                .map_err(|_| ApiError::internal("stored public device bundle is invalid"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(Json(serde_json::json!({
+        "devices": bundles
+    })))
 }
 
 async fn create_access_key(
@@ -497,20 +767,18 @@ async fn create_group(
         {
             return Err(ApiError::bad("a selected group member does not exist"));
         }
-        if state
+        if !state
             .db
-            .crypto_device(member_id)
+            .user_has_crypto_devices(member_id)
             .map_err(ApiError::db)?
-            .is_none()
         {
             return Err(ApiError::bad("all group members must set up E2E first"));
         }
     }
-    if state
+    if !state
         .db
-        .crypto_device(&user.id)
+        .user_has_crypto_devices(&user.id)
         .map_err(ApiError::db)?
-        .is_none()
     {
         return Err(ApiError::bad("set up E2E before creating a group"));
     }
@@ -1047,7 +1315,9 @@ mod tests {
             State(state.clone()),
             headers,
             Json(CryptoDeviceBody {
-                bundle_json: r#"{"fingerprint":"fingerprint"}"#.into(),
+                bundle_json:
+                    r#"{"version":2,"device_id":"test-device-1","fingerprint":"fingerprint"}"#
+                        .into(),
                 encrypted_state: "encrypted-state".into(),
                 clear_old_history: false,
             }),
@@ -1055,7 +1325,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(response.0["old_history_deleted"], false);
-        assert!(state.db.crypto_device(&user.id).unwrap().is_some());
+        assert!(state.db.crypto_device("test-device-1").unwrap().is_some());
     }
 
     #[tokio::test]
