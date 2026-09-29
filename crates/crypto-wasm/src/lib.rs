@@ -148,6 +148,14 @@ impl CryptoDevice {
         Ok(())
     }
 
+    pub fn debug_one_time_keys(&self) -> Vec<String> {
+        self.account
+            .one_time_key_public_keys()
+            .into_iter()
+            .map(|key| key.to_base64())
+            .collect()
+    }
+
     pub fn public_bundle_json(&mut self) -> Result<String, JsValue> {
         self.ensure_one_time_key()?;
 

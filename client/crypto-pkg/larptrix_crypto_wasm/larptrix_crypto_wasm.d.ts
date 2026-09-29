@@ -5,6 +5,7 @@ export class CryptoDevice {
     free(): void;
     [Symbol.dispose](): void;
     constructor(recovery_key_base64: string);
+    debug_one_time_keys(): string[];
     decrypt(peer_id: string, envelope_json: string, sender_bundle_json: string, expected_fingerprint: string): string;
     encrypt(peer_id: string, plaintext: string): string;
     encrypted_state_json(): string;
@@ -22,6 +23,7 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_cryptodevice_free: (a: number, b: number) => void;
     readonly cryptodevice_create: (a: number, b: number) => [number, number, number];
+    readonly cryptodevice_debug_one_time_keys: (a: number) => [number, number];
     readonly cryptodevice_decrypt: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number, number, number];
     readonly cryptodevice_encrypt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly cryptodevice_encrypted_state_json: (a: number) => [number, number, number, number];
@@ -37,6 +39,7 @@ export interface InitOutput {
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __externref_table_dealloc: (a: number) => void;
+    readonly __externref_drop_slice: (a: number, b: number) => void;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_start: () => void;
 }
