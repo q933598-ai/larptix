@@ -223,16 +223,19 @@ export class LarptrixMatrixCrypto {
   async prepareRoom(roomId, participantInternalUserIds) {
     if (!this.machine) throw new Error("Matrix E2E is not initialized.");
 
-    const matrixUsers = participantInternalUserIds
+    const externalUsers = participantInternalUserIds
       .filter((id) => id && id !== this.internalUserId)
       .map((id) => new UserId("@" + id + ":" + this.serverName));
 
-    if (!matrixUsers.length) return;
+    const roomUsers = [
+      ...externalUsers,
+      new UserId(this.matrixUserId),
+    ];
 
-    await this.machine.updateTrackedUsers(matrixUsers);
+    await this.machine.updateTrackedUsers(externalUsers);
     await this.processOutgoingRequests();
 
-    const missingSessions = await this.machine.getMissingSessions(matrixUsers);
+    const missingSessions = await this.machine.getMissingSessions(roomUsers);
     if (missingSessions) {
       const response = await this.sendOutgoingRequest(missingSessions);
       await this.machine.markRequestAsSent(
@@ -245,7 +248,7 @@ export class LarptrixMatrixCrypto {
     const room = new RoomId(roomId);
     const requests = await this.machine.shareRoomKey(
       room,
-      matrixUsers,
+      roomUsers,
       this.encryptionSettings,
     );
 
