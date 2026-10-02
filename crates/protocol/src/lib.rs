@@ -23,6 +23,13 @@ pub enum ClientMessage {
         kind: String,
         payload: serde_json::Value,
     },
+    CryptoResync {
+        peer_id: String,
+        message_id: String,
+        body: String,
+        #[serde(default)]
+        attachment_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +56,13 @@ pub enum ServerMessage {
         sender_id: String,
         kind: String,
         payload: serde_json::Value,
+    },
+    CryptoResync {
+        requester_id: String,
+        message_id: String,
+        body: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        attachment_id: Option<String>,
     },
     Error {
         code: String,
