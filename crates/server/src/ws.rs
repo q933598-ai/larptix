@@ -161,7 +161,15 @@ fn relay_crypto_resync(
     if state.hub.online_ids().iter().all(|id| id != &peer.id) {
         return Err("peer is offline; recovery will retry when they reconnect".into());
     }
-    state.hub.send_to(
+    tracing::info!(
+        requester = %user.id,
+        peer = %peer.id,
+        message_id = %message_id,
+        device_id = %device_id,
+        "crypto recovery request received"
+    );
+
+    let delivered = state.hub.send_to(
         recipient,
         ServerMessage::CryptoResync {
             requester_id: user.id.clone(),
@@ -171,6 +179,15 @@ fn relay_crypto_resync(
             attachment_id,
         },
     );
+
+    tracing::info!(
+        requester = %user.id,
+        peer = %peer.id,
+        message_id = %message_id,
+        delivered_connections = delivered,
+        "crypto recovery request relayed"
+    );
+
     Ok(())
 }
 
