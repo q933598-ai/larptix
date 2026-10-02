@@ -242,6 +242,7 @@
   function updatePlayer() {
     if (currentIndex < 0 || !tracks[currentIndex]) {
       els.player.hidden = true;
+      window.larptixMusicStatus?.update?.("", false);
       els.play.textContent = "▶";
       els.time.textContent = "0:00 / 0:00";
       return;
@@ -352,10 +353,14 @@
     });
     els.audio.addEventListener("play", () => {
       els.play.textContent = "Ⅱ";
+      const track = tracks[currentIndex];
+      if (track) window.larptixMusicStatus?.update?.(track.name, true);
       render();
     });
     els.audio.addEventListener("pause", () => {
       els.play.textContent = "▶";
+      const track = tracks[currentIndex];
+      if (track) window.larptixMusicStatus?.update?.(track.name, false);
       render();
     });
     els.audio.addEventListener("ended", () => {
