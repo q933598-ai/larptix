@@ -532,6 +532,41 @@ impl Database {
         .optional()
     }
 
+    pub fn matrix_one_time_key_count(
+        &self,
+        device_id: &str,
+    ) -> rusqlite::Result<usize> {
+        let conn = self.conn.lock().expect("db lock");
+
+        let json: Option<String> = conn
+            .query_row(
+                "SELECT one_time_keys_json
+                 FROM matrix_crypto_devices
+                 WHERE device_id = ?1",
+                [device_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let Some(json) = json else {
+            return Ok(0);
+        };
+
+        let value = serde_json::from_str::<serde_json::Value>(&json)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?;
+        let total = value.as_object().map(|map| map.len()).unwrap_or(0);
+
+        let claimed: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM matrix_one_time_key_claims
+             WHERE device_id = ?1",
+            [device_id],
+            |row| row.get(0),
+        )?;
+
+        Ok(total.saturating_sub(claimed as usize))
+    }
+
     pub fn claim_matrix_one_time_key(
         &self,
         device_id: &str,
