@@ -26,8 +26,9 @@ pub enum ClientMessage {
     CryptoResync {
         peer_id: String,
         message_id: String,
+        device_id: String,
         body: String,
-        #[serde(default)]
+        #[serde(default) ]
         attachment_id: Option<String>,
     },
 }
@@ -60,6 +61,7 @@ pub enum ServerMessage {
     CryptoResync {
         requester_id: String,
         message_id: String,
+        device_id: String,
         body: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         attachment_id: Option<String>,
