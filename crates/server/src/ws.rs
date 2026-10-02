@@ -164,6 +164,15 @@ fn relay_crypto_resync(
     }
     let _: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| "crypto recovery contains invalid encrypted message".to_string())?;
+
+    if !state
+        .db
+        .dm_message_is_between(message_id, peer_id, &user.id)
+        .map_err(|err| err.to_string())?
+    {
+        return Err("crypto recovery request does not match the original DM".into());
+    }
+
     let peer = state
         .db
         .user_by_id(peer_id)
@@ -230,6 +239,14 @@ fn relay_crypto_resync_response(
     }
     let _: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| "crypto recovery response contains invalid encrypted message".to_string())?;
+
+    if !state
+        .db
+        .dm_message_is_between(message_id, &user.id, peer_id)
+        .map_err(|err| err.to_string())?
+    {
+        return Err("crypto recovery response does not match the original DM".into());
+    }
 
     let peer = state
         .db
