@@ -39,11 +39,8 @@ const profileUsername = document.getElementById("profile-username");
 const profileAbout = document.getElementById("profile-about");
 const profileEmail = document.getElementById("profile-email");
 const profileEmailLabel = document.getElementById("profile-email-label");
-const profileMusicFile = document.getElementById("profile-music-file");
-const profileMusicPlayer = document.getElementById("profile-music-player");
-const profileMusicName = document.getElementById("profile-music-name");
-const profileMusicError = document.getElementById("profile-music-error");
-const profileMusicRemove = document.getElementById("profile-music-remove");
+const profileActivity = document.getElementById("profile-activity");
+const showMusicActivity = document.getElementById("show-music-activity");
 const forgetE2eDeviceButton = document.getElementById("forget-e2e-device");
 const profileCardName = document.getElementById("profile-card-name");
 const profileCardHandle = document.getElementById("profile-card-handle");
@@ -120,6 +117,8 @@ let cryptoDialogMode = null;
 let cryptoEnabled = false;
 let cryptoReady = Promise.resolve();
 let cryptoLoadResolve = null;
+let customActivity = "";
+let musicActivityEnabled = localStorage.getItem("larptrix_show_music_activity") !== "0";
 
 let cryptoStateQueue = Promise.resolve();
 
@@ -129,7 +128,55 @@ function withCryptoStateLock(task) {
   return run;
 }
 let peerVerificationResolve = null;
+
 const sentPlaintextByCiphertext = new Map();
+
+async function sentPlaintextCacheId(ciphertext) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ciphertext));
+  return `sent-plaintext:${[...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
+async function sentPlaintextCacheKey() {
+  if (!cryptoRecoveryKey) return null;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(cryptoRecoveryKey));
+  return crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+
+async function cacheSentPlaintext(ciphertext, payload) {
+  try {
+    const key = await sentPlaintextCacheKey();
+    if (!key) return;
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encrypted = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      key,
+      new TextEncoder().encode(payload),
+    );
+    await writeLocalCryptoRecord({
+      id: await sentPlaintextCacheId(ciphertext),
+      iv: Array.from(iv),
+      ciphertext: Array.from(new Uint8Array(encrypted)),
+    });
+  } catch {}
+}
+
+async function loadCachedSentPlaintext(ciphertext) {
+  try {
+    const key = await sentPlaintextCacheKey();
+    if (!key) return null;
+    const record = await readLocalCryptoRecord(await sentPlaintextCacheId(ciphertext));
+    if (!record) return null;
+    const plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: new Uint8Array(record.iv) },
+      key,
+      new Uint8Array(record.ciphertext),
+    );
+    return new TextDecoder().decode(plaintext);
+  } catch {
+    return null;
+  }
+}
+
 let peerConnection = null;
 let localMediaStream = null;
 let screenMediaStream = null;
@@ -209,8 +256,9 @@ profileOpen.addEventListener("click", async () => {
     profileUsername.value = profile.username;
     profileAbout.value = profile.about;
     updateOwnProfileCard(profile);
-    setProfileMusic(profile.music);
-    profileMusicError.hidden = true;
+    customActivity = profile.activity?.startsWith("Listening to ") ? "" : (profile.activity || "");
+    profileActivity.value = customActivity;
+    showMusicActivity.checked = musicActivityEnabled;
     profileDialog.showModal();
   } catch (err) {
     profileError.textContent = err.message;
@@ -221,30 +269,6 @@ document.getElementById("peer-profile-open").addEventListener("click", () => {
   if (peerId) void showPeerProfile(peerId);
 });
 document.getElementById("peer-profile-close").addEventListener("click", () => peerProfileDialog.close());
-profileMusicFile.addEventListener("change", async () => {
-  const file = profileMusicFile.files[0];
-  if (!file) return;
-  profileMusicError.hidden = true;
-  try {
-    const music = await uploadFile("/api/me/music", file);
-    setProfileMusic(music);
-  } catch (err) {
-    profileMusicError.textContent = err.message;
-    profileMusicError.hidden = false;
-  } finally {
-    profileMusicFile.value = "";
-  }
-});
-profileMusicRemove.addEventListener("click", async () => {
-  profileMusicError.hidden = true;
-  try {
-    await api("DELETE", "/api/me/music");
-    setProfileMusic(null);
-  } catch (err) {
-    profileMusicError.textContent = err.message;
-    profileMusicError.hidden = false;
-  }
-});
 forgetE2eDeviceButton.addEventListener("click", async () => {
   if (!me) return;
   await forgetRememberedCryptoKey(me.user_id);
@@ -389,6 +413,11 @@ profileForm.addEventListener("submit", async (event) => {
       username: profileUsername.value.trim(),
       about: profileAbout.value.trim(),
     });
+    customActivity = profileActivity.value.trim();
+    musicActivityEnabled = showMusicActivity.checked;
+    localStorage.setItem("larptrix_show_music_activity", musicActivityEnabled ? "1" : "0");
+    await setMyActivity(customActivity);
+    window.larptixMusicStatus?.refresh?.();
     renderMe();
     updateOwnProfileCard({ ...me, activity: profileCardActivity.textContent });
     profileDialog.close();
@@ -483,10 +512,13 @@ composer.addEventListener("submit", async (event) => {
           const ciphertexts = {};
 
           for (const memberId of peer.group_member_ids.filter((id) => id !== me.user_id)) {
-            const bundle = await api(
+            const bundleResponse = await api(
               "GET",
               `/api/users/${encodeURIComponent(memberId)}/crypto-key`
             );
+            const bundle = Array.isArray(bundleResponse?.devices)
+              ? bundleResponse.devices[0]
+              : bundleResponse;
 
             const member = users.find((item) => item.user_id === memberId);
 
@@ -560,6 +592,7 @@ composer.addEventListener("submit", async (event) => {
         await persistCryptoState();
       });
       sentPlaintextByCiphertext.set(encryptedBody, payload);
+      void cacheSentPlaintext(encryptedBody, payload);
       socket.send(JSON.stringify({
         type: "send",
         peer_id: peerId,
@@ -1871,7 +1904,11 @@ console.log("[E2E] displayEncryptedMessage loaded");
 
 async function displayEncryptedMessage(message, bodyElement) {
   if (message.sender_id === me?.user_id) {
-    const payload = parseEncryptedPayload(sentPlaintextByCiphertext.get(message.body));
+    await cryptoReady;
+    const cached = sentPlaintextByCiphertext.get(message.body)
+      || await loadCachedSentPlaintext(message.body);
+    if (cached) sentPlaintextByCiphertext.set(message.body, cached);
+    const payload = parseEncryptedPayload(cached);
     bodyElement.textContent = payload?.text || "Encrypted message sent from this device";
     if (payload?.file && message.attachment) {
       try {
@@ -1941,10 +1978,13 @@ async function displayEncryptedMessage(message, bodyElement) {
           throw new Error("Encrypted. Sender device was not verified; message was not decrypted.");
         }
       } else if (envelope.version === 1 && envelope.message_type === "group") {
-        senderBundle = await api(
+        const senderBundleResponse = await api(
           "GET",
           `/api/users/${encodeURIComponent(message.sender_id)}/crypto-key`
         );
+        senderBundle = Array.isArray(senderBundleResponse?.devices)
+          ? senderBundleResponse.devices[0]
+          : senderBundleResponse;
 
         if (!(await ensurePeerFingerprint(sender, senderBundle))) {
           throw new Error("Encrypted. Device was not verified; message was not decrypted.");
@@ -2207,32 +2247,6 @@ function openImageViewer(src, alt) {
   imageViewer.showModal();
 }
 
-function setProfileMusic(music) {
-  profileMusicName.textContent = music?.name || "";
-  profileMusicPlayer.hidden = !music;
-  profileMusicRemove.hidden = !music;
-  profileMusicError.hidden = true;
-  if (music) {
-    profileMusicPlayer.src = music.url;
-    profileMusicPlayer.load();
-    profileMusicPlayer.onplay = () => void setMyActivity(`Listening to ${music.name}`);
-    profileMusicPlayer.onpause = () => void setMyActivity("");
-    profileMusicPlayer.onended = () => void setMyActivity("");
-    profileMusicPlayer.onerror = () => {
-      profileMusicError.textContent = "This audio format is not supported here. Try MP3, OGG, or WAV.";
-      profileMusicError.hidden = false;
-    };
-  } else {
-    profileMusicPlayer.onplay = null;
-    profileMusicPlayer.onpause = null;
-    profileMusicPlayer.onended = null;
-    profileMusicPlayer.onerror = null;
-    profileMusicPlayer.pause();
-    profileMusicPlayer.removeAttribute("src");
-    profileMusicPlayer.load();
-  }
-}
-
 function updateOwnProfileCard(profile) {
   profileCardName.textContent = profile.display_name || "";
   profileCardHandle.textContent = profile.username ? `@${profile.username}` : "";
@@ -2247,6 +2261,21 @@ async function setMyActivity(activity) {
     return;
   }
 }
+
+function updateMusicActivity(trackName, playing) {
+  if (!musicActivityEnabled || customActivity) return;
+  void setMyActivity(playing ? `Listening to ${trackName}` : "");
+}
+
+window.larptixMusicStatus = {
+  update: updateMusicActivity,
+  refresh() {
+    if (!musicActivityEnabled || customActivity) return;
+    const player = document.getElementById("music-audio");
+    const name = document.getElementById("music-player-name")?.textContent?.trim();
+    if (player && name) updateMusicActivity(name, !player.paused);
+  },
+};
 
 function chatWallpaperKey(id) {
   return `larptrix_chat_wallpaper_${me.user_id}_${id}`;
@@ -2284,27 +2313,7 @@ async function showPeerProfile(id) {
     document.getElementById("peer-profile-name").textContent = profile.display_name;
     document.getElementById("peer-profile-username").textContent = profile.username ? `@${profile.username}` : "";
     document.getElementById("peer-profile-about").textContent = profile.about || "No profile description";
-    const musicSection = document.getElementById("peer-music-section");
-    const musicName = document.getElementById("peer-profile-music-name");
-    const musicPlayer = document.getElementById("peer-profile-music");
     document.getElementById("peer-profile-activity").textContent = profile.activity || "No activity";
-    musicSection.hidden = !profile.music;
-    musicName.textContent = profile.music?.name || "";
-    musicPlayer.hidden = !profile.music;
-    musicPlayer.pause();
-    if (profile.music) {
-      musicPlayer.src = profile.music.url;
-      musicPlayer.load();
-      musicPlayer.onplay = () => void setMyActivity(`Listening to ${profile.music.name}`);
-      musicPlayer.onpause = () => void setMyActivity("");
-      musicPlayer.onended = () => void setMyActivity("");
-    } else {
-      musicPlayer.onplay = null;
-      musicPlayer.onpause = null;
-      musicPlayer.onended = null;
-      musicPlayer.removeAttribute("src");
-      musicPlayer.load();
-    }
     peerProfileDialog.showModal();
   } catch (err) {
     appendSystem(err.message || "Could not load profile.");
