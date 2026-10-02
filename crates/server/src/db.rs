@@ -1863,6 +1863,93 @@ mod tests {
     }
 
     #[test]
+    fn matrix_one_time_keys_are_merged_and_claimed_once() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        let alice = db.create_key_user("Alice", "hash-a", 1).unwrap();
+        let bob = db.create_key_user("Bob", "hash-b", 1).unwrap();
+        let device_id = Uuid::new_v4().to_string();
+
+        db.upsert_matrix_crypto_device(
+            &alice.id,
+            &device_id,
+            r#"{"user_id":"@alice:example.test","device_id":"DEV","keys":{}}"#,
+            r#"{"signed_curve25519:a":{"key":"A"},"signed_curve25519:b":{"key":"B"}}"#,
+            r#"{"signed_curve25519:f":{"key":"F"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(db.matrix_one_time_key_count(&device_id).unwrap(), 2);
+
+        let first = db.claim_matrix_one_time_key(&device_id).unwrap().unwrap();
+        assert!(first.0 == "signed_curve25519:a" || first.0 == "signed_curve25519:b");
+        assert_eq!(db.matrix_one_time_key_count(&device_id).unwrap(), 1);
+
+        db.upsert_matrix_crypto_device(
+            &alice.id,
+            &device_id,
+            r#"{"user_id":"@alice:example.test","device_id":"DEV","keys":{}}"#,
+            r#"{"signed_curve25519:c":{"key":"C"}}"#,
+            r#"{}"#,
+        )
+        .unwrap();
+
+        assert_eq!(db.matrix_one_time_key_count(&device_id).unwrap(), 2);
+        let second = db.claim_matrix_one_time_key(&device_id).unwrap().unwrap();
+        assert_ne!(first.0, second.0);
+
+        let event_a = db
+            .enqueue_matrix_to_device(
+                &bob.id,
+                &device_id,
+                &alice.id,
+                &Uuid::new_v4().to_string(),
+                "m.room_key",
+                "txn-1",
+                r#"{"ciphertext":"x"}"#,
+            )
+            .unwrap();
+        let event_b = db
+            .enqueue_matrix_to_device(
+                &bob.id,
+                &device_id,
+                &alice.id,
+                &Uuid::new_v4().to_string(),
+                "m.room_key",
+                "txn-1",
+                r#"{"ciphertext":"x"}"#,
+            )
+            .unwrap();
+
+        // Different sender device ids are different Matrix transactions.
+        assert_ne!(event_a, event_b);
+
+        let sender_device = Uuid::new_v4().to_string();
+        let same_a = db
+            .enqueue_matrix_to_device(
+                &bob.id,
+                &device_id,
+                &alice.id,
+                &sender_device,
+                "m.room_key",
+                "txn-2",
+                r#"{"ciphertext":"y"}"#,
+            )
+            .unwrap();
+        let same_b = db
+            .enqueue_matrix_to_device(
+                &bob.id,
+                &device_id,
+                &alice.id,
+                &sender_device,
+                "m.room_key",
+                "txn-2",
+                r#"{"ciphertext":"y"}"#,
+            )
+            .unwrap();
+        assert_eq!(same_a, same_b);
+    }
+
+    #[test]
     fn first_e2e_activation_preserves_existing_history_and_attachments() {
         let db = Database::open(Path::new(":memory:")).unwrap();
         let alice = db
