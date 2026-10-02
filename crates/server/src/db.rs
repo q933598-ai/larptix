@@ -1359,6 +1359,35 @@ mod tests {
     }
 
     #[test]
+    fn e2e_recovery_only_matches_the_original_dm_participants() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        let alice = db.create_key_user("Alice", "hash-a", 1).unwrap();
+        let bob = db.create_key_user("Bob", "hash-b", 1).unwrap();
+        let carol = db.create_key_user("Carol", "hash-c", 1).unwrap();
+
+        let message = db
+            .insert_dm(&alice.id, &bob.id, "encrypted", None, 1)
+            .unwrap();
+
+        assert!(
+            db.dm_message_is_between(&message.id, &alice.id, &bob.id)
+                .unwrap()
+        );
+        assert!(
+            !db.dm_message_is_between(&message.id, &alice.id, &carol.id)
+                .unwrap()
+        );
+        assert!(
+            !db.dm_message_is_between(&message.id, &bob.id, &alice.id)
+                .unwrap()
+        );
+        assert!(
+            !db.dm_message_is_between("missing", &alice.id, &bob.id)
+                .unwrap()
+        );
+    }
+
+    #[test]
     fn first_e2e_activation_preserves_existing_history_and_attachments() {
         let db = Database::open(Path::new(":memory:")).unwrap();
         let alice = db
