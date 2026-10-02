@@ -698,6 +698,28 @@ mod tests {
     }
 
     #[test]
+    fn multiple_sessions_are_retained_and_capped() {
+        let recovery_key = base64_encode(&[11u8; 32]);
+        let mut alice = CryptoDevice::create(&recovery_key).unwrap();
+        let mut bob = CryptoDevice::create(&recovery_key).unwrap();
+
+        let bundle = bob.public_bundle_json().unwrap();
+        let bob_bundle: PublicBundle = serde_json::from_str(&bundle).unwrap();
+
+        for _ in 0..5 {
+            alice
+                .establish_session(
+                    &bob_bundle.device_id,
+                    &bundle,
+                    &bob_bundle.fingerprint,
+                )
+                .unwrap();
+        }
+
+        assert_eq!(alice.session_count(&bob_bundle.device_id), 4);
+    }
+
+    #[test]
     fn encrypted_state_contains_version_and_device_id() {
         let recovery_key = base64_encode(&[3u8; 32]);
 
