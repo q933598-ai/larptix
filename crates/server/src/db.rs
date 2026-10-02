@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use larptrix_protocol::{attachment_url, avatar_url, AttachmentInfo, ChatMessage, UserInfo};
-use rusqlite::{params, Connection, ErrorCode, OptionalExtension};
+use rusqlite::{params, Connection, ErrorCode, OptionalExtension, TransactionBehavior};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -277,6 +277,74 @@ impl Database {
             created_at,
             updated_at: now,
         }))
+    }
+
+    pub fn claim_crypto_one_time_key(
+        &self,
+        device_id: &str,
+    ) -> rusqlite::Result<Option<String>> {
+        let mut conn = self.conn.lock().expect("db lock");
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        let bundle_json: Option<String> = tx
+            .query_row(
+                "SELECT bundle_json FROM crypto_devices WHERE device_id = ?1",
+                [device_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let Some(bundle_json) = bundle_json else {
+            tx.commit()?;
+            return Ok(None);
+        };
+
+        let mut bundle: serde_json::Value =
+            serde_json::from_str(&bundle_json).map_err(|_| rusqlite::Error::InvalidQuery)?;
+
+        let Some(keys) = bundle
+            .get("one_time_keys")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+        else {
+            tx.commit()?;
+            return Ok(None);
+        };
+
+        for key in keys {
+            let Some(key_value) = key.get("key").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+
+            let claimed: bool = tx.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM crypto_one_time_key_claims
+                    WHERE device_id = ?1 AND key = ?2
+                )",
+                params![device_id, key_value],
+                |row| row.get(0),
+            )?;
+
+            if claimed {
+                continue;
+            }
+
+            tx.execute(
+                "INSERT INTO crypto_one_time_key_claims (device_id, key, claimed_at)
+                 VALUES (?1, ?2, ?3)",
+                params![device_id, key_value, crate::now_ms()],
+            )?;
+
+            bundle["one_time_keys"] = serde_json::json!([key]);
+            let claimed_bundle =
+                serde_json::to_string(&bundle).map_err(|_| rusqlite::Error::InvalidQuery)?;
+
+            tx.commit()?;
+            return Ok(Some(claimed_bundle));
+        }
+
+        tx.commit()?;
+        Ok(None)
     }
 
     pub fn delete_crypto_device(&self, user_id: &str, device_id: &str) -> rusqlite::Result<bool> {
@@ -1045,6 +1113,15 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_crypto_devices_user_id
             ON crypto_devices(user_id);
+        CREATE TABLE IF NOT EXISTS crypto_one_time_key_claims (
+            device_id TEXT NOT NULL,
+            key TEXT NOT NULL,
+            claimed_at INTEGER NOT NULL,
+            PRIMARY KEY (device_id, key),
+            FOREIGN KEY (device_id) REFERENCES crypto_devices(device_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_crypto_otk_claims_device
+            ON crypto_one_time_key_claims(device_id);
         CREATE TABLE IF NOT EXISTS conversations (
             id TEXT PRIMARY KEY,
             user_a TEXT NOT NULL,
