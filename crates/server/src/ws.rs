@@ -56,6 +56,21 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: UserRo
         })
         .collect();
     let _ = tx.send(ServerMessage::Groups { groups });
+    if let Ok(events) = state.db.matrix_to_device_for_user(&user.id) {
+        for event in events {
+            let content = serde_json::from_str::<serde_json::Value>(&event.content_json)
+                .unwrap_or_else(|_| serde_json::json!({}));
+            let _ = tx.send(ServerMessage::MatrixToDevice {
+                event_id: event.id,
+                sender_id: event.sender_user_id,
+                sender_device_id: event.sender_device_id,
+                recipient_device_id: event.recipient_device_id,
+                event_type: event.event_type,
+                txn_id: event.txn_id,
+                content,
+            });
+        }
+    }
     state.hub.broadcast(ServerMessage::Directory {
         users: directory(&state, ""),
     });
