@@ -2076,6 +2076,14 @@ async function displayEncryptedMessage(message, bodyElement) {
           error: err?.message || String(err),
         });
 
+        const recoveryCheck = {
+          envelopeVersion: envelope.version,
+          messageType: envelope.message_type,
+          socketState: socket?.readyState ?? null,
+          socketOpen: socket?.readyState === WebSocket.OPEN,
+        };
+        console.log("[E2E] recovery check", recoveryCheck);
+
         if (
           envelope.version === 2
           && envelope.message_type === "message"
@@ -2083,7 +2091,12 @@ async function displayEncryptedMessage(message, bodyElement) {
         ) {
           const recoveryDevice = cryptoDevice.device_id();
           const lastRecovery = cryptoRecoveryLastAttempt.get(senderDeviceId) || 0;
-          const recoveryAllowed = Date.now() - lastRecovery >= 3600000;
+          // Recovery is a control-plane operation, not message sending.
+          // Keep it rate-limited, but do not suppress it for an hour: a stale
+          // Olm session can remain broken while the peer is actively chatting.
+          const recoveryCooldownMs = 30000;
+          const recoveryAllowed = Date.now() - lastRecovery >= recoveryCooldownMs;
+
           if (recoveryAllowed) {
             cryptoRecoveryLastAttempt.set(senderDeviceId, Date.now());
             socket.send(JSON.stringify({
@@ -2091,7 +2104,7 @@ async function displayEncryptedMessage(message, bodyElement) {
               peer_id: message.sender_id,
               message_id: message.id,
               body: message.body,
-              device_id: cryptoDevice.device_id(),
+              device_id: recoveryDevice,
               attachment_id: message.attachment?.id || null,
             }));
             console.log("[E2E] requested automatic session recovery", {
@@ -2099,6 +2112,13 @@ async function displayEncryptedMessage(message, bodyElement) {
               sender: message.sender_id,
               senderDevice: senderDeviceId,
               device: recoveryDevice,
+            });
+          } else {
+            console.log("[E2E] automatic session recovery throttled", {
+              sender: message.sender_id,
+              senderDevice: senderDeviceId,
+              cooldownMs: recoveryCooldownMs,
+              remainingMs: recoveryCooldownMs - (Date.now() - lastRecovery),
             });
           }
         }
