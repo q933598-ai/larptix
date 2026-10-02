@@ -93,6 +93,7 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: UserRo
                 Ok(ClientMessage::CryptoResync {
                     peer_id,
                     message_id,
+                    device_id,
                     body,
                     attachment_id,
                 }) => {
@@ -101,6 +102,7 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: UserRo
                         &user,
                         &peer_id,
                         &message_id,
+                        &device_id,
                         &body,
                         attachment_id,
                     ) {
@@ -128,14 +130,15 @@ fn relay_crypto_resync(
     user: &UserRow,
     peer_id: &str,
     message_id: &str,
+    device_id: &str,
     body: &str,
     attachment_id: Option<String>,
 ) -> Result<(), String> {
     if peer_id == user.id {
         return Err("cannot request E2E recovery from yourself".into());
     }
-    if message_id.is_empty() {
-        return Err("crypto recovery is missing message id".into());
+    if message_id.is_empty() || device_id.is_empty() {
+        return Err("crypto recovery is missing message or device id".into());
     }
     if body.chars().count() > larptrix_protocol::MAX_BODY {
         return Err("crypto recovery payload is too large".into());
@@ -156,6 +159,7 @@ fn relay_crypto_resync(
         ServerMessage::CryptoResync {
             requester_id: user.id.clone(),
             message_id: message_id.to_string(),
+            device_id: device_id.to_string(),
             body: body.to_string(),
             attachment_id,
         },
