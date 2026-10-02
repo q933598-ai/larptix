@@ -31,6 +31,8 @@ struct PublicBundle {
     ed25519_key: String,
     identity_signature: String,
     one_time_keys: Vec<PublicOneTimeKey>,
+    #[serde(default)]
+    fallback_keys: Vec<PublicOneTimeKey>,
     fingerprint: String,
 }
 
@@ -49,6 +51,9 @@ struct PersistedState {
 
     #[serde(default)]
     published_one_time_keys: Vec<PublicOneTimeKey>,
+
+    #[serde(default)]
+    published_fallback_keys: Vec<PublicOneTimeKey>,
 
     #[serde(deserialize_with = "deserialize_sessions")]
     sessions: BTreeMap<String, Vec<String>>,
@@ -148,6 +153,7 @@ pub struct CryptoDevice {
     // Public metadata only.
     // Private one-time keys remain inside Account / AccountPickle.
     published_one_time_keys: Vec<PublicOneTimeKey>,
+    published_fallback_keys: Vec<PublicOneTimeKey>,
 }
 
 #[wasm_bindgen]
@@ -167,6 +173,7 @@ impl CryptoDevice {
             sessions: BTreeMap::new(),
             recovery_key,
             published_one_time_keys: Vec::new(),
+            published_fallback_keys: Vec::new(),
         })
     }
 
@@ -187,6 +194,10 @@ impl CryptoDevice {
     fn ensure_otk_pool(&mut self) -> Result<(), JsValue> {
         if self.account.stored_one_time_key_count() < OTK_MINIMUM {
             self.account.generate_one_time_keys(OTK_BATCH_SIZE);
+        }
+
+        if self.published_fallback_keys.is_empty() && self.account.fallback_key().is_empty() {
+            self.account.generate_fallback_key();
         }
 
         Ok(())
@@ -214,6 +225,23 @@ impl CryptoDevice {
             one_time_keys.push(PublicOneTimeKey { key, signature });
         }
 
+        let mut fallback_keys = self.published_fallback_keys.clone();
+
+        for (_, fallback_key) in self.account.fallback_key() {
+            let key = fallback_key.to_base64();
+
+            if fallback_keys.iter().any(|existing| existing.key == key) {
+                continue;
+            }
+
+            let signature = self.account.sign(fallback_key.as_bytes());
+
+            fallback_keys.push(PublicOneTimeKey {
+                key,
+                signature: signature.to_base64(),
+            });
+        }
+
         serde_json::to_string(&PublicBundle {
             version: STATE_VERSION,
             device_id: self.device_id.clone(),
@@ -221,6 +249,7 @@ impl CryptoDevice {
             ed25519_key: ed25519_key.to_base64(),
             identity_signature,
             one_time_keys,
+            fallback_keys,
             fingerprint: fingerprint(&curve_key, &ed25519_key),
         })
         .map_err(|_| JsValue::from_str("could not encode public key bundle"))
@@ -244,6 +273,27 @@ impl CryptoDevice {
 
             self.published_one_time_keys
                 .push(PublicOneTimeKey { key, signature });
+        }
+
+        let unpublished_fallback_keys = self.account.fallback_key();
+
+        for (_, fallback_key) in unpublished_fallback_keys {
+            let key = fallback_key.to_base64();
+
+            if self
+                .published_fallback_keys
+                .iter()
+                .any(|existing| existing.key == key)
+            {
+                continue;
+            }
+
+            let signature = self.account.sign(fallback_key.as_bytes());
+
+            self.published_fallback_keys.push(PublicOneTimeKey {
+                key,
+                signature: signature.to_base64(),
+            });
         }
 
         self.account.mark_keys_as_published();
@@ -275,7 +325,8 @@ impl CryptoDevice {
         let one_time_key = bundle
             .one_time_keys
             .first()
-            .ok_or_else(|| JsValue::from_str("peer has no available one-time keys"))?;
+            .or_else(|| bundle.fallback_keys.first())
+            .ok_or_else(|| JsValue::from_str("peer has no available one-time or fallback keys"))?;
 
         let one_time_key = Curve25519PublicKey::from_base64(&one_time_key.key)
             .map_err(|_| JsValue::from_str("invalid peer one-time key"))?;
@@ -432,6 +483,7 @@ impl CryptoDevice {
             device_id: self.device_id.clone(),
             account_pickle,
             published_one_time_keys: self.published_one_time_keys.clone(),
+            published_fallback_keys: self.published_fallback_keys.clone(),
             sessions,
         })
         .map_err(|_| JsValue::from_str("could not encrypt crypto state"))
@@ -651,6 +703,28 @@ mod tests {
         }
 
         assert_eq!(device.account.stored_one_time_key_count(), 10);
+    }
+
+    #[test]
+    fn fallback_key_is_published_and_persists_across_restore() {
+        let recovery_key = base64_encode(&[17u8; 32]);
+        let mut device = CryptoDevice::create(&recovery_key).unwrap();
+
+        let bundle = device.public_bundle_json().unwrap();
+        let bundle: PublicBundle = serde_json::from_str(&bundle).unwrap();
+
+        assert_eq!(bundle.fallback_keys.len(), 1);
+        assert!(!bundle.fallback_keys[0].key.is_empty());
+        assert!(!bundle.fallback_keys[0].signature.is_empty());
+
+        device.mark_one_time_keys_as_published().unwrap();
+
+        let persisted = device.encrypted_state_json().unwrap();
+        let restored = CryptoDevice::restore(&recovery_key, &persisted).unwrap();
+        let restored_bundle: PublicBundle =
+            serde_json::from_str(&restored.public_bundle_json().unwrap()).unwrap();
+
+        assert_eq!(restored_bundle.fallback_keys, bundle.fallback_keys);
     }
 
     #[test]
