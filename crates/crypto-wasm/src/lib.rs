@@ -618,8 +618,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        decrypt_prekey_with_sessions, decrypt_with_sessions, deserialize_sessions, CryptoDevice,
-        PublicBundle, STATE_VERSION,
+        decrypt_prekey_with_sessions, decrypt_with_sessions, deserialize_sessions, fingerprint,
+        parse_and_verify_bundle, CryptoDevice, PublicBundle, PublicOneTimeKey, STATE_VERSION,
     };
 
     use vodozemac::base64_encode;
@@ -729,7 +729,7 @@ mod tests {
         device.mark_one_time_keys_as_published().unwrap();
 
         let persisted = device.encrypted_state_json().unwrap();
-        let restored = CryptoDevice::restore(&recovery_key, &persisted).unwrap();
+        let mut restored = CryptoDevice::restore(&recovery_key, &persisted).unwrap();
         let restored_bundle: PublicBundle =
             serde_json::from_str(&restored.public_bundle_json().unwrap()).unwrap();
 
