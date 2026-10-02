@@ -37,9 +37,7 @@ pub enum ClientMessage {
         peer_id: String,
         message_id: String,
         device_id: String,
-        body: String,
-        #[serde(default) ]
-        attachment_id: Option<String>,
+        ciphertext: String,
     },
 }
 
@@ -80,9 +78,7 @@ pub enum ServerMessage {
         sender_id: String,
         message_id: String,
         device_id: String,
-        body: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        attachment_id: Option<String>,
+        ciphertext: String,
     },
     Error {
         code: String,
