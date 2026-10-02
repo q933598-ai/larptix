@@ -130,6 +130,7 @@ function withCryptoStateLock(task) {
 let peerVerificationResolve = null;
 
 const sentPlaintextByCiphertext = new Map();
+const cryptoRecoveryRequested = new Set();
 
 async function sentPlaintextCacheId(ciphertext) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ciphertext));
@@ -1199,6 +1200,9 @@ function connect() {
       case "message":
         if (isForOpenChat(msg.message)) appendMessage(msg.message);
         break;
+      case "crypto_resync":
+        void handleCryptoResyncRequest(msg);
+        break;
       case "call_signal":
         handleCallSignal(msg).catch((err) => {
           appendSystem(`Call error: ${err.message}`);
@@ -2071,6 +2075,31 @@ async function displayEncryptedMessage(message, bodyElement) {
           sessionCountAfter: cryptoDevice.session_count(senderDeviceId),
           error: err?.message || String(err),
         });
+
+        if (
+          envelope.version === 2
+          && envelope.message_type === "message"
+          && socket?.readyState === WebSocket.OPEN
+        ) {
+          const recoveryKey = `${message.id}:${cryptoDevice.device_id()}`;
+          if (!cryptoRecoveryRequested.has(recoveryKey)) {
+            cryptoRecoveryRequested.add(recoveryKey);
+            socket.send(JSON.stringify({
+              type: "crypto_resync",
+              peer_id: message.sender_id,
+              message_id: message.id,
+              body: message.body,
+              device_id: cryptoDevice.device_id(),
+              attachment_id: message.attachment?.id || null,
+            }));
+            console.log("[E2E] requested automatic session recovery", {
+              message: message.id,
+              sender: message.sender_id,
+              senderDevice: senderDeviceId,
+              device: cryptoDevice.device_id(),
+            });
+          }
+        }
         throw err;
       }
 
@@ -2096,6 +2125,61 @@ async function displayEncryptedMessage(message, bodyElement) {
     }
   } catch (err) {
     bodyElement.textContent = `Could not decrypt message: ${err?.message || String(err)}`;
+  }
+}
+
+async function handleCryptoResyncRequest(request) {
+  if (!cryptoEnabled || !cryptoDevice || !me || request?.requester_id !== me.user_id) return;
+
+  try {
+    await cryptoReady;
+    await withCryptoStateLock(async () => {
+      const cached = sentPlaintextByCiphertext.get(request.body)
+        || await loadCachedSentPlaintext(request.body);
+      if (!cached) {
+        console.warn("[E2E] recovery requested, but original plaintext is not cached locally");
+        return;
+      }
+
+      const original = parseCryptoEnvelope(request.body);
+      if (!original || original.version !== 2 || original.message_type !== "message") return;
+
+      const devicesResponse = await api(
+        "GET",
+        `/api/users/${encodeURIComponent(request.requester_id)}/crypto-devices`
+      );
+      const devices = Array.isArray(devicesResponse?.devices) ? devicesResponse.devices : [];
+      const target = devices.find((device) => device?.device_id === request.device_id);
+      if (!target) throw new Error("The recovering device is no longer registered.");
+
+      const peer = users.find((item) => item.user_id === request.requester_id)
+        || { user_id: request.requester_id, display_name: request.requester_id };
+      if (!(await ensurePeerFingerprint(peer, target))) throw new Error("The recovering device is not verified.");
+
+      const claimedBundle = await claimPeerOneTimeKey(request.requester_id, target.device_id);
+      if (!(await ensurePeerFingerprint(peer, claimedBundle))) {
+        throw new Error(`Device ${target.device_id} could not be verified.`);
+      }
+
+      cryptoDevice.establish_session(
+        target.device_id,
+        JSON.stringify(claimedBundle),
+        claimedBundle.fingerprint,
+      );
+
+      const next = { ...original, ciphertexts: { ...original.ciphertexts } };
+      next.ciphertexts[target.device_id] = cryptoDevice.encrypt(target.device_id, cached);
+
+      await persistCryptoState();
+      socket?.send(JSON.stringify({
+        type: "send",
+        peer_id: request.requester_id,
+        body: JSON.stringify(next),
+        attachment_id: request.attachment_id || null,
+      }));
+    });
+  } catch (err) {
+    console.error("[E2E] automatic session recovery failed", err);
   }
 }
 
