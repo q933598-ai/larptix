@@ -1,4 +1,4 @@
-# Larptrix 0.2
+# Larptrix 0.4
 
 Self-hostable messenger for a small group of friends.
 This slice adds **accounts**, **1:1 chats**, **history**, **profiles**, and **attachments**.
@@ -183,8 +183,3 @@ mediate a connection. Authenticated media transforms remain future work. Screen
 sharing starts adaptively (up to 1080p/30); the high preset requests up
 to 4K/144 fps, but the browser, device, and network may negotiate less.
 
-## Roadmap
-
-- **0.3** Tauri desktop, themes, 144Hz-friendly UI
-- **0.4** E2E-protected calls and group chats
-- **0.5** personal nodes, P2P, NAT traversal, relays
