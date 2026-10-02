@@ -2151,20 +2151,45 @@ async function displayEncryptedMessage(message, bodyElement) {
 }
 
 async function handleCryptoResyncRequest(request) {
-  if (!cryptoEnabled || !cryptoDevice || !me || !request?.requester_id || request.requester_id === me.user_id) return;
+  console.log("[E2E] recovery request received", {
+    requester: request?.requester_id,
+    message: request?.message_id,
+    device: request?.device_id,
+    hasBody: typeof request?.body === "string",
+    bodyLength: typeof request?.body === "string" ? request.body.length : 0,
+  });
+
+  if (!cryptoEnabled || !cryptoDevice || !me || !request?.requester_id || request.requester_id === me.user_id) {
+    console.warn("[E2E] recovery request ignored", {
+      cryptoEnabled,
+      hasCryptoDevice: Boolean(cryptoDevice),
+      hasUser: Boolean(me),
+      requester: request?.requester_id,
+      ownUser: me?.user_id,
+    });
+    return;
+  }
 
   try {
     await cryptoReady;
     await withCryptoStateLock(async () => {
+      console.log("[E2E] recovery: looking up cached plaintext");
+
       const cached = sentPlaintextByCiphertext.get(request.body)
         || await loadCachedSentPlaintext(request.body);
+
       if (!cached) {
         console.warn("[E2E] recovery requested, but original plaintext is not cached locally");
         return;
       }
 
+      console.log("[E2E] recovery: plaintext cache found");
+
       const original = parseCryptoEnvelope(request.body);
-      if (!original || original.version !== 2 || original.message_type !== "message") return;
+      if (!original || original.version !== 2 || original.message_type !== "message") {
+        console.warn("[E2E] recovery: original envelope is invalid or unsupported");
+        return;
+      }
 
       const devicesResponse = await api(
         "GET",
@@ -2172,13 +2197,32 @@ async function handleCryptoResyncRequest(request) {
       );
       const devices = Array.isArray(devicesResponse?.devices) ? devicesResponse.devices : [];
       const target = devices.find((device) => device?.device_id === request.device_id);
+
+      console.log("[E2E] recovery: target device lookup", {
+        device: request.device_id,
+        found: Boolean(target),
+        deviceCount: devices.length,
+      });
+
       if (!target) throw new Error("The recovering device is no longer registered.");
 
       const peer = users.find((item) => item.user_id === request.requester_id)
         || { user_id: request.requester_id, display_name: request.requester_id };
-      if (!(await ensurePeerFingerprint(peer, target))) throw new Error("The recovering device is not verified.");
+
+      if (!(await ensurePeerFingerprint(peer, target))) {
+        throw new Error("The recovering device is not verified.");
+      }
+
+      console.log("[E2E] recovery: claiming one-time key");
 
       const claimedBundle = await claimPeerOneTimeKey(request.requester_id, target.device_id);
+
+      console.log("[E2E] recovery: one-time key claimed", {
+        device: claimedBundle?.device_id,
+        hasOneTimeKey: Array.isArray(claimedBundle?.one_time_keys)
+          && claimedBundle.one_time_keys.length > 0,
+      });
+
       if (!(await ensurePeerFingerprint(peer, claimedBundle))) {
         throw new Error(`Device ${target.device_id} could not be verified.`);
       }
@@ -2189,22 +2233,38 @@ async function handleCryptoResyncRequest(request) {
         claimedBundle.fingerprint,
       );
 
+      console.log("[E2E] recovery: new outbound session established", {
+        device: target.device_id,
+        sessionCount: cryptoDevice.session_count(target.device_id),
+      });
+
       const next = { ...original, ciphertexts: { ...original.ciphertexts } };
       next.ciphertexts[target.device_id] = cryptoDevice.encrypt(target.device_id, cached);
 
       await persistCryptoState();
+
       const nextBody = JSON.stringify(next);
       sentPlaintextByCiphertext.set(nextBody, cached);
       void cacheSentPlaintext(nextBody, cached);
+
       socket?.send(JSON.stringify({
         type: "send",
         peer_id: request.requester_id,
         body: nextBody,
         attachment_id: request.attachment_id || null,
       }));
+
+      console.log("[E2E] recovery: re-encrypted message sent", {
+        peer: request.requester_id,
+        device: target.device_id,
+        sessionCount: cryptoDevice.session_count(target.device_id),
+      });
     });
   } catch (err) {
-    console.error("[E2E] automatic session recovery failed", err);
+    console.error("[E2E] automatic session recovery failed", {
+      error: err?.message || String(err),
+      stack: err?.stack || null,
+    });
   }
 }
 
