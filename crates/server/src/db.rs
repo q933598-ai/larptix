@@ -26,6 +26,30 @@ pub struct CryptoDeviceRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct MatrixCryptoDeviceRow {
+    pub device_id: String,
+    pub user_id: String,
+    pub device_keys_json: String,
+    pub one_time_keys_json: String,
+    pub fallback_keys_json: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct MatrixToDeviceRow {
+    pub id: i64,
+    pub recipient_user_id: String,
+    pub recipient_device_id: String,
+    pub sender_user_id: String,
+    pub sender_device_id: String,
+    pub event_type: String,
+    pub txn_id: String,
+    pub content_json: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone)]
 pub struct StoredFile {
     pub id: String,
     pub ext: String,
@@ -363,6 +387,256 @@ impl Database {
         Ok(None)
     }
 
+    pub fn upsert_matrix_crypto_device(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        device_keys_json: &str,
+        one_time_keys_json: &str,
+        fallback_keys_json: &str,
+    ) -> rusqlite::Result<MatrixCryptoDeviceRow> {
+        let now = crate::now_ms();
+        let conn = self.conn.lock().expect("db lock");
+        let created_at = conn
+            .query_row(
+                "SELECT created_at FROM matrix_crypto_devices
+                 WHERE device_id = ?1 AND user_id = ?2",
+                params![device_id, user_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .unwrap_or(now);
+
+        conn.execute(
+            "INSERT INTO matrix_crypto_devices (
+                device_id, user_id, device_keys_json, one_time_keys_json,
+                fallback_keys_json, created_at, updated_at
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(device_id) DO UPDATE SET
+                user_id = excluded.user_id,
+                device_keys_json = excluded.device_keys_json,
+                one_time_keys_json = excluded.one_time_keys_json,
+                fallback_keys_json = excluded.fallback_keys_json,
+                updated_at = excluded.updated_at",
+            params![
+                device_id,
+                user_id,
+                device_keys_json,
+                one_time_keys_json,
+                fallback_keys_json,
+                created_at,
+                now
+            ],
+        )?;
+
+        Ok(MatrixCryptoDeviceRow {
+            device_id: device_id.to_string(),
+            user_id: user_id.to_string(),
+            device_keys_json: device_keys_json.to_string(),
+            one_time_keys_json: one_time_keys_json.to_string(),
+            fallback_keys_json: fallback_keys_json.to_string(),
+            created_at,
+            updated_at: now,
+        })
+    }
+
+    pub fn matrix_devices_for_user(
+        &self,
+        user_id: &str,
+    ) -> rusqlite::Result<Vec<MatrixCryptoDeviceRow>> {
+        let conn = self.conn.lock().expect("db lock");
+        let mut stmt = conn.prepare(
+            "SELECT device_id, user_id, device_keys_json, one_time_keys_json,
+                    fallback_keys_json, created_at, updated_at
+             FROM matrix_crypto_devices
+             WHERE user_id = ?1
+             ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map([user_id], |row| {
+            Ok(MatrixCryptoDeviceRow {
+                device_id: row.get(0)?,
+                user_id: row.get(1)?,
+                device_keys_json: row.get(2)?,
+                one_time_keys_json: row.get(3)?,
+                fallback_keys_json: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn matrix_device(
+        &self,
+        user_id: &str,
+        device_id: &str,
+    ) -> rusqlite::Result<Option<MatrixCryptoDeviceRow>> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.query_row(
+            "SELECT device_id, user_id, device_keys_json, one_time_keys_json,
+                    fallback_keys_json, created_at, updated_at
+             FROM matrix_crypto_devices
+             WHERE user_id = ?1 AND device_id = ?2",
+            params![user_id, device_id],
+            |row| {
+                Ok(MatrixCryptoDeviceRow {
+                    device_id: row.get(0)?,
+                    user_id: row.get(1)?,
+                    device_keys_json: row.get(2)?,
+                    one_time_keys_json: row.get(3)?,
+                    fallback_keys_json: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                })
+            },
+        )
+        .optional()
+    }
+
+    pub fn claim_matrix_one_time_key(
+        &self,
+        device_id: &str,
+    ) -> rusqlite::Result<Option<(String, String)>> {
+        let mut conn = self.conn.lock().expect("db lock");
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        let row: Option<(String, String)> = tx
+            .query_row(
+                "SELECT one_time_keys_json, fallback_keys_json
+                 FROM matrix_crypto_devices WHERE device_id = ?1",
+                [device_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+
+        let Some((otk_json, fallback_json)) = row else {
+            tx.commit()?;
+            return Ok(None);
+        };
+
+        let otks: serde_json::Value =
+            serde_json::from_str(&otk_json).map_err(|_| rusqlite::Error::InvalidQuery)?;
+        if let Some(map) = otks.as_object() {
+            for (key_id, value) in map {
+                let claimed: bool = tx.query_row(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM matrix_one_time_key_claims
+                        WHERE device_id = ?1 AND key_id = ?2
+                    )",
+                    params![device_id, key_id],
+                    |row| row.get(0),
+                )?;
+                if claimed {
+                    continue;
+                }
+                tx.execute(
+                    "INSERT INTO matrix_one_time_key_claims(device_id, key_id, claimed_at)
+                     VALUES (?1, ?2, ?3)",
+                    params![device_id, key_id, crate::now_ms()],
+                )?;
+                let value_json =
+                    serde_json::to_string(value).map_err(|_| rusqlite::Error::InvalidQuery)?;
+                tx.commit()?;
+                return Ok(Some((key_id.to_string(), value_json)));
+            }
+        }
+
+        // Fallback keys are deliberately reusable until replaced.
+        let fallbacks: serde_json::Value =
+            serde_json::from_str(&fallback_json).map_err(|_| rusqlite::Error::InvalidQuery)?;
+        if let Some(map) = fallbacks.as_object() {
+            if let Some((key_id, value)) = map.iter().next() {
+                let value_json =
+                    serde_json::to_string(value).map_err(|_| rusqlite::Error::InvalidQuery)?;
+                tx.commit()?;
+                return Ok(Some((key_id.to_string(), value_json)));
+            }
+        }
+
+        tx.commit()?;
+        Ok(None)
+    }
+
+    pub fn enqueue_matrix_to_device(
+        &self,
+        recipient_user_id: &str,
+        recipient_device_id: &str,
+        sender_user_id: &str,
+        sender_device_id: &str,
+        event_type: &str,
+        txn_id: &str,
+        content_json: &str,
+    ) -> rusqlite::Result<i64> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "INSERT INTO matrix_to_device_events (
+                recipient_user_id, recipient_device_id, sender_user_id,
+                sender_device_id, event_type, txn_id, content_json, created_at
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                recipient_user_id,
+                recipient_device_id,
+                sender_user_id,
+                sender_device_id,
+                event_type,
+                txn_id,
+                content_json,
+                crate::now_ms()
+            ],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn matrix_to_device_for_user(
+        &self,
+        user_id: &str,
+    ) -> rusqlite::Result<Vec<MatrixToDeviceRow>> {
+        let conn = self.conn.lock().expect("db lock");
+        let mut stmt = conn.prepare(
+            "SELECT id, recipient_user_id, recipient_device_id,
+                    sender_user_id, sender_device_id, event_type,
+                    txn_id, content_json, created_at
+             FROM matrix_to_device_events
+             WHERE recipient_user_id = ?1
+             ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map([user_id], |row| {
+            Ok(MatrixToDeviceRow {
+                id: row.get(0)?,
+                recipient_user_id: row.get(1)?,
+                recipient_device_id: row.get(2)?,
+                sender_user_id: row.get(3)?,
+                sender_device_id: row.get(4)?,
+                event_type: row.get(5)?,
+                txn_id: row.get(6)?,
+                content_json: row.get(7)?,
+                created_at: row.get(8)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn ack_matrix_to_device(
+        &self,
+        user_id: &str,
+        event_ids: &[i64],
+    ) -> rusqlite::Result<usize> {
+        let mut conn = self.conn.lock().expect("db lock");
+        let tx = conn.transaction()?;
+        let mut deleted = 0usize;
+        for event_id in event_ids {
+            deleted += tx.execute(
+                "DELETE FROM matrix_to_device_events
+                 WHERE id = ?1 AND recipient_user_id = ?2",
+                params![event_id, user_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(deleted)
+    }
+
     pub fn delete_crypto_device(&self, user_id: &str, device_id: &str) -> rusqlite::Result<bool> {
         let conn = self.conn.lock().expect("db lock");
 
@@ -402,6 +676,17 @@ impl Database {
             "SELECT id, email, password_hash, display_name, avatar_id
              FROM users WHERE id = ?1",
             [id],
+            map_user,
+        )
+        .optional()
+    }
+
+    pub fn user_by_username(&self, username: &str) -> rusqlite::Result<Option<UserRow>> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.query_row(
+            "SELECT id, email, password_hash, display_name, avatar_id
+             FROM users WHERE username = ?1 COLLATE NOCASE",
+            [username],
             map_user,
         )
         .optional()
@@ -1159,6 +1444,46 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_crypto_otk_claims_device
             ON crypto_one_time_key_claims(device_id);
+
+        CREATE TABLE IF NOT EXISTS matrix_crypto_devices (
+            device_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            device_keys_json TEXT NOT NULL,
+            one_time_keys_json TEXT NOT NULL DEFAULT '{}',
+            fallback_keys_json TEXT NOT NULL DEFAULT '{}',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_matrix_crypto_devices_user_id
+            ON matrix_crypto_devices(user_id);
+
+        CREATE TABLE IF NOT EXISTS matrix_one_time_key_claims (
+            device_id TEXT NOT NULL,
+            key_id TEXT NOT NULL,
+            claimed_at INTEGER NOT NULL,
+            PRIMARY KEY (device_id, key_id),
+            FOREIGN KEY (device_id) REFERENCES matrix_crypto_devices(device_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_matrix_otk_claims_device
+            ON matrix_one_time_key_claims(device_id);
+
+        CREATE TABLE IF NOT EXISTS matrix_to_device_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recipient_user_id TEXT NOT NULL,
+            recipient_device_id TEXT NOT NULL,
+            sender_user_id TEXT NOT NULL,
+            sender_device_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            txn_id TEXT NOT NULL,
+            content_json TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (recipient_user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (sender_user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_matrix_to_device_recipient
+            ON matrix_to_device_events(recipient_user_id, recipient_device_id, id);
+
         CREATE TABLE IF NOT EXISTS conversations (
             id TEXT PRIMARY KEY,
             user_a TEXT NOT NULL,
