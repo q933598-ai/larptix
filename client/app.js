@@ -131,6 +131,9 @@ let peerVerificationResolve = null;
 
 const sentPlaintextByCiphertext = new Map();
 const cryptoRecoveryLastAttempt = new Map();
+const cryptoRecoveryPending = new Map();
+const recoveredBodiesByMessageId = new Map();
+const messageBodyElementsById = new Map();
 
 async function sentPlaintextCacheId(ciphertext) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ciphertext));
@@ -1195,6 +1198,7 @@ function connect() {
         document.getElementById("start-audio-call").hidden = Boolean(msg.peer.is_group);
         document.getElementById("start-video-call").hidden = Boolean(msg.peer.is_group);
         logEl.replaceChildren();
+        messageBodyElementsById.clear();
         msg.history.forEach(appendMessage);
         break;
       case "message":
@@ -1202,6 +1206,9 @@ function connect() {
         break;
       case "crypto_resync":
         void handleCryptoResyncRequest(msg);
+        break;
+      case "crypto_resync_response":
+        void handleCryptoResyncResponse(msg);
         break;
       case "call_signal":
         handleCallSignal(msg).catch((err) => {
@@ -1218,6 +1225,7 @@ function connect() {
   });
 
   socket.addEventListener("close", () => {
+    cryptoRecoveryPending.clear();
     setStatus("offline");
     endCall(false);
     if (reconnect) setTimeout(connect, 1500);
@@ -1866,7 +1874,15 @@ function appendMessage(message) {
   }
 
   logEl.append(li);
-  if (encryptedBodyElement) void displayEncryptedMessage(message, encryptedBodyElement);
+  if (encryptedBodyElement) {
+    messageBodyElementsById.set(message.id, encryptedBodyElement);
+    const recoveredBody = recoveredBodiesByMessageId.get(message.id);
+    const effectiveMessage = recoveredBody
+      ? { ...message, body: recoveredBody }
+      : message;
+    if (recoveredBody) recoveredBodiesByMessageId.delete(message.id);
+    void displayEncryptedMessage(effectiveMessage, encryptedBodyElement);
+  }
   logEl.scrollTop = logEl.scrollHeight;
 }
 
@@ -1926,7 +1942,7 @@ function parseCryptoEnvelope(raw) {
 
 console.log("[E2E] displayEncryptedMessage loaded");
 
-async function displayEncryptedMessage(message, bodyElement) {
+async function displayEncryptedMessage(message, bodyElement, { allowRecovery = true } = {}) {
   if (message.sender_id === me?.user_id) {
     await cryptoReady;
     const cached = sentPlaintextByCiphertext.get(message.body)
@@ -2085,20 +2101,30 @@ async function displayEncryptedMessage(message, bodyElement) {
         console.log("[E2E] recovery check", recoveryCheck);
 
         if (
-          envelope.version === 2
+          allowRecovery
+          && envelope.version === 2
           && envelope.message_type === "message"
           && socket?.readyState === WebSocket.OPEN
         ) {
           const recoveryDevice = cryptoDevice.device_id();
-          const lastRecovery = cryptoRecoveryLastAttempt.get(senderDeviceId) || 0;
-          // Recovery is a control-plane operation, not message sending.
-          // Keep it rate-limited, but do not suppress it for an hour: a stale
-          // Olm session can remain broken while the peer is actively chatting.
+          const lastRecovery = cryptoRecoveryLastAttempt.get(message.id) || 0;
+          const recoveryPending = cryptoRecoveryPending.has(message.id);
           const recoveryCooldownMs = 30000;
           const recoveryAllowed = Date.now() - lastRecovery >= recoveryCooldownMs;
 
-          if (recoveryAllowed) {
-            cryptoRecoveryLastAttempt.set(senderDeviceId, Date.now());
+          if (recoveryPending) {
+            console.log("[E2E] automatic session recovery already pending", {
+              message: message.id,
+              sender: message.sender_id,
+            });
+          } else if (recoveryAllowed) {
+            cryptoRecoveryLastAttempt.set(message.id, Date.now());
+            cryptoRecoveryPending.set(message.id, {
+              senderId: message.sender_id,
+              senderDeviceId,
+              deviceId: recoveryDevice,
+              message: { ...message },
+            });
             socket.send(JSON.stringify({
               type: "crypto_resync",
               peer_id: message.sender_id,
@@ -2115,6 +2141,7 @@ async function displayEncryptedMessage(message, bodyElement) {
             });
           } else {
             console.log("[E2E] automatic session recovery throttled", {
+              message: message.id,
               sender: message.sender_id,
               senderDevice: senderDeviceId,
               cooldownMs: recoveryCooldownMs,
@@ -2147,6 +2174,77 @@ async function displayEncryptedMessage(message, bodyElement) {
     }
   } catch (err) {
     bodyElement.textContent = `Could not decrypt message: ${err?.message || String(err)}`;
+  }
+}
+
+async function handleCryptoResyncResponse(response) {
+  console.log("[E2E] recovery response received", {
+    sender: response?.sender_id,
+    message: response?.message_id,
+    device: response?.device_id,
+    hasBody: typeof response?.body === "string",
+    bodyLength: typeof response?.body === "string" ? response.body.length : 0,
+  });
+
+  if (
+    !response?.sender_id
+    || !response?.message_id
+    || !response?.device_id
+    || typeof response?.body !== "string"
+  ) {
+    console.warn("[E2E] recovery response ignored: malformed");
+    return;
+  }
+
+  const pending = cryptoRecoveryPending.get(response.message_id);
+  if (!pending) {
+    console.warn("[E2E] recovery response ignored: no pending request", {
+      message: response.message_id,
+    });
+    return;
+  }
+
+  if (
+    pending.senderId !== response.sender_id
+    || pending.deviceId !== response.device_id
+  ) {
+    console.warn("[E2E] recovery response ignored: request binding mismatch", {
+      message: response.message_id,
+      expectedSender: pending.senderId,
+      actualSender: response.sender_id,
+      expectedDevice: pending.deviceId,
+      actualDevice: response.device_id,
+    });
+    return;
+  }
+
+  cryptoRecoveryPending.delete(response.message_id);
+
+  const bodyElement = messageBodyElementsById.get(response.message_id);
+  const recoveredMessage = {
+    ...pending.message,
+    body: response.body,
+  };
+
+  if (!bodyElement) {
+    recoveredBodiesByMessageId.set(response.message_id, response.body);
+    console.log("[E2E] recovery response stored until message is rendered", {
+      message: response.message_id,
+    });
+    return;
+  }
+
+  try {
+    await displayEncryptedMessage(recoveredMessage, bodyElement, { allowRecovery: false });
+    console.log("[E2E] recovery response decrypted", {
+      message: response.message_id,
+      device: response.device_id,
+    });
+  } catch (err) {
+    console.error("[E2E] recovery response decrypt failed", {
+      message: response.message_id,
+      error: err?.message || String(err),
+    });
   }
 }
 
@@ -2239,7 +2337,13 @@ async function handleCryptoResyncRequest(request) {
       });
 
       const next = { ...original, ciphertexts: { ...original.ciphertexts } };
-      next.ciphertexts[target.device_id] = cryptoDevice.encrypt(target.device_id, cached);
+      const recoveryCipher = cryptoDevice.encrypt(target.device_id, cached);
+      const recoveryCipherEnvelope = JSON.parse(recoveryCipher);
+      if (recoveryCipherEnvelope?.message_type !== "prekey") {
+        throw new Error("automatic recovery did not produce a pre-key message");
+      }
+
+      next.ciphertexts[target.device_id] = recoveryCipher;
 
       await persistCryptoState();
 
@@ -2248,14 +2352,17 @@ async function handleCryptoResyncRequest(request) {
       void cacheSentPlaintext(nextBody, cached);
 
       socket?.send(JSON.stringify({
-        type: "send",
+        type: "crypto_resync_response",
         peer_id: request.requester_id,
+        message_id: request.message_id,
+        device_id: request.device_id,
         body: nextBody,
         attachment_id: request.attachment_id || null,
       }));
 
-      console.log("[E2E] recovery: re-encrypted message sent", {
+      console.log("[E2E] recovery: pre-key response sent", {
         peer: request.requester_id,
+        message: request.message_id,
         device: target.device_id,
         sessionCount: cryptoDevice.session_count(target.device_id),
       });
