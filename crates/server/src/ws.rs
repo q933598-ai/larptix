@@ -113,8 +113,7 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: UserRo
                     peer_id,
                     message_id,
                     device_id,
-                    body,
-                    attachment_id,
+                    ciphertext,
                 }) => {
                     if let Err(err) = relay_crypto_resync_response(
                         &state,
@@ -122,8 +121,7 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: UserRo
                         &peer_id,
                         &message_id,
                         &device_id,
-                        &body,
-                        attachment_id,
+                        &ciphertext,
                     ) {
                         send_error(&tx, "bad_crypto_resync_response", err);
                     }
@@ -225,8 +223,7 @@ fn relay_crypto_resync_response(
     peer_id: &str,
     message_id: &str,
     device_id: &str,
-    body: &str,
-    attachment_id: Option<String>,
+    ciphertext: &str,
 ) -> Result<(), String> {
     if peer_id == user.id {
         return Err("cannot send E2E recovery response to yourself".into());
@@ -234,11 +231,21 @@ fn relay_crypto_resync_response(
     if message_id.is_empty() || device_id.is_empty() {
         return Err("crypto recovery response is missing message or device id".into());
     }
-    if body.chars().count() > larptrix_protocol::MAX_BODY {
+    if ciphertext.chars().count() > larptrix_protocol::MAX_BODY {
         return Err("crypto recovery response payload is too large".into());
     }
-    let _: serde_json::Value = serde_json::from_str(body)
-        .map_err(|_| "crypto recovery response contains invalid encrypted message".to_string())?;
+
+    let envelope: serde_json::Value = serde_json::from_str(ciphertext)
+        .map_err(|_| "crypto recovery response contains invalid ciphertext envelope".to_string())?;
+    if envelope.get("version") != Some(&serde_json::Value::from(1))
+        || envelope.get("message_type")
+            != Some(&serde_json::Value::String("prekey".to_string()))
+        || envelope.get("ciphertext")
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+    {
+        return Err("crypto recovery response must contain a v1 pre-key ciphertext".into());
+    }
 
     if !state
         .db
@@ -274,8 +281,7 @@ fn relay_crypto_resync_response(
             sender_id: user.id.clone(),
             message_id: message_id.to_string(),
             device_id: device_id.to_string(),
-            body: body.to_string(),
-            attachment_id,
+            ciphertext: ciphertext.to_string(),
         },
     );
 
