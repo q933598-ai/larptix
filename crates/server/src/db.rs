@@ -302,14 +302,11 @@ impl Database {
         let mut bundle: serde_json::Value =
             serde_json::from_str(&bundle_json).map_err(|_| rusqlite::Error::InvalidQuery)?;
 
-        let Some(keys) = bundle
+        let keys = bundle
             .get("one_time_keys")
             .and_then(serde_json::Value::as_array)
             .cloned()
-        else {
-            tx.commit()?;
-            return Ok(None);
-        };
+            .unwrap_or_default();
 
         for key in keys {
             let Some(key_value) = key.get("key").and_then(serde_json::Value::as_str) else {
@@ -339,6 +336,25 @@ impl Database {
             let claimed_bundle =
                 serde_json::to_string(&bundle).map_err(|_| rusqlite::Error::InvalidQuery)?;
 
+            tx.commit()?;
+            return Ok(Some(claimed_bundle));
+        }
+
+        let fallback_keys = bundle
+            .get("fallback_keys")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        if let Some(fallback) = fallback_keys.into_iter().find(|key| {
+            key.get("key")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+        }) {
+            // Fallback keys are reusable until the device publishes a replacement.
+            bundle["one_time_keys"] = serde_json::json!([fallback]);
+            let claimed_bundle =
+                serde_json::to_string(&bundle).map_err(|_| rusqlite::Error::InvalidQuery)?;
             tx.commit()?;
             return Ok(Some(claimed_bundle));
         }
@@ -1356,6 +1372,26 @@ mod tests {
         assert!(db
             .insert_group_dm(&carol.id, &group.id, "plaintext", None, 2)
             .is_err());
+    }
+
+    #[test]
+    fn fallback_key_can_be_claimed_repeatedly_when_otks_are_exhausted() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        let alice = db.create_key_user("Alice", "hash-a", 1).unwrap();
+
+        let device_id = Uuid::new_v4().to_string();
+        let bundle = format!(
+            r#"{{"version":2,"device_id":"{}","one_time_keys":[],"fallback_keys":[{{"key":"fallback","signature":"sig"}}]}}"#,
+            device_id
+        );
+        db.create_crypto_device(&alice.id, &device_id, &bundle, "state")
+            .unwrap();
+
+        let first = db.claim_crypto_one_time_key(&device_id).unwrap().unwrap();
+        let second = db.claim_crypto_one_time_key(&device_id).unwrap().unwrap();
+
+        assert!(first.contains(r#""fallback""#));
+        assert_eq!(first, second);
     }
 
     #[test]
