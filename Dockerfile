@@ -1,3 +1,9 @@
+FROM node:24-bookworm-slim AS matrix-crypto
+WORKDIR /matrix-crypto
+RUN npm pack --silent @matrix-org/matrix-sdk-crypto-wasm@18.9.0 \
+    && mkdir pkg \
+    && tar -xzf *.tgz -C pkg --strip-components=1
+
 FROM rust:bookworm AS builder
 WORKDIR /build
 
@@ -14,6 +20,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=builder /build/target/release/larptrix-server /usr/local/bin/larptrix-server
 COPY client ./client
+COPY --from=matrix-crypto /matrix-crypto/pkg /app/client/matrix-crypto-pkg
 RUN mkdir -p /app/data/uploads && chown -R larptrix:larptrix /app
 
 USER larptrix
