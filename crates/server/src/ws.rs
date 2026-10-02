@@ -557,6 +557,66 @@ fn validate_e2e_message_with_state(
         .get("message_type")
         .and_then(|value| value.as_str());
 
+    // Matrix-style DM envelope.
+    if version == Some(3) && message_type == Some("matrix") {
+        let sender_device_id = envelope
+            .get("sender_device_id")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "Matrix encrypted message is missing sender device id".to_string())?;
+
+        let room_id = envelope
+            .get("room_id")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "Matrix encrypted message is missing room id".to_string())?;
+
+        if !room_id.starts_with('!') {
+            return Err("Matrix encrypted message has an invalid room id".into());
+        }
+
+        let ciphertext = envelope
+            .get("ciphertext")
+            .and_then(|value| value.as_object())
+            .ok_or_else(|| "Matrix encrypted message is missing ciphertext".to_string())?;
+
+        if ciphertext
+            .get("algorithm")
+            .and_then(|value| value.as_str())
+            != Some("m.megolm.v1.aes-sha2")
+        {
+            return Err("Matrix encrypted message uses an unsupported algorithm".into());
+        }
+
+        if ciphertext
+            .get("ciphertext")
+            .and_then(|value| value.as_str())
+            .is_none()
+        {
+            return Err("Matrix encrypted message is missing ciphertext data".into());
+        }
+
+        if state
+            .db
+            .matrix_device(sender_user_id, sender_device_id)
+            .map_err(|err| err.to_string())?
+            .is_none()
+        {
+            return Err("Matrix sender device is not registered".into());
+        }
+
+        if state
+            .db
+            .matrix_devices_for_user(recipient_user_id)
+            .map_err(|err| err.to_string())?
+            .is_empty()
+        {
+            return Err("Matrix recipient has no registered E2E devices".into());
+        }
+
+        return Ok(());
+    }
+
     // Multi-device DM envelope.
     if version == Some(2) && message_type == Some("message") {
         let sender_device_id = envelope
