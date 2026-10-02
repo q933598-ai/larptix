@@ -2077,6 +2077,7 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
           senderBundle.fingerprint,
         );
 
+        cryptoRecoveryPending.delete(message.id);
         console.log("[E2E] decrypt success", {
           sender: message.sender_id,
           senderDevice: senderDeviceId,
