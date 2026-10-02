@@ -130,7 +130,7 @@ function withCryptoStateLock(task) {
 let peerVerificationResolve = null;
 
 const sentPlaintextByCiphertext = new Map();
-const cryptoRecoveryRequested = new Set();
+const cryptoRecoveryLastAttempt = new Map();
 
 async function sentPlaintextCacheId(ciphertext) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ciphertext));
@@ -593,7 +593,7 @@ composer.addEventListener("submit", async (event) => {
           encryptedBody = JSON.stringify({
             version: 2,
             message_type: "message",
-            sender_device_id: cryptoDevice.device_id(),
+            sender_device_id: recoveryDevice,
             ciphertexts,
           });
         }
@@ -2081,9 +2081,11 @@ async function displayEncryptedMessage(message, bodyElement) {
           && envelope.message_type === "message"
           && socket?.readyState === WebSocket.OPEN
         ) {
-          const recoveryKey = `${message.id}:${cryptoDevice.device_id()}`;
-          if (!cryptoRecoveryRequested.has(recoveryKey)) {
-            cryptoRecoveryRequested.add(recoveryKey);
+          const recoveryDevice = cryptoDevice.device_id();
+          const lastRecovery = cryptoRecoveryLastAttempt.get(senderDeviceId) || 0;
+          const recoveryAllowed = Date.now() - lastRecovery >= 3600000;
+          if (recoveryAllowed) {
+            cryptoRecoveryLastAttempt.set(senderDeviceId, Date.now());
             socket.send(JSON.stringify({
               type: "crypto_resync",
               peer_id: message.sender_id,
@@ -2096,7 +2098,7 @@ async function displayEncryptedMessage(message, bodyElement) {
               message: message.id,
               sender: message.sender_id,
               senderDevice: senderDeviceId,
-              device: cryptoDevice.device_id(),
+              device: recoveryDevice,
             });
           }
         }
