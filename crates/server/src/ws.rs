@@ -530,6 +530,22 @@ fn validate_group_e2e_message(
     Ok(())
 }
 
+fn matrix_dm_room_id(server_name: &str, sender_user_id: &str, recipient_user_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut users = [sender_user_id, recipient_user_id];
+    users.sort_unstable();
+    let input = format!("{server_name}\n{}\n{}", users[0], users[1]);
+
+    let digest = Sha256::digest(input.as_bytes());
+    let hex = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+
+    format!("!larpdm_{hex}:{server_name}")
+}
+
 fn validate_e2e_message_with_state(
     state: &AppState,
     sender_user_id: &str,
@@ -571,8 +587,14 @@ fn validate_e2e_message_with_state(
             .filter(|value| !value.is_empty())
             .ok_or_else(|| "Matrix encrypted message is missing room id".to_string())?;
 
-        if !room_id.starts_with('!') {
-            return Err("Matrix encrypted message has an invalid room id".into());
+        let server_name = std::env::var("DOMAIN").unwrap_or_else(|_| "localhost".into());
+        let expected_room_id = matrix_dm_room_id(
+            &server_name,
+            sender_user_id,
+            recipient_user_id,
+        );
+        if room_id != expected_room_id {
+            return Err("Matrix encrypted message has an invalid DM room id".into());
         }
 
         let ciphertext = envelope
