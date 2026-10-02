@@ -1279,6 +1279,11 @@ function connect() {
       case "crypto_resync_response":
         void handleCryptoResyncResponse(msg);
         break;
+      case "matrix_to_device":
+        void matrixCryptoReady.then(() => matrixCrypto?.handleLiveToDevice(msg)).catch((err) => {
+          console.error("[E2E] Matrix to-device processing failed", err);
+        });
+        break;
       case "call_signal":
         handleCallSignal(msg).catch((err) => {
           appendSystem(`Call error: ${err.message}`);
