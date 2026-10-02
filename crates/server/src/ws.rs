@@ -90,6 +90,23 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: UserRo
                         send_error(&tx, "bad_call_signal", err);
                     }
                 }
+                Ok(ClientMessage::CryptoResync {
+                    peer_id,
+                    message_id,
+                    body,
+                    attachment_id,
+                }) => {
+                    if let Err(err) = relay_crypto_resync(
+                        &state,
+                        &user,
+                        &peer_id,
+                        &message_id,
+                        &body,
+                        attachment_id,
+                    ) {
+                        send_error(&tx, "bad_crypto_resync", err);
+                    }
+                }
                 Err(err) => send_error(&tx, "bad_json", err.to_string()),
             },
             Message::Close(_) => break,
@@ -104,6 +121,46 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: UserRo
     });
     tracing::info!(user_id = %user.id, "disconnected");
     let _ = writer.await;
+}
+
+fn relay_crypto_resync(
+    state: &AppState,
+    user: &UserRow,
+    peer_id: &str,
+    message_id: &str,
+    body: &str,
+    attachment_id: Option<String>,
+) -> Result<(), String> {
+    if peer_id == user.id {
+        return Err("cannot request E2E recovery from yourself".into());
+    }
+    if message_id.is_empty() {
+        return Err("crypto recovery is missing message id".into());
+    }
+    if body.chars().count() > larptrix_protocol::MAX_BODY {
+        return Err("crypto recovery payload is too large".into());
+    }
+    let _: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| "crypto recovery contains invalid encrypted message".to_string())?;
+    let peer = state
+        .db
+        .user_by_id(peer_id)
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| "unknown peer".to_string())?;
+    let recipient = Uuid::parse_str(&peer.id).map_err(|_| "invalid peer id".to_string())?;
+    if state.hub.online_ids().iter().all(|id| id != &peer.id) {
+        return Err("peer is offline; recovery will retry when they reconnect".into());
+    }
+    state.hub.send_to(
+        recipient,
+        ServerMessage::CryptoResync {
+            requester_id: user.id.clone(),
+            message_id: message_id.to_string(),
+            body: body.to_string(),
+            attachment_id,
+        },
+    );
+    Ok(())
 }
 
 fn relay_call_signal(
