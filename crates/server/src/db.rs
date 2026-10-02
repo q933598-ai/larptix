@@ -839,6 +839,27 @@ impl Database {
         })
     }
 
+    pub fn dm_message_is_between(
+        &self,
+        message_id: &str,
+        sender_id: &str,
+        recipient_id: &str,
+    ) -> rusqlite::Result<bool> {
+        let conversation_id = conversation_key(sender_id, recipient_id);
+        let conn = self.conn.lock().expect("db lock");
+        conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM messages
+                WHERE id = ?1
+                  AND conversation_id = ?2
+                  AND sender_id = ?3
+            )",
+            params![message_id, conversation_id, sender_id],
+            |row| row.get(0),
+        )
+    }
+
     pub fn dm_history(
         &self,
         user_id: &str,
