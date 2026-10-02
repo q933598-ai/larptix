@@ -593,7 +593,7 @@ composer.addEventListener("submit", async (event) => {
           encryptedBody = JSON.stringify({
             version: 2,
             message_type: "message",
-            sender_device_id: recoveryDevice,
+            sender_device_id: cryptoDevice.device_id(),
             ciphertexts,
           });
         }
