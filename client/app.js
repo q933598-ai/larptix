@@ -2182,15 +2182,15 @@ async function handleCryptoResyncResponse(response) {
     sender: response?.sender_id,
     message: response?.message_id,
     device: response?.device_id,
-    hasBody: typeof response?.body === "string",
-    bodyLength: typeof response?.body === "string" ? response.body.length : 0,
+    hasCiphertext: typeof response?.ciphertext === "string",
+    ciphertextLength: typeof response?.ciphertext === "string" ? response.ciphertext.length : 0,
   });
 
   if (
     !response?.sender_id
     || !response?.message_id
     || !response?.device_id
-    || typeof response?.body !== "string"
+    || typeof response?.ciphertext !== "string"
   ) {
     console.warn("[E2E] recovery response ignored: malformed");
     return;
@@ -2220,14 +2220,52 @@ async function handleCryptoResyncResponse(response) {
 
   cryptoRecoveryPending.delete(response.message_id);
 
-  const bodyElement = messageBodyElementsById.get(response.message_id);
-  const recoveredMessage = {
-    ...pending.message,
-    body: response.body,
+  let originalEnvelope = parseCryptoEnvelope(pending.message.body);
+  if (
+    !originalEnvelope
+    || originalEnvelope.version !== 2
+    || originalEnvelope.message_type !== "message"
+    || originalEnvelope.sender_device_id !== pending.senderDeviceId
+  ) {
+    console.warn("[E2E] recovery response ignored: original message binding is invalid", {
+      message: response.message_id,
+    });
+    return;
+  }
+
+  try {
+    const recoveredCipherEnvelope = JSON.parse(response.ciphertext);
+    if (
+      recoveredCipherEnvelope?.version !== 1
+      || recoveredCipherEnvelope?.message_type !== "prekey"
+      || typeof recoveredCipherEnvelope?.ciphertext !== "string"
+    ) {
+      throw new Error("Recovery response was not a valid pre-key ciphertext.");
+    }
+  } catch (err) {
+    console.warn("[E2E] recovery response ignored: invalid pre-key ciphertext", {
+      message: response.message_id,
+      error: err?.message || String(err),
+    });
+    return;
+  }
+
+  originalEnvelope = {
+    ...originalEnvelope,
+    ciphertexts: {
+      ...originalEnvelope.ciphertexts,
+      [response.device_id]: response.ciphertext,
+    },
   };
 
+  const recoveredMessage = {
+    ...pending.message,
+    body: JSON.stringify(originalEnvelope),
+  };
+  const bodyElement = messageBodyElementsById.get(response.message_id);
+
   if (!bodyElement) {
-    recoveredBodiesByMessageId.set(response.message_id, response.body);
+    recoveredBodiesByMessageId.set(response.message_id, recoveredMessage.body);
     console.log("[E2E] recovery response stored until message is rendered", {
       message: response.message_id,
     });
@@ -2336,28 +2374,20 @@ async function handleCryptoResyncRequest(request) {
         sessionCount: cryptoDevice.session_count(target.device_id),
       });
 
-      const next = { ...original, ciphertexts: { ...original.ciphertexts } };
       const recoveryCipher = cryptoDevice.encrypt(target.device_id, cached);
       const recoveryCipherEnvelope = JSON.parse(recoveryCipher);
       if (recoveryCipherEnvelope?.message_type !== "prekey") {
         throw new Error("automatic recovery did not produce a pre-key message");
       }
 
-      next.ciphertexts[target.device_id] = recoveryCipher;
-
       await persistCryptoState();
-
-      const nextBody = JSON.stringify(next);
-      sentPlaintextByCiphertext.set(nextBody, cached);
-      void cacheSentPlaintext(nextBody, cached);
 
       socket?.send(JSON.stringify({
         type: "crypto_resync_response",
         peer_id: request.requester_id,
         message_id: request.message_id,
         device_id: request.device_id,
-        body: nextBody,
-        attachment_id: request.attachment_id || null,
+        ciphertext: recoveryCipher,
       }));
 
       console.log("[E2E] recovery: pre-key response sent", {
