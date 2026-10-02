@@ -527,10 +527,14 @@ composer.addEventListener("submit", async (event) => {
             }
 
             if (!cryptoDevice.has_session(memberId)) {
+              const claimedBundle = await claimPeerOneTimeKey(memberId, bundle.device_id);
+              if (!(await ensurePeerFingerprint(member, claimedBundle))) {
+                throw new Error(`Device ${bundle.device_id} could not be verified.`);
+              }
               cryptoDevice.establish_session(
                 memberId,
-                JSON.stringify(bundle),
-                bundle.fingerprint
+                JSON.stringify(claimedBundle),
+                claimedBundle.fingerprint
               );
             }
 
@@ -568,10 +572,14 @@ composer.addEventListener("submit", async (event) => {
             const deviceId = bundle.device_id;
 
             if (!cryptoDevice.has_session(deviceId)) {
+              const claimedBundle = await claimPeerOneTimeKey(peerId, deviceId);
+              if (!(await ensurePeerFingerprint(peer, claimedBundle))) {
+                throw new Error(`Device ${deviceId} could not be verified.`);
+              }
               cryptoDevice.establish_session(
                 deviceId,
-                JSON.stringify(bundle),
-                bundle.fingerprint
+                JSON.stringify(claimedBundle),
+                claimedBundle.fingerprint
               );
             }
 
@@ -1002,6 +1010,18 @@ async function forgetRememberedCryptoKey(userId) {
 
 function verifiedFingerprintKey(userId, deviceId) {
   return `larptrix_verified_device_${me.user_id}_${userId}_${deviceId}`;
+}
+
+async function claimPeerOneTimeKey(userId, deviceId) {
+  const result = await api(
+    "POST",
+    `/api/users/${encodeURIComponent(userId)}/crypto-devices/${encodeURIComponent(deviceId)}/claim-one-time-key`,
+    {}
+  );
+  if (!result?.bundle) {
+    throw new Error(`No one-time key is available for device ${deviceId}.`);
+  }
+  return result.bundle;
 }
 
 async function ensurePeerFingerprint(peerUser, bundle) {
