@@ -1,4 +1,8 @@
 import initCrypto, { CryptoDevice } from "/crypto-pkg/larptrix_crypto_wasm.js";
+import {
+  LarptrixMatrixCrypto,
+  getOrCreateMatrixDeviceId,
+} from "/matrix-crypto.js";
 
 await initCrypto();
 
@@ -871,6 +875,36 @@ async function loadCryptoStatus() {
   return new Promise((resolve) => {
     cryptoLoadResolve = resolve;
   });
+}
+
+async function loadMatrixCryptoStatus() {
+  if (!me || !cryptoRecoveryKey) return false;
+
+  const config = await api("GET", "/api/matrix/config");
+  matrixServerName = config.server_name;
+  if (!matrixServerName || typeof matrixServerName !== "string") {
+    throw new Error("Matrix server name is unavailable.");
+  }
+
+  const deviceId = getOrCreateMatrixDeviceId(me.user_id);
+  const next = new LarptrixMatrixCrypto({
+    api,
+    userId: me.user_id,
+    serverName: matrixServerName,
+    deviceId,
+    storePassphrase: cryptoRecoveryKey,
+  });
+
+  try {
+    await next.initialize();
+  } catch (err) {
+    await next.close().catch(() => {});
+    throw err;
+  }
+
+  if (matrixCrypto) await matrixCrypto.close().catch(() => {});
+  matrixCrypto = next;
+  return true;
 }
 
 async function persistCryptoState() {
