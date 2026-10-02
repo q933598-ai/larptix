@@ -2171,10 +2171,13 @@ async function handleCryptoResyncRequest(request) {
       next.ciphertexts[target.device_id] = cryptoDevice.encrypt(target.device_id, cached);
 
       await persistCryptoState();
+      const nextBody = JSON.stringify(next);
+      sentPlaintextByCiphertext.set(nextBody, cached);
+      void cacheSentPlaintext(nextBody, cached);
       socket?.send(JSON.stringify({
         type: "send",
         peer_id: request.requester_id,
-        body: JSON.stringify(next),
+        body: nextBody,
         attachment_id: request.attachment_id || null,
       }));
     });
