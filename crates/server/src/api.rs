@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use uuid::Uuid;
+
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -65,6 +67,13 @@ pub fn router() -> Router<Arc<AppState>> {
             post(claim_crypto_one_time_key),
         )
         .route("/api/users/{id}/crypto-key", get(get_crypto_key))
+        .route("/api/matrix/config", get(matrix_config))
+        .route("/api/matrix/keys/upload", post(matrix_keys_upload))
+        .route("/api/matrix/keys/query", post(matrix_keys_query))
+        .route("/api/matrix/keys/claim", post(matrix_keys_claim))
+        .route("/api/matrix/to-device", post(matrix_send_to_device))
+        .route("/api/matrix/to-device/pending", get(matrix_pending_to_device))
+        .route("/api/matrix/to-device/ack", post(matrix_ack_to_device))
         .route("/api/rtc-config", get(rtc_config))
         .route("/api/users/{id}/avatar", get(user_avatar))
         .route("/api/attachments/{id}", get(get_attachment))
@@ -95,6 +104,25 @@ pub struct LoginBody {
     pub access_key: Option<String>,
     pub email: Option<String>,
     pub password: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct MatrixKeysUploadBody {
+    pub device_id: String,
+    pub request: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+pub struct MatrixToDeviceBody {
+    pub device_id: String,
+    pub event_type: String,
+    pub txn_id: String,
+    pub messages: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+pub struct MatrixToDeviceAckBody {
+    pub event_ids: Vec<i64>,
 }
 
 #[derive(Deserialize)]
@@ -254,6 +282,396 @@ async fn rtc_config(
     let raw = std::env::var("LARPTRIX_ICE_SERVERS").ok();
     let ice_servers = parse_ice_servers(raw.as_deref()).map_err(ApiError::internal)?;
     Ok(Json(serde_json::json!({ "ice_servers": ice_servers })))
+}
+
+fn matrix_server_name(headers: &HeaderMap) -> Result<String, ApiError> {
+    if let Ok(domain) = std::env::var("DOMAIN") {
+        let domain = domain.trim().trim_end_matches('.').to_string();
+        if !domain.is_empty() && !domain.contains('/') && !domain.contains(':') {
+            return Ok(domain);
+        }
+    }
+
+    let raw = headers
+        .get("x-forwarded-host")
+        .or_else(|| headers.get(header::HOST))
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| ApiError::internal("server host is unavailable"))?;
+
+    let host = raw
+        .split(',')
+        .next()
+        .unwrap_or(raw)
+        .trim()
+        .trim_start_matches('[')
+        .split(']')
+        .next()
+        .unwrap_or(raw)
+        .split(':')
+        .next()
+        .unwrap_or(raw)
+        .trim()
+        .trim_end_matches('.');
+
+    if host.is_empty() {
+        return Err(ApiError::internal("server host is unavailable"));
+    }
+    Ok(host.to_string())
+}
+
+fn resolve_matrix_user(
+    state: &AppState,
+    matrix_user_id: &str,
+    server_name: &str,
+) -> Result<UserRow, ApiError> {
+    let rest = matrix_user_id
+        .strip_prefix('@')
+        .ok_or_else(|| ApiError::bad("invalid Matrix user id"))?;
+    let (localpart, server) = rest
+        .split_once(':')
+        .ok_or_else(|| ApiError::bad("invalid Matrix user id"))?;
+
+    if localpart.is_empty() || !server.eq_ignore_ascii_case(server_name) {
+        return Err(ApiError::bad("Matrix user belongs to another server"));
+    }
+
+    if let Some(user) = state.db.user_by_id(localpart).map_err(ApiError::db)? {
+        return Ok(user);
+    }
+
+    state
+        .db
+        .user_by_username(localpart)
+        .map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::bad("unknown Matrix user"))
+}
+
+async fn matrix_config(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_user(&state, &headers)?;
+    Ok(Json(serde_json::json!({
+        "server_name": matrix_server_name(&headers)?,
+    })))
+}
+
+async fn matrix_keys_upload(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<MatrixKeysUploadBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let request = body.request;
+
+    if body.device_id.trim().is_empty() || body.device_id.len() > 255 {
+        return Err(ApiError::bad("invalid Matrix device id"));
+    }
+
+    let device_keys = request
+        .get("device_keys")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    if let Some(request_user_id) = device_keys.get("user_id").and_then(serde_json::Value::as_str) {
+        let resolved = resolve_matrix_user(&state, request_user_id, &matrix_server_name(&headers)?)?;
+        if resolved.id != user.id {
+            return Err(ApiError::bad("Matrix device belongs to another account"));
+        }
+    }
+
+    if let Some(request_device_id) = device_keys.get("device_id").and_then(serde_json::Value::as_str) {
+        if request_device_id != body.device_id {
+            return Err(ApiError::bad("Matrix device id does not match device keys"));
+        }
+    }
+
+    let existing = state
+        .db
+        .matrix_device(&user.id, &body.device_id)
+        .map_err(ApiError::db)?;
+
+    let device_keys_json = if device_keys.as_object().is_some_and(|map| map.is_empty()) {
+        existing
+            .as_ref()
+            .map(|device| device.device_keys_json.clone())
+            .unwrap_or_else(|| {
+                serde_json::json!({
+                    "user_id": format!("@{}:{}", user.id, matrix_server_name(&headers).unwrap_or_else(|_| "localhost".into())),
+                    "device_id": body.device_id,
+                    "algorithms": ["m.olm.v1.curve25519-aes-sha2", "m.megolm.v1.aes-sha2"],
+                    "keys": {},
+                    "signatures": {}
+                })
+                .to_string()
+            })
+    } else {
+        serde_json::to_string(&device_keys)
+            .map_err(|_| ApiError::bad("invalid Matrix device keys"))?
+    };
+
+    let one_time_keys = request
+        .get("one_time_keys")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let fallback_keys = request
+        .get("fallback_keys")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    state
+        .db
+        .upsert_matrix_crypto_device(
+            &user.id,
+            &body.device_id,
+            &device_keys_json,
+            &serde_json::to_string(&one_time_keys)
+                .map_err(|_| ApiError::bad("invalid Matrix one-time keys"))?,
+            &serde_json::to_string(&fallback_keys)
+                .map_err(|_| ApiError::bad("invalid Matrix fallback keys"))?,
+        )
+        .map_err(ApiError::db)?;
+
+    Ok(Json(serde_json::json!({})))
+}
+
+async fn matrix_keys_query(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_user(&state, &headers)?;
+    let server_name = matrix_server_name(&headers)?;
+    let requested = body
+        .get("device_keys")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| ApiError::bad("device_keys is required"))?;
+
+    let mut device_keys = serde_json::Map::new();
+    let mut failures = serde_json::Map::new();
+
+    for (matrix_user_id, requested_devices) in requested {
+        let user = match resolve_matrix_user(&state, matrix_user_id, &server_name) {
+            Ok(user) => user,
+            Err(_) => {
+                failures.insert(matrix_user_id.clone(), serde_json::json!({}));
+                continue;
+            }
+        };
+
+        let wanted = requested_devices.as_array();
+        let devices = state.db.matrix_devices_for_user(&user.id).map_err(ApiError::db)?;
+        let mut user_devices = serde_json::Map::new();
+
+        for device in devices {
+            if let Some(wanted) = wanted {
+                if !wanted.is_empty()
+                    && !wanted
+                        .iter()
+                        .any(|id| id.as_str() == Some(device.device_id.as_str()))
+                {
+                    continue;
+                }
+            }
+
+            let value = serde_json::from_str::<serde_json::Value>(&device.device_keys_json)
+                .map_err(|_| ApiError::internal("stored Matrix device keys are invalid"))?;
+            user_devices.insert(device.device_id, value);
+        }
+
+        device_keys.insert(matrix_user_id.clone(), serde_json::Value::Object(user_devices));
+    }
+
+    Ok(Json(serde_json::json!({
+        "device_keys": device_keys,
+        "failures": failures
+    })))
+}
+
+async fn matrix_keys_claim(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_user(&state, &headers)?;
+    let server_name = matrix_server_name(&headers)?;
+    let requested = body
+        .get("one_time_keys")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| ApiError::bad("one_time_keys is required"))?;
+
+    let mut one_time_keys = serde_json::Map::new();
+
+    for (matrix_user_id, requested_devices) in requested {
+        let user = resolve_matrix_user(&state, matrix_user_id, &server_name)?;
+        let Some(requested_devices) = requested_devices.as_object() else {
+            return Err(ApiError::bad("Matrix device key requests must be objects"));
+        };
+
+        let mut user_result = serde_json::Map::new();
+        for (device_id, _) in requested_devices {
+            let device = state
+                .db
+                .matrix_device(&user.id, device_id)
+                .map_err(ApiError::db)?;
+
+            if device.is_none() {
+                continue;
+            }
+
+            if let Some((key_id, value_json)) = state
+                .db
+                .claim_matrix_one_time_key(device_id)
+                .map_err(ApiError::db)?
+            {
+                let value = serde_json::from_str::<serde_json::Value>(&value_json)
+                    .map_err(|_| ApiError::internal("stored Matrix one-time key is invalid"))?;
+                user_result.insert(
+                    device_id.clone(),
+                    serde_json::json!({ key_id: value }),
+                );
+            }
+        }
+
+        one_time_keys.insert(matrix_user_id.clone(), serde_json::Value::Object(user_result));
+    }
+
+    Ok(Json(serde_json::json!({
+        "one_time_keys": one_time_keys
+    })))
+}
+
+async fn matrix_send_to_device(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<MatrixToDeviceBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let sender = require_user(&state, &headers)?;
+
+    if body.device_id.trim().is_empty()
+        || body.event_type.trim().is_empty()
+        || body.event_type.len() > 255
+        || body.txn_id.trim().is_empty()
+        || body.txn_id.len() > 255
+    {
+        return Err(ApiError::bad("invalid Matrix to-device request"));
+    }
+
+    state
+        .db
+        .matrix_device(&sender.id, &body.device_id)
+        .map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::bad("Matrix sending device is not registered"))?;
+
+    let messages = body
+        .messages
+        .as_object()
+        .ok_or_else(|| ApiError::bad("messages must be an object"))?;
+
+    let server_name = matrix_server_name(&headers)?;
+
+    for (matrix_user_id, devices) in messages {
+        let recipient = resolve_matrix_user(&state, matrix_user_id, &server_name)?;
+        let devices = devices
+            .as_object()
+            .ok_or_else(|| ApiError::bad("Matrix device messages must be objects"))?;
+
+        let recipient_uuid = Uuid::parse_str(&recipient.id)
+            .map_err(|_| ApiError::internal("recipient user id is invalid"))?;
+
+        for (recipient_device_id, content) in devices {
+            if recipient_device_id.is_empty() || recipient_device_id.len() > 255 {
+                return Err(ApiError::bad("invalid Matrix recipient device id"));
+            }
+
+            if state
+                .db
+                .matrix_device(&recipient.id, recipient_device_id)
+                .map_err(ApiError::db)?
+                .is_none()
+            {
+                continue;
+            }
+
+            let content_json = serde_json::to_string(content)
+                .map_err(|_| ApiError::bad("invalid Matrix to-device content"))?;
+
+            let event_id = state
+                .db
+                .enqueue_matrix_to_device(
+                    &recipient.id,
+                    recipient_device_id,
+                    &sender.id,
+                    &body.device_id,
+                    &body.event_type,
+                    &body.txn_id,
+                    &content_json,
+                )
+                .map_err(ApiError::db)?;
+
+            state.hub.send_to(
+                recipient_uuid,
+                ServerMessage::MatrixToDevice {
+                    event_id,
+                    sender_id: sender.id.clone(),
+                    sender_device_id: body.device_id.clone(),
+                    recipient_device_id: recipient_device_id.clone(),
+                    event_type: body.event_type.clone(),
+                    txn_id: body.txn_id.clone(),
+                    content: content.clone(),
+                },
+            );
+        }
+    }
+
+    Ok(Json(serde_json::json!({})))
+}
+
+async fn matrix_pending_to_device(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let events = state
+        .db
+        .matrix_to_device_for_user(&user.id)
+        .map_err(ApiError::db)?;
+
+    let events = events
+        .into_iter()
+        .map(|event| {
+            let content = serde_json::from_str::<serde_json::Value>(&event.content_json)
+                .unwrap_or_else(|_| serde_json::json!({}));
+            serde_json::json!({
+                "id": event.id,
+                "sender_id": event.sender_user_id,
+                "sender_device_id": event.sender_device_id,
+                "recipient_device_id": event.recipient_device_id,
+                "event_type": event.event_type,
+                "txn_id": event.txn_id,
+                "content": content,
+                "created_at": event.created_at
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(Json(serde_json::json!({ "events": events })))
+}
+
+async fn matrix_ack_to_device(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<MatrixToDeviceAckBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    if body.event_ids.len() > 512 {
+        return Err(ApiError::bad("too many Matrix to-device acknowledgements"));
+    }
+    let deleted = state
+        .db
+        .ack_matrix_to_device(&user.id, &body.event_ids)
+        .map_err(ApiError::db)?;
+    Ok(Json(serde_json::json!({ "deleted": deleted })))
 }
 
 fn parse_ice_servers(raw: Option<&str>) -> Result<serde_json::Value, &'static str> {
