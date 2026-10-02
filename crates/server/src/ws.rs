@@ -150,12 +150,12 @@ fn relay_crypto_resync(
         .user_by_id(peer_id)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| "unknown peer".to_string())?;
-    let peer_devices = state
+    let own_devices = state
         .db
-        .crypto_devices_for_user(peer_id)
+        .crypto_devices_for_user(&user.id)
         .map_err(|err| err.to_string())?;
-    if !peer_devices.iter().any(|device| device.device_id == device_id) {
-        return Err("recovery target device does not belong to peer".into());
+    if !own_devices.iter().any(|device| device.device_id == device_id) {
+        return Err("recovery target device does not belong to requester".into());
     }
     let recipient = Uuid::parse_str(&peer.id).map_err(|_| "invalid peer id".to_string())?;
     if state.hub.online_ids().iter().all(|id| id != &peer.id) {
