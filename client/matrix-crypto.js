@@ -9,7 +9,7 @@ import {
   TrustRequirement,
   UserId,
   initAsync,
-} from "/matrix-crypto-pkg/index.js";
+} from "/matrix-crypto-pkg/index.mjs";
 
 await initAsync();
 
@@ -183,6 +183,7 @@ export class LarptrixMatrixCrypto {
       JSON.stringify([rawEvent]),
       new DeviceLists(),
       new Map(),
+      new Set(),
     );
 
     this.processedToDeviceIds.add(event.id);
@@ -231,6 +232,16 @@ export class LarptrixMatrixCrypto {
     await this.machine.updateTrackedUsers(matrixUsers);
     await this.processOutgoingRequests();
 
+    const missingSessions = await this.machine.getMissingSessions(matrixUsers);
+    if (missingSessions) {
+      const response = await this.sendOutgoingRequest(missingSessions);
+      await this.machine.markRequestAsSent(
+        missingSessions.id,
+        missingSessions.type,
+        response,
+      );
+    }
+
     const room = new RoomId(roomId);
     const requests = await this.machine.shareRoomKey(
       room,
@@ -274,13 +285,19 @@ export class LarptrixMatrixCrypto {
       content: ciphertext,
     };
 
-    const result = await this.machine.decryptRoomEvent(
-      JSON.stringify(event),
-      new RoomId(roomId),
-      this.decryptionSettings,
-    );
-
-    return JSON.parse(result.event);
+    try {
+      const result = await this.machine.decryptRoomEvent(
+        JSON.stringify(event),
+        new RoomId(roomId),
+        this.decryptionSettings,
+      );
+      return JSON.parse(result.event);
+    } catch (err) {
+      // A missing Megolm room key should enqueue Matrix-style room-key
+      // recovery requests. Flush them immediately through our transport.
+      await this.processOutgoingRequests().catch(() => {});
+      throw err;
+    }
   }
 
   async refreshTrackedUser(internalUserId) {
