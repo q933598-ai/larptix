@@ -476,6 +476,10 @@ logoutBtn.addEventListener("click", async () => {
   meUsername.textContent = "";
   meAvatar.textContent = "?";
   meAvatar.replaceChildren();
+  await matrixCrypto?.close().catch(() => {});
+  matrixCrypto = null;
+  matrixServerName = null;
+  matrixCryptoReady = Promise.resolve(false);
   cryptoDevice?.free();
   cryptoDevice = null;
   cryptoDeviceBundle = null;
@@ -1110,6 +1114,21 @@ function signedIn(user) {
   cryptoReady = loadCryptoStatus().catch((err) => {
     cryptoProfileStatus.textContent = `E2E setup error: ${err.message}`;
     return false;
+  });
+  matrixCryptoReady = cryptoReady.then(async (ready) => {
+    if (!ready) return false;
+    try {
+      const matrixReady = await loadMatrixCryptoStatus();
+      if (matrixReady) {
+        cryptoProfileStatus.textContent = "E2E enabled with Matrix crypto.";
+      }
+      return matrixReady;
+    } catch (err) {
+      console.error("[E2E] Matrix crypto initialization failed", err);
+      cryptoProfileStatus.textContent =
+        "Classic E2E is available, but Matrix crypto could not initialize: " + err.message;
+      return false;
+    }
   });
   connect();
 }
