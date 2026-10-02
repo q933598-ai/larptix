@@ -207,18 +207,14 @@
           <label for="profile-about">About</label>
           <textarea id="profile-about" rows="3" maxlength="160" placeholder="A little about you"></textarea>
         </section>
-        <section class="profile-section profile-music-section">
-          <h3>Music</h3>
-          <p id="profile-music-name" class="crypto-status">No track selected</p>
-          <audio id="profile-music-player" controls preload="none" hidden></audio>
-          <div class="profile-actions profile-music-actions">
-            <label class="photo-btn profile-music-upload">
-              Choose track
-              <input id="profile-music-file" type="file" accept="audio/mpeg,audio/ogg,audio/wav,audio/webm,audio/mp4" hidden />
-            </label>
-            <button id="profile-music-remove" type="button" class="ghost" hidden>Remove</button>
-          </div>
-          <p id="profile-music-error" class="error" hidden></p>
+        <section class="profile-section">
+          <h3>Status</h3>
+          <label for="profile-activity">Custom status</label>
+          <input id="profile-activity" type="text" maxlength="120" placeholder="What are you doing?" />
+          <label class="key-saved-label">
+            <input id="show-music-activity" type="checkbox" checked />
+            Show what I'm listening to as my status
+          </label>
         </section>
         <section class="profile-section">
           <h3>Account</h3>
@@ -255,11 +251,7 @@
         <h3>About me</h3>
         <p id="peer-profile-about"></p>
       </section>
-      <section id="peer-music-section" class="profile-section" hidden>
-        <h3>Music</h3>
-        <p id="peer-profile-music-name"></p>
-        <audio id="peer-profile-music" controls preload="none" hidden></audio>
-      </section>
+      
     </dialog>
 
     <dialog id="create-group-dialog">
