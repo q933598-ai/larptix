@@ -15,6 +15,7 @@ const CIPHER_VERSION: u8 = 1;
 
 const OTK_BATCH_SIZE: usize = 10;
 const OTK_MINIMUM: usize = 3;
+const MAX_SESSIONS_PER_PEER: usize = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct PublicOneTimeKey {
@@ -284,10 +285,7 @@ impl CryptoDevice {
             .create_outbound_session(SessionConfig::version_1(), identity_key, one_time_key)
             .map_err(|_| JsValue::from_str("could not establish encrypted session"))?;
 
-        self.sessions
-            .entry(peer_device_id.to_string())
-            .or_default()
-            .push(session);
+        push_session(self.sessions.entry(peer_device_id.to_string()).or_default(), session);
 
         Ok(())
     }
@@ -405,10 +403,7 @@ impl CryptoDevice {
         let plaintext = String::from_utf8(result.plaintext)
             .map_err(|_| JsValue::from_str("decrypted message is not valid UTF-8"))?;
 
-        self.sessions
-            .entry(peer_device_id.to_string())
-            .or_default()
-            .push(result.session);
+        push_session(self.sessions.entry(peer_device_id.to_string()).or_default(), result.session);
 
         self.ensure_otk_pool()?;
 
@@ -443,11 +438,21 @@ impl CryptoDevice {
     }
 }
 
-fn decrypt_with_sessions(sessions: &mut [Session], ciphertext: &str) -> Option<Vec<u8>> {
+fn push_session(sessions: &mut Vec<Session>, session: Session) {
+    sessions.push(session);
+    if sessions.len() > MAX_SESSIONS_PER_PEER {
+        let overflow = sessions.len() - MAX_SESSIONS_PER_PEER;
+        sessions.drain(0..overflow);
+    }
+}
+
+fn decrypt_with_sessions(sessions: &mut Vec<Session>, ciphertext: &str) -> Option<Vec<u8>> {
     let message = Message::from_base64(ciphertext).ok()?;
 
-    for session in sessions.iter_mut().rev() {
-        if let Ok(plaintext) = session.decrypt(&OlmMessage::Normal(message.clone())) {
+    for index in (0..sessions.len()).rev() {
+        if let Ok(plaintext) = sessions[index].decrypt(&OlmMessage::Normal(message.clone())) {
+            let session = sessions.remove(index);
+            sessions.push(session);
             return Some(plaintext);
         }
     }
@@ -455,11 +460,13 @@ fn decrypt_with_sessions(sessions: &mut [Session], ciphertext: &str) -> Option<V
     None
 }
 
-fn decrypt_prekey_with_sessions(sessions: &mut [Session], ciphertext: &str) -> Option<Vec<u8>> {
+fn decrypt_prekey_with_sessions(sessions: &mut Vec<Session>, ciphertext: &str) -> Option<Vec<u8>> {
     let message = PreKeyMessage::from_base64(ciphertext).ok()?;
 
-    for session in sessions.iter_mut().rev() {
-        if let Ok(plaintext) = session.decrypt(&OlmMessage::PreKey(message.clone())) {
+    for index in (0..sessions.len()).rev() {
+        if let Ok(plaintext) = sessions[index].decrypt(&OlmMessage::PreKey(message.clone())) {
+            let session = sessions.remove(index);
+            sessions.push(session);
             return Some(plaintext);
         }
     }
