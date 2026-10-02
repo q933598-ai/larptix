@@ -2131,7 +2131,7 @@ async function displayEncryptedMessage(message, bodyElement) {
 }
 
 async function handleCryptoResyncRequest(request) {
-  if (!cryptoEnabled || !cryptoDevice || !me || request?.requester_id !== me.user_id) return;
+  if (!cryptoEnabled || !cryptoDevice || !me || !request?.requester_id || request.requester_id === me.user_id) return;
 
   try {
     await cryptoReady;
