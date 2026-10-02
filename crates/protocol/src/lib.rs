@@ -31,6 +31,16 @@ pub enum ClientMessage {
         #[serde(default) ]
         attachment_id: Option<String>,
     },
+    /// Deliver a freshly encrypted copy of a message to a specific device
+    /// without creating another chat history entry.
+    CryptoResyncResponse {
+        peer_id: String,
+        message_id: String,
+        device_id: String,
+        body: String,
+        #[serde(default) ]
+        attachment_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +70,14 @@ pub enum ServerMessage {
     },
     CryptoResync {
         requester_id: String,
+        message_id: String,
+        device_id: String,
+        body: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        attachment_id: Option<String>,
+    },
+    CryptoResyncResponse {
+        sender_id: String,
         message_id: String,
         device_id: String,
         body: String,
