@@ -131,6 +131,7 @@ fn restore_state_internal(
         sessions,
         recovery_key,
         published_one_time_keys: state.published_one_time_keys,
+        published_fallback_keys: state.published_fallback_keys,
     })
 }
 
