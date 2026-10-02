@@ -237,10 +237,10 @@ fn relay_crypto_resync_response(
 
     let envelope: serde_json::Value = serde_json::from_str(ciphertext)
         .map_err(|_| "crypto recovery response contains invalid ciphertext envelope".to_string())?;
-    if envelope.get("version") != Some(&serde_json::Value::from(1))
-        || envelope.get("message_type")
-            != Some(&serde_json::Value::String("prekey".to_string()))
-        || envelope.get("ciphertext")
+    if envelope.get("version").and_then(serde_json::Value::as_u64) != Some(1)
+        || envelope.get("message_type").and_then(serde_json::Value::as_str) != Some("prekey")
+        || envelope
+            .get("ciphertext")
             .and_then(serde_json::Value::as_str)
             .is_none()
     {
