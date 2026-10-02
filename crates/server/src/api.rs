@@ -432,7 +432,16 @@ async fn matrix_keys_upload(
         )
         .map_err(ApiError::db)?;
 
-    Ok(Json(serde_json::json!({})))
+    let available = state
+        .db
+        .matrix_one_time_key_count(&body.device_id)
+        .map_err(ApiError::db)?;
+
+    Ok(Json(serde_json::json!({
+        "one_time_key_counts": {
+            "signed_curve25519": available
+        }
+    })))
 }
 
 async fn matrix_keys_query(
