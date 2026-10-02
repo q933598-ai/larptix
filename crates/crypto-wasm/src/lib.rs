@@ -840,6 +840,38 @@ mod tests {
     }
 
     #[test]
+    fn fallback_key_can_establish_a_new_session() {
+        let alice = Account::new();
+        let mut bob = Account::new();
+        bob.generate_fallback_key();
+
+        let fallback_key = *bob.fallback_key().values().next().unwrap();
+
+        let mut alice_session = alice
+            .create_outbound_session(
+                SessionConfig::version_1(),
+                bob.curve25519_key(),
+                fallback_key,
+            )
+            .unwrap();
+
+        let OlmMessage::PreKey(pre_key) = alice_session.encrypt("fallback hello").unwrap() else {
+            panic!("fallback session must start with a pre-key message");
+        };
+
+        let inbound = bob
+            .create_inbound_session(SessionConfig::version_1(), alice.curve25519_key(), &pre_key)
+            .unwrap();
+
+        assert_eq!(String::from_utf8(inbound.plaintext).unwrap(), "fallback hello");
+        assert_eq!(alice_session.session_id(), inbound.session.session_id());
+
+        // The fallback key remains available for another session, unlike an OTK.
+        let fallback_again = *bob.fallback_key().values().next().unwrap();
+        assert_eq!(fallback_again, fallback_key);
+    }
+
+    #[test]
     fn recovery_reestablishes_a_new_olm_session_with_a_prekey() {
         let recovery_key = base64_encode(&[13u8; 32]);
         let mut alice = CryptoDevice::create(&recovery_key).unwrap();
