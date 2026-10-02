@@ -551,54 +551,70 @@ composer.addEventListener("submit", async (event) => {
             ciphertexts,
           });
         } else {
-          const result = await api(
-            "GET",
-            `/api/users/${encodeURIComponent(peerId)}/crypto-devices`
-          );
+          await matrixCryptoReady;
 
-          const devices = Array.isArray(result?.devices) ? result.devices : [];
+          if (matrixCrypto) {
+            const roomId = await matrixCrypto.roomIdForDm(peerId);
+            await matrixCrypto.prepareRoom(roomId, [peerId]);
+            const ciphertext = await matrixCrypto.encrypt(roomId, payload);
 
-          if (devices.length === 0) {
-            throw new Error("Peer has no E2E devices.");
-          }
+            encryptedBody = JSON.stringify({
+              version: 3,
+              message_type: "matrix",
+              sender_device_id: matrixCrypto.deviceId,
+              room_id: roomId,
+              ciphertext,
+            });
+          } else {
+            const result = await api(
+              "GET",
+              `/api/users/${encodeURIComponent(peerId)}/crypto-devices`
+            );
 
-          const ciphertexts = {};
+            const devices = Array.isArray(result?.devices) ? result.devices : [];
 
-          for (const bundle of devices) {
-            if (!bundle || typeof bundle.device_id !== "string" || !bundle.device_id) {
-              throw new Error("Peer has an invalid E2E device bundle.");
+            if (devices.length === 0) {
+              throw new Error("Peer has no E2E devices.");
             }
 
-            if (!(await ensurePeerFingerprint(peer, bundle))) {
-              throw new Error(`Device ${bundle.device_id} could not be verified.`);
-            }
+            const ciphertexts = {};
 
-            const deviceId = bundle.device_id;
-
-            if (!cryptoDevice.has_session(deviceId)) {
-              const claimedBundle = await claimPeerOneTimeKey(peerId, deviceId);
-              if (!(await ensurePeerFingerprint(peer, claimedBundle))) {
-                throw new Error(`Device ${deviceId} could not be verified.`);
+            for (const bundle of devices) {
+              if (!bundle || typeof bundle.device_id !== "string" || !bundle.device_id) {
+                throw new Error("Peer has an invalid E2E device bundle.");
               }
-              cryptoDevice.establish_session(
+
+              if (!(await ensurePeerFingerprint(peer, bundle))) {
+                throw new Error(`Device ${bundle.device_id} could not be verified.`);
+              }
+
+              const deviceId = bundle.device_id;
+
+              if (!cryptoDevice.has_session(deviceId)) {
+                const claimedBundle = await claimPeerOneTimeKey(peerId, deviceId);
+                if (!(await ensurePeerFingerprint(peer, claimedBundle))) {
+                  throw new Error(`Device ${deviceId} could not be verified.`);
+                }
+                cryptoDevice.establish_session(
+                  deviceId,
+                  JSON.stringify(claimedBundle),
+                  claimedBundle.fingerprint
+                );
+              }
+
+              ciphertexts[deviceId] = cryptoDevice.encrypt(
                 deviceId,
-                JSON.stringify(claimedBundle),
-                claimedBundle.fingerprint
+                payload
               );
             }
 
-            ciphertexts[deviceId] = cryptoDevice.encrypt(
-              deviceId,
-              payload
-            );
+            encryptedBody = JSON.stringify({
+              version: 2,
+              message_type: "message",
+              sender_device_id: cryptoDevice.device_id(),
+              ciphertexts,
+            });
           }
-
-          encryptedBody = JSON.stringify({
-            version: 2,
-            message_type: "message",
-            sender_device_id: cryptoDevice.device_id(),
-            ciphertexts,
-          });
         }
 
         await persistCryptoState();
@@ -1934,6 +1950,20 @@ function parseCryptoEnvelope(raw) {
       return envelope;
     }
 
+    if (
+      envelope?.version === 3
+      && envelope.message_type === "matrix"
+      && typeof envelope.sender_device_id === "string"
+      && envelope.sender_device_id
+      && typeof envelope.room_id === "string"
+      && envelope.room_id
+      && envelope.ciphertext
+      && typeof envelope.ciphertext === "object"
+      && !Array.isArray(envelope.ciphertext)
+    ) {
+      return envelope;
+    }
+
     return null;
   } catch {
     return null;
@@ -1943,6 +1973,37 @@ function parseCryptoEnvelope(raw) {
 console.log("[E2E] displayEncryptedMessage loaded");
 
 async function displayEncryptedMessage(message, bodyElement, { allowRecovery = true } = {}) {
+  const matrixEnvelope = parseCryptoEnvelope(message.body);
+  if (matrixEnvelope?.version === 3 && matrixEnvelope.message_type === "matrix") {
+    try {
+      await matrixCryptoReady;
+      if (!matrixCrypto) throw new Error("Matrix E2E is not initialized.");
+      const decrypted = await matrixCrypto.decrypt(matrixEnvelope.room_id, {
+        id: message.id,
+        sender_id: message.sender_id,
+        created_at: message.created_at,
+        body: matrixEnvelope,
+      });
+      const payload = decrypted?.content ?? decrypted;
+      bodyElement.textContent =
+        typeof payload?.text === "string" ? payload.text : JSON.stringify(payload);
+
+      if (payload?.file && message.attachment) {
+        try {
+          await renderEncryptedAttachment(message.attachment, payload.file, bodyElement.parentElement);
+        } catch (err) {
+          bodyElement.textContent =
+            `Could not open encrypted attachment: ${err?.message || String(err)}`;
+        }
+      }
+      return;
+    } catch (err) {
+      bodyElement.textContent =
+        `Could not decrypt Matrix message: ${err?.message || String(err)}`;
+      return;
+    }
+  }
+
   if (message.sender_id === me?.user_id) {
     await cryptoReady;
     const cached = sentPlaintextByCiphertext.get(message.body)
