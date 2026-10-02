@@ -766,6 +766,88 @@ mod tests {
     }
 
     #[test]
+    fn recovery_reestablishes_a_new_olm_session_with_a_prekey() {
+        let recovery_key = base64_encode(&[13u8; 32]);
+        let mut alice = CryptoDevice::create(&recovery_key).unwrap();
+        let mut bob = CryptoDevice::create(&recovery_key).unwrap();
+
+        let alice_bundle = alice.public_bundle_json().unwrap();
+        let alice_fingerprint = alice.fingerprint();
+
+        let bob_bundle = bob.public_bundle_json().unwrap();
+        let bob_fingerprint = bob.fingerprint();
+
+        // Establish and consume the first session/one-time key.
+        alice
+            .establish_session(&bob.device_id, &bob_bundle, &bob_fingerprint)
+            .unwrap();
+
+        let first = alice.encrypt(&bob.device_id, "before recovery").unwrap();
+        assert_eq!(
+            bob.decrypt(
+                &alice.device_id,
+                &first,
+                &alice_bundle,
+                &alice_fingerprint,
+            )
+            .unwrap(),
+            "before recovery"
+        );
+        assert_eq!(bob.session_count(&alice.device_id), 1);
+
+        // A recovery response creates a fresh outbound session using a new
+        // one-time key. The first message on that session must be a pre-key
+        // message, which lets the receiver establish its matching inbound
+        // session without knowing anything about the old broken session.
+        let refreshed_bob_bundle = bob.public_bundle_json().unwrap();
+        alice
+            .establish_session(
+                &bob.device_id,
+                &refreshed_bob_bundle,
+                &bob_fingerprint,
+            )
+            .unwrap();
+
+        let recovered = alice
+            .encrypt(&bob.device_id, "recovered payload")
+            .unwrap();
+
+        let envelope: super::CipherEnvelope = serde_json::from_str(&recovered).unwrap();
+        assert_eq!(envelope.message_type, "prekey");
+
+        assert_eq!(
+            bob.decrypt(
+                &alice.device_id,
+                &recovered,
+                &alice_bundle,
+                &alice_fingerprint,
+            )
+            .unwrap(),
+            "recovered payload"
+        );
+
+        assert_eq!(bob.session_count(&alice.device_id), 2);
+
+        let after_recovery = alice
+            .encrypt(&bob.device_id, "after recovery")
+            .unwrap();
+        let after_envelope: super::CipherEnvelope =
+            serde_json::from_str(&after_recovery).unwrap();
+        assert_eq!(after_envelope.message_type, "message");
+
+        assert_eq!(
+            bob.decrypt(
+                &alice.device_id,
+                &after_recovery,
+                &alice_bundle,
+                &alice_fingerprint,
+            )
+            .unwrap(),
+            "after recovery"
+        );
+    }
+
+    #[test]
     fn delayed_messages_keep_old_sessions() {
         let recovery_key = base64_encode(&[7u8; 32]);
 
