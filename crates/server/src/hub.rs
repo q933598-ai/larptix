@@ -57,12 +57,18 @@ impl Hub {
         }
     }
 
-    pub fn send_to(&self, user_id: Uuid, message: ServerMessage) {
+    pub fn send_to(&self, user_id: Uuid, message: ServerMessage) -> usize {
         let peers = self.peers.lock().expect("hub lock");
         if let Some(peer) = peers.get(&user_id) {
+            let mut delivered = 0;
             for conn in &peer.conns {
-                let _ = conn.send(message.clone());
+                if conn.send(message.clone()).is_ok() {
+                    delivered += 1;
+                }
             }
+            delivered
+        } else {
+            0
         }
     }
 }
