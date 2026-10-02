@@ -396,18 +396,54 @@ impl Database {
         fallback_keys_json: &str,
     ) -> rusqlite::Result<MatrixCryptoDeviceRow> {
         let now = crate::now_ms();
-        let conn = self.conn.lock().expect("db lock");
-        let created_at = conn
+        let mut conn = self.conn.lock().expect("db lock");
+        let tx = conn.transaction()?;
+
+        let existing: Option<(i64, String, String)> = tx
             .query_row(
-                "SELECT created_at FROM matrix_crypto_devices
+                "SELECT created_at, one_time_keys_json, fallback_keys_json
+                 FROM matrix_crypto_devices
                  WHERE device_id = ?1 AND user_id = ?2",
                 params![device_id, user_id],
-                |row| row.get::<_, i64>(0),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
-            .optional()?
-            .unwrap_or(now);
+            .optional()?;
 
-        conn.execute(
+        let created_at = existing.as_ref().map(|row| row.0).unwrap_or(now);
+
+        let merge_maps = |existing_json: &str, incoming_json: &str, replace_if_nonempty: bool| {
+            let mut merged = serde_json::Map::new();
+
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(existing_json) {
+                if let Some(map) = value.as_object() {
+                    for (key, value) in map {
+                        merged.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(incoming_json) {
+                if let Some(map) = value.as_object() {
+                    if replace_if_nonempty && !map.is_empty() {
+                        merged.clear();
+                    }
+                    for (key, value) in map {
+                        merged.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+
+            serde_json::Value::Object(merged).to_string()
+        };
+
+        let existing_otks = existing.as_ref().map(|row| row.1.as_str()).unwrap_or("{}");
+        let existing_fallbacks = existing.as_ref().map(|row| row.2.as_str()).unwrap_or("{}");
+        let merged_otks = merge_maps(existing_otks, one_time_keys_json, false);
+        // A newly uploaded fallback-key set represents the current fallback
+        // key set and therefore replaces the previous set when non-empty.
+        let merged_fallbacks = merge_maps(existing_fallbacks, fallback_keys_json, true);
+
+        tx.execute(
             "INSERT INTO matrix_crypto_devices (
                 device_id, user_id, device_keys_json, one_time_keys_json,
                 fallback_keys_json, created_at, updated_at
@@ -423,19 +459,21 @@ impl Database {
                 device_id,
                 user_id,
                 device_keys_json,
-                one_time_keys_json,
-                fallback_keys_json,
+                merged_otks,
+                merged_fallbacks,
                 created_at,
                 now
             ],
         )?;
 
+        tx.commit()?;
+
         Ok(MatrixCryptoDeviceRow {
             device_id: device_id.to_string(),
             user_id: user_id.to_string(),
             device_keys_json: device_keys_json.to_string(),
-            one_time_keys_json: one_time_keys_json.to_string(),
-            fallback_keys_json: fallback_keys_json.to_string(),
+            one_time_keys_json: merged_otks,
+            fallback_keys_json: merged_fallbacks,
             created_at,
             updated_at: now,
         })
