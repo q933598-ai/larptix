@@ -975,6 +975,24 @@ mod tests {
 
         assert_eq!(bob.session_count(&alice.device_id), 2);
 
+        // A fresh outbound Olm session continues to emit pre-key messages
+        // until the sender receives at least one message back. Complete the
+        // ratchet handshake before asserting the next message is normal.
+        let bob_reply = bob
+            .encrypt(&alice.device_id, "recovery acknowledgement")
+            .unwrap();
+        assert_eq!(
+            alice
+                .decrypt(
+                    &bob.device_id,
+                    &bob_reply,
+                    &bob_bundle,
+                    &bob_fingerprint,
+                )
+                .unwrap(),
+            "recovery acknowledgement"
+        );
+
         let after_recovery = alice
             .encrypt(&bob.device_id, "after recovery")
             .unwrap();
