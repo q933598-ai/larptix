@@ -526,9 +526,11 @@ async fn matrix_keys_claim(
             {
                 let value = serde_json::from_str::<serde_json::Value>(&value_json)
                     .map_err(|_| ApiError::internal("stored Matrix one-time key is invalid"))?;
+                let mut device_result = serde_json::Map::new();
+                device_result.insert(key_id, value);
                 user_result.insert(
                     device_id.clone(),
-                    serde_json::json!({ key_id: value }),
+                    serde_json::Value::Object(device_result),
                 );
             }
         }
