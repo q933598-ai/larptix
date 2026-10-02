@@ -28,8 +28,14 @@
           <button id="create-group-open" type="button" class="ghost" title="Create group">＋ Group</button>
         </div>
         <input id="user-search" class="user-search" type="search" placeholder="Find by name or @username" autocomplete="off" />
+        <nav class="side-nav" aria-label="Larptix sections">
+          <button id="chat-view-open" type="button" class="side-nav-button active">▣ <span>Chats</span></button>
+          <button id="music-library-open" type="button" class="side-nav-button">♫ <span>Music Library</span></button>
+        </nav>
         <ul id="users"></ul>
       </aside>
+
+      <div id="chat-resizer" class="chat-resizer" role="separator" aria-label="Resize chat list" aria-orientation="vertical" tabindex="0"></div>
 
       <main class="chat">
         <div id="empty" class="empty">Pick someone to start a private chat.</div>
@@ -105,6 +111,75 @@
           <input id="body" type="text" maxlength="4000" autocomplete="off" placeholder="Write a message" />
           <button type="submit" class="send-button" title="Send message" aria-label="Send message">📨</button>
         </form>
+
+        <section id="music-library" class="music-library" hidden aria-label="Music Library">
+          <header class="music-library-header">
+            <div>
+              <p class="eyebrow">LOCAL MEDIA</p>
+              <h2>Music Library</h2>
+              <p class="music-library-subtitle">Your tracks stay in this browser. Nothing is uploaded to the server.</p>
+            </div>
+            <div class="music-library-actions">
+              <label class="music-upload-button">
+                <span>＋ Add music</span>
+                <input id="music-library-file" type="file" accept="audio/*" multiple hidden />
+              </label>
+              <button id="music-library-refresh" type="button" class="ghost">Refresh</button>
+            </div>
+          </header>
+
+          <div class="music-library-toolbar">
+            <input id="music-library-search" type="search" placeholder="Search tracks…" autocomplete="off" />
+            <div class="music-library-stats">
+              <span id="music-library-count">0 tracks</span>
+              <span class="music-library-dot">•</span>
+              <span id="music-library-total">0:00</span>
+            </div>
+          </div>
+
+          <div id="music-library-dropzone" class="music-dropzone">
+            <span class="music-dropzone-icon">♫</span>
+            <strong>Drop audio here</strong>
+            <span>MP3, OGG, WAV, FLAC, WebM and other browser-supported formats</span>
+          </div>
+
+          <div class="music-library-content">
+            <div class="music-track-list-wrap">
+              <div class="music-section-title">
+                <span>Library</span>
+                <button id="music-library-clear" type="button" class="ghost" hidden>Clear library</button>
+              </div>
+              <ol id="music-track-list" class="music-track-list"></ol>
+              <p id="music-library-empty" class="music-library-empty">Your library is empty. Add some music.</p>
+            </div>
+          </div>
+
+          <footer id="music-player" class="music-player" hidden>
+            <div class="music-player-track">
+              <div id="music-player-cover" class="music-player-cover">♫</div>
+              <div class="music-player-copy">
+                <strong id="music-player-name">Nothing playing</strong>
+                <span id="music-player-meta">Select a track from your library</span>
+              </div>
+            </div>
+            <div class="music-player-main">
+              <div class="music-player-controls">
+                <button id="music-prev" type="button" class="music-control" title="Previous">◀</button>
+                <button id="music-play" type="button" class="music-control music-play-control" title="Play / pause">▶</button>
+                <button id="music-next" type="button" class="music-control" title="Next">▶</button>
+              </div>
+              <input id="music-progress" class="music-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="Track progress" />
+            </div>
+            <div class="music-player-side">
+              <span id="music-player-time">0:00 / 0:00</span>
+              <button id="music-shuffle" type="button" class="music-control" title="Shuffle" aria-pressed="false">⤨</button>
+              <button id="music-repeat" type="button" class="music-control" title="Repeat" aria-pressed="false">↻</button>
+              <input id="music-volume" class="music-volume" type="range" min="0" max="1" value="0.8" step="0.01" aria-label="Volume" />
+            </div>
+          </footer>
+
+          <audio id="music-audio" preload="metadata"></audio>
+        </section>
       </main>
     </div>
 
@@ -301,6 +376,8 @@
       </div>
     </dialog>
 
+    <script src="/layout.js" defer></script>
+    <script src="/music-library.js" defer></script>
     <script src="/app.js" type="module"></script>
   </body>
 </html>

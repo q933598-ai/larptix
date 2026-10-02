@@ -1,0 +1,382 @@
+(() => {
+  const DB_NAME = "larptrix-music-library";
+  const DB_VERSION = 1;
+  const STORE = "tracks";
+  const MAX_FILE_SIZE = 200 * 1024 * 1024;
+
+  const els = {};
+  let dbPromise;
+  let tracks = [];
+  let filtered = [];
+  let currentIndex = -1;
+  let currentUrl = null;
+  let shuffle = false;
+  let repeat = false;
+
+  const $ = (id) => document.getElementById(id);
+
+  function openDb() {
+    if (dbPromise) return dbPromise;
+    dbPromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(DB_NAME, DB_VERSION);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(STORE)) {
+          const store = db.createObjectStore(STORE, { keyPath: "id" });
+          store.createIndex("addedAt", "addedAt");
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    return dbPromise;
+  }
+
+  async function transaction(mode, action) {
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, mode);
+      const store = tx.objectStore(STORE);
+      let request;
+      try {
+        request = action(store);
+      } catch (error) {
+        reject(error);
+        return;
+      }
+      tx.oncomplete = () => resolve(request?.result);
+      tx.onerror = () => reject(tx.error || request?.error);
+      tx.onabort = () => reject(tx.error || new Error("Music database transaction aborted."));
+    });
+  }
+
+  async function listTracks() {
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const request = db.transaction(STORE, "readonly").objectStore(STORE).index("addedAt").getAll();
+      request.onsuccess = () => resolve(request.result.sort((a, b) => b.addedAt - a.addedAt));
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  const formatTime = (seconds) => {
+    if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+    const value = Math.floor(seconds);
+    const minutes = Math.floor(value / 60);
+    return `${minutes}:${String(value % 60).padStart(2, "0")}`;
+  };
+
+  const formatSize = (bytes) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  };
+
+  const trackDuration = (track) => Number.isFinite(track.duration) ? track.duration : 0;
+
+  function updateStats() {
+    const count = tracks.length;
+    const total = tracks.reduce((sum, track) => sum + trackDuration(track), 0);
+    els.count.textContent = `${count} ${count === 1 ? "track" : "tracks"}`;
+    els.total.textContent = formatTime(total);
+    els.clear.hidden = count === 0;
+  }
+
+  function render() {
+    const query = els.search.value.trim().toLowerCase();
+    filtered = tracks.filter((track) => track.name.toLowerCase().includes(query));
+    els.list.replaceChildren();
+
+    filtered.forEach((track, index) => {
+      const originalIndex = tracks.findIndex((item) => item.id === track.id);
+      const li = document.createElement("li");
+      li.className = "music-track";
+      if (originalIndex === currentIndex) li.classList.add("playing");
+
+      const number = document.createElement("span");
+      number.className = "music-track-number";
+      number.textContent = originalIndex === currentIndex ? "♫" : String(index + 1).padStart(2, "0");
+
+      const copy = document.createElement("div");
+      copy.className = "music-track-copy";
+      const name = document.createElement("strong");
+      name.textContent = track.name;
+      const meta = document.createElement("span");
+      meta.textContent = `${formatTime(track.duration)} · ${formatSize(track.size)}`;
+      copy.append(name, meta);
+
+      const size = document.createElement("span");
+      size.className = "music-track-size";
+      size.textContent = new Date(track.addedAt).toLocaleDateString();
+
+      const play = document.createElement("button");
+      play.type = "button";
+      play.className = "music-track-play";
+      play.title = originalIndex === currentIndex && !els.audio.paused ? "Pause" : "Play";
+      play.textContent = originalIndex === currentIndex && !els.audio.paused ? "Ⅱ" : "▶";
+      play.addEventListener("click", () => playTrack(originalIndex));
+
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "music-track-remove";
+      remove.title = "Remove from library";
+      remove.textContent = "×";
+      remove.addEventListener("click", async () => removeTrack(track.id));
+
+      li.append(number, copy, size, play, remove);
+      els.list.append(li);
+    });
+
+    els.empty.hidden = filtered.length !== 0;
+    els.empty.textContent = query
+      ? "No tracks match your search."
+      : "Your library is empty. Add some music.";
+    updateStats();
+  }
+
+  async function refresh() {
+    tracks = await listTracks();
+    if (currentIndex >= tracks.length) currentIndex = -1;
+    render();
+  }
+
+  async function addFiles(fileList) {
+    const files = [...fileList].filter((file) => file.type.startsWith("audio/"));
+    if (!files.length) return;
+
+    for (const file of files) {
+      if (file.size > MAX_FILE_SIZE) {
+        alert(`Skipping ${file.name}: maximum size is 200 MB.`);
+        continue;
+      }
+      const duration = await readDuration(file).catch(() => 0);
+      const track = {
+        id: crypto.randomUUID(),
+        name: file.name.replace(/\.[^.]+$/, ""),
+        filename: file.name,
+        type: file.type || "audio/mpeg",
+        size: file.size,
+        duration,
+        addedAt: Date.now(),
+        blob: file,
+      };
+      await transaction("readwrite", (store) => store.put(track));
+    }
+
+    await refresh();
+  }
+
+  function readDuration(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const audio = document.createElement("audio");
+      audio.preload = "metadata";
+      audio.onloadedmetadata = () => {
+        const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+        URL.revokeObjectURL(url);
+        resolve(duration);
+      };
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error("Could not read audio metadata."));
+      };
+      audio.src = url;
+    });
+  }
+
+  async function removeTrack(id) {
+    const index = tracks.findIndex((track) => track.id === id);
+    if (index < 0) return;
+    if (!confirm(`Remove “${tracks[index].name}” from your local library?`)) return;
+
+    if (currentIndex === index) {
+      els.audio.pause();
+      els.audio.removeAttribute("src");
+      if (currentUrl) URL.revokeObjectURL(currentUrl);
+      currentUrl = null;
+      currentIndex = -1;
+      updatePlayer();
+    } else if (currentIndex > index) {
+      currentIndex -= 1;
+    }
+
+    await transaction("readwrite", (store) => store.delete(id));
+    await refresh();
+  }
+
+  function chooseNext(direction) {
+    if (!tracks.length) return -1;
+    if (shuffle) return Math.floor(Math.random() * tracks.length);
+    if (currentIndex < 0) return direction > 0 ? 0 : tracks.length - 1;
+    return (currentIndex + direction + tracks.length) % tracks.length;
+  }
+
+  function loadTrack(index, autoplay = true) {
+    if (index < 0 || index >= tracks.length) return;
+    currentIndex = index;
+    const track = tracks[index];
+    if (currentUrl) URL.revokeObjectURL(currentUrl);
+    currentUrl = URL.createObjectURL(track.blob);
+    els.audio.src = currentUrl;
+    els.audio.volume = Number(els.volume.value);
+    els.name.textContent = track.name;
+    els.meta.textContent = `${track.filename} · ${formatSize(track.size)}`;
+    els.player.hidden = false;
+    if (autoplay) {
+      els.audio.play().catch(() => {});
+    }
+    updatePlayer();
+    render();
+  }
+
+  function playTrack(index) {
+    if (currentIndex === index && els.audio.src) {
+      if (els.audio.paused) els.audio.play().catch(() => {});
+      else els.audio.pause();
+      return;
+    }
+    loadTrack(index, true);
+  }
+
+  function updatePlayer() {
+    if (currentIndex < 0 || !tracks[currentIndex]) {
+      els.player.hidden = true;
+      els.play.textContent = "▶";
+      els.time.textContent = "0:00 / 0:00";
+      return;
+    }
+    const track = tracks[currentIndex];
+    els.player.hidden = false;
+    els.name.textContent = track.name;
+    els.meta.textContent = `${track.filename} · ${formatSize(track.size)}`;
+    els.play.textContent = els.audio.paused ? "▶" : "Ⅱ";
+    els.shuffle.setAttribute("aria-pressed", String(shuffle));
+    els.repeat.setAttribute("aria-pressed", String(repeat));
+  }
+
+  function next(direction = 1) {
+    const index = chooseNext(direction);
+    if (index >= 0) loadTrack(index, true);
+  }
+
+  function wire() {
+    els.chat = document.querySelector(".chat");
+    els.library = $("music-library");
+    els.chatOpen = $("chat-view-open");
+    els.libraryOpen = $("music-library-open");
+    els.file = $("music-library-file");
+    els.search = $("music-library-search");
+    els.refresh = $("music-library-refresh");
+    els.clear = $("music-library-clear");
+    els.dropzone = $("music-library-dropzone");
+    els.list = $("music-track-list");
+    els.empty = $("music-library-empty");
+    els.count = $("music-library-count");
+    els.total = $("music-library-total");
+    els.player = $("music-player");
+    els.audio = $("music-audio");
+    els.name = $("music-player-name");
+    els.meta = $("music-player-meta");
+    els.play = $("music-play");
+    els.prev = $("music-prev");
+    els.next = $("music-next");
+    els.progress = $("music-progress");
+    els.time = $("music-player-time");
+    els.shuffle = $("music-shuffle");
+    els.repeat = $("music-repeat");
+    els.volume = $("music-volume");
+
+    els.chatOpen.addEventListener("click", () => setMode(false));
+    els.libraryOpen.addEventListener("click", () => setMode(true));
+    els.file.addEventListener("change", () => {
+      void addFiles(els.file.files);
+      els.file.value = "";
+    });
+    els.search.addEventListener("input", render);
+    els.refresh.addEventListener("click", () => void refresh());
+    els.clear.addEventListener("click", async () => {
+      if (!tracks.length || !confirm("Remove every track from your local library?")) return;
+      await transaction("readwrite", (store) => store.clear());
+      els.audio.pause();
+      els.audio.removeAttribute("src");
+      if (currentUrl) URL.revokeObjectURL(currentUrl);
+      currentUrl = null;
+      currentIndex = -1;
+      await refresh();
+      updatePlayer();
+    });
+
+    ["dragenter", "dragover"].forEach((type) => els.dropzone.addEventListener(type, (event) => {
+      event.preventDefault();
+      els.dropzone.classList.add("dragging");
+    }));
+    ["dragleave", "drop"].forEach((type) => els.dropzone.addEventListener(type, (event) => {
+      event.preventDefault();
+      els.dropzone.classList.remove("dragging");
+    }));
+    els.dropzone.addEventListener("drop", (event) => void addFiles(event.dataTransfer.files));
+
+    els.play.addEventListener("click", () => {
+      if (currentIndex < 0) {
+        next(1);
+      } else if (els.audio.paused) {
+        els.audio.play().catch(() => {});
+      } else {
+        els.audio.pause();
+      }
+    });
+    els.prev.addEventListener("click", () => next(-1));
+    els.next.addEventListener("click", () => next(1));
+    els.shuffle.addEventListener("click", () => {
+      shuffle = !shuffle;
+      updatePlayer();
+    });
+    els.repeat.addEventListener("click", () => {
+      repeat = !repeat;
+      updatePlayer();
+    });
+    els.volume.addEventListener("input", () => {
+      els.audio.volume = Number(els.volume.value);
+    });
+    els.progress.addEventListener("input", () => {
+      if (els.audio.duration) {
+        els.audio.currentTime = (Number(els.progress.value) / 1000) * els.audio.duration;
+      }
+    });
+    els.audio.addEventListener("timeupdate", () => {
+      const duration = els.audio.duration || trackDuration(tracks[currentIndex] || {});
+      const current = els.audio.currentTime || 0;
+      els.progress.value = duration ? Math.round((current / duration) * 1000) : 0;
+      els.time.textContent = `${formatTime(current)} / ${formatTime(duration)}`;
+    });
+    els.audio.addEventListener("play", () => {
+      els.play.textContent = "Ⅱ";
+      render();
+    });
+    els.audio.addEventListener("pause", () => {
+      els.play.textContent = "▶";
+      render();
+    });
+    els.audio.addEventListener("ended", () => {
+      if (repeat) {
+        els.audio.currentTime = 0;
+        els.audio.play().catch(() => {});
+      } else {
+        next(1);
+      }
+    });
+
+    setMode(false);
+    void refresh();
+  }
+
+  function setMode(libraryMode) {
+    els.chat.classList.toggle("library-mode", libraryMode);
+    els.library.hidden = !libraryMode;
+    els.chatOpen.classList.toggle("active", !libraryMode);
+    els.libraryOpen.classList.toggle("active", libraryMode);
+  }
+
+  document.addEventListener("DOMContentLoaded", wire, { once: true });
+})();
