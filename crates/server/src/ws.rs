@@ -109,6 +109,25 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: UserRo
                         send_error(&tx, "bad_crypto_resync", err);
                     }
                 }
+                Ok(ClientMessage::CryptoResyncResponse {
+                    peer_id,
+                    message_id,
+                    device_id,
+                    body,
+                    attachment_id,
+                }) => {
+                    if let Err(err) = relay_crypto_resync_response(
+                        &state,
+                        &user,
+                        &peer_id,
+                        &message_id,
+                        &device_id,
+                        &body,
+                        attachment_id,
+                    ) {
+                        send_error(&tx, "bad_crypto_resync_response", err);
+                    }
+                }
                 Err(err) => send_error(&tx, "bad_json", err.to_string()),
             },
             Message::Close(_) => break,
@@ -187,6 +206,74 @@ fn relay_crypto_resync(
         delivered_connections = delivered,
         "crypto recovery request relayed"
     );
+
+    Ok(())
+}
+
+fn relay_crypto_resync_response(
+    state: &AppState,
+    user: &UserRow,
+    peer_id: &str,
+    message_id: &str,
+    device_id: &str,
+    body: &str,
+    attachment_id: Option<String>,
+) -> Result<(), String> {
+    if peer_id == user.id {
+        return Err("cannot send E2E recovery response to yourself".into());
+    }
+    if message_id.is_empty() || device_id.is_empty() {
+        return Err("crypto recovery response is missing message or device id".into());
+    }
+    if body.chars().count() > larptrix_protocol::MAX_BODY {
+        return Err("crypto recovery response payload is too large".into());
+    }
+    let _: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| "crypto recovery response contains invalid encrypted message".to_string())?;
+
+    let peer = state
+        .db
+        .user_by_id(peer_id)
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| "unknown peer".to_string())?;
+
+    let peer_devices = state
+        .db
+        .crypto_devices_for_user(&peer.id)
+        .map_err(|err| err.to_string())?;
+
+    if !peer_devices.iter().any(|device| device.device_id == device_id) {
+        return Err("recovery response target device does not belong to recipient".into());
+    }
+
+    let recipient = Uuid::parse_str(&peer.id).map_err(|_| "invalid peer id".to_string())?;
+    if state.hub.online_ids().iter().all(|id| id != &peer.id) {
+        return Err("peer is offline".into());
+    }
+
+    let delivered = state.hub.send_to(
+        recipient,
+        ServerMessage::CryptoResyncResponse {
+            sender_id: user.id.clone(),
+            message_id: message_id.to_string(),
+            device_id: device_id.to_string(),
+            body: body.to_string(),
+            attachment_id,
+        },
+    );
+
+    tracing::info!(
+        sender = %user.id,
+        peer = %peer.id,
+        message_id = %message_id,
+        device_id = %device_id,
+        delivered_connections = delivered,
+        "crypto recovery response relayed"
+    );
+
+    if delivered == 0 {
+        return Err("peer connection disappeared before recovery response delivery".into());
+    }
 
     Ok(())
 }
