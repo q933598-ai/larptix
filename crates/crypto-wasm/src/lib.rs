@@ -571,20 +571,28 @@ fn parse_and_verify_bundle(
         .verify(curve_key.as_bytes(), &identity_signature)
         .map_err(|_| JsValue::from_str("identity signature verification failed"))?;
 
-    if bundle.one_time_keys.is_empty() {
-        return Err(JsValue::from_str("peer has no available one-time keys"));
+    if bundle.one_time_keys.is_empty() && bundle.fallback_keys.is_empty() {
+        return Err(JsValue::from_str(
+            "peer has no available one-time or fallback keys",
+        ));
     }
 
-    for one_time_key in &bundle.one_time_keys {
+    for one_time_key in bundle
+        .one_time_keys
+        .iter()
+        .chain(bundle.fallback_keys.iter())
+    {
         let key = Curve25519PublicKey::from_base64(&one_time_key.key)
-            .map_err(|_| JsValue::from_str("invalid one-time key"))?;
+            .map_err(|_| JsValue::from_str("invalid one-time or fallback key"))?;
 
         let signature = Ed25519Signature::from_base64(&one_time_key.signature)
-            .map_err(|_| JsValue::from_str("invalid one-time key signature"))?;
+            .map_err(|_| JsValue::from_str("invalid one-time or fallback key signature"))?;
 
         ed_key
             .verify(key.as_bytes(), &signature)
-            .map_err(|_| JsValue::from_str("one-time key signature verification failed"))?;
+            .map_err(|_| {
+                JsValue::from_str("one-time or fallback key signature verification failed")
+            })?;
     }
 
     Ok(bundle)
@@ -837,6 +845,38 @@ mod tests {
             .unwrap(),
             "hello from alice"
         );
+    }
+
+    #[test]
+    fn fallback_only_bundle_is_accepted() {
+        let account = Account::new();
+        let fallback = {
+            let mut account = account;
+            account.generate_fallback_key();
+            let key = *account.fallback_key().values().next().unwrap();
+            let signature = account.sign(key.as_bytes()).to_base64();
+            (account, key.to_base64(), signature)
+        };
+
+        let (account, fallback_key, signature) = fallback;
+        let bundle = PublicBundle {
+            version: STATE_VERSION,
+            device_id: "fallback-device".to_string(),
+            curve_key: account.curve25519_key().to_base64(),
+            ed25519_key: account.ed25519_key().to_base64(),
+            identity_signature: account
+                .sign(account.curve25519_key().as_bytes())
+                .to_base64(),
+            one_time_keys: Vec::new(),
+            fallback_keys: vec![PublicOneTimeKey {
+                key: fallback_key,
+                signature,
+            }],
+            fingerprint: fingerprint(&account.curve25519_key(), &account.ed25519_key()),
+        };
+
+        let encoded = serde_json::to_string(&bundle).unwrap();
+        assert!(parse_and_verify_bundle(&encoded, &bundle.fingerprint).is_ok());
     }
 
     #[test]
