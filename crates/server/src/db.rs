@@ -644,10 +644,24 @@ impl Database {
         let conn = self.conn.lock().expect("db lock");
         conn.execute(
             "INSERT INTO matrix_to_device_events (
-                recipient_user_id, recipient_device_id, sender_user_id,
-                sender_device_id, event_type, txn_id, content_json, created_at
+                recipient_user_id,
+                recipient_device_id,
+                sender_user_id,
+                sender_device_id,
+                event_type,
+                txn_id,
+                content_json,
+                created_at
              )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(
+                recipient_user_id,
+                recipient_device_id,
+                sender_user_id,
+                sender_device_id,
+                event_type,
+                txn_id
+             ) DO NOTHING",
             params![
                 recipient_user_id,
                 recipient_device_id,
@@ -659,7 +673,26 @@ impl Database {
                 crate::now_ms()
             ],
         )?;
-        Ok(conn.last_insert_rowid())
+
+        conn.query_row(
+            "SELECT id
+             FROM matrix_to_device_events
+             WHERE recipient_user_id = ?1
+               AND recipient_device_id = ?2
+               AND sender_user_id = ?3
+               AND sender_device_id = ?4
+               AND event_type = ?5
+               AND txn_id = ?6",
+            params![
+                recipient_user_id,
+                recipient_device_id,
+                sender_user_id,
+                sender_device_id,
+                event_type,
+                txn_id
+            ],
+            |row| row.get(0),
+        )
     }
 
     pub fn matrix_to_device_for_user(
@@ -1552,7 +1585,15 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             content_json TEXT NOT NULL,
             created_at INTEGER NOT NULL,
             FOREIGN KEY (recipient_user_id) REFERENCES users(id) ON DELETE CASCADE,
-            FOREIGN KEY (sender_user_id) REFERENCES users(id) ON DELETE CASCADE
+            FOREIGN KEY (sender_user_id) REFERENCES users(id) ON DELETE CASCADE,
+            UNIQUE (
+                recipient_user_id,
+                recipient_device_id,
+                sender_user_id,
+                sender_device_id,
+                event_type,
+                txn_id
+            )
         );
         CREATE INDEX IF NOT EXISTS idx_matrix_to_device_recipient
             ON matrix_to_device_events(recipient_user_id, recipient_device_id, id);
