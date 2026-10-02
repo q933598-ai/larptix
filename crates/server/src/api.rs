@@ -548,7 +548,8 @@ async fn matrix_keys_claim(
     }
 
     Ok(Json(serde_json::json!({
-        "one_time_keys": one_time_keys
+        "one_time_keys": one_time_keys,
+        "failures": {}
     })))
 }
 
