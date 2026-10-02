@@ -80,6 +80,16 @@ pub enum ServerMessage {
         device_id: String,
         ciphertext: String,
     },
+    /// Encrypted Matrix-style to-device event.
+    MatrixToDevice {
+        event_id: i64,
+        sender_id: String,
+        sender_device_id: String,
+        recipient_device_id: String,
+        event_type: String,
+        txn_id: String,
+        content: serde_json::Value,
+    },
     Error {
         code: String,
         message: String,
