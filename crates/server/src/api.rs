@@ -60,6 +60,10 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/users/{id}/crypto-devices",
             get(list_user_crypto_devices),
         )
+        .route(
+            "/api/users/{id}/crypto-devices/{device_id}/claim-one-time-key",
+            post(claim_crypto_one_time_key),
+        )
         .route("/api/users/{id}/crypto-key", get(get_crypto_key))
         .route("/api/rtc-config", get(rtc_config))
         .route("/api/users/{id}/avatar", get(user_avatar))
@@ -542,6 +546,36 @@ fn validate_crypto_device_payload(
     }
 
     Ok(())
+}
+
+async fn claim_crypto_one_time_key(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((id, device_id)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_user(&state, &headers)?;
+
+    let device = state
+        .db
+        .crypto_device(&device_id)
+        .map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::not_found("crypto device not found"))?;
+
+    if device.user_id != id {
+        return Err(ApiError::not_found("crypto device not found"));
+    }
+
+    let bundle = state
+        .db
+        .claim_crypto_one_time_key(&device_id)
+        .map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::bad("no one-time keys available for this device"))?;
+
+    Ok(Json(serde_json::json!({
+        "device_id": device_id,
+        "bundle": serde_json::from_str::<serde_json::Value>(&bundle)
+            .map_err(|_| ApiError::internal("claimed public device bundle is invalid"))?,
+    })))
 }
 
 async fn get_crypto_key(
