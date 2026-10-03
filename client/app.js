@@ -135,6 +135,7 @@ const themeMe = document.getElementById("theme-me");
 const themeSaveCustom = document.getElementById("theme-save-custom");
 const settingsPresence = document.getElementById("settings-presence");
 const settingsCallSounds = document.getElementById("settings-call-sounds");
+const settingsOutgoingCallSounds = document.getElementById("settings-outgoing-call-sounds");
 const settingsMessageSounds = document.getElementById("settings-message-sounds");
 const mobileChats = document.getElementById("mobile-chats");
 const mobileSaved = document.getElementById("mobile-saved");
@@ -334,6 +335,7 @@ const THEME_KEY = "larptrix_theme";
 const CUSTOM_THEME_KEY = "larptrix_custom_theme";
 const PRESENCE_KEY = "larptrix_presence";
 const CALL_SOUND_KEY = "larptrix_call_sounds";
+const OUTGOING_CALL_SOUND_KEY = "larptrix_outgoing_call_sounds";
 const MESSAGE_SOUND_KEY = "larptrix_message_sounds";
 const NOISE_SUPPRESSION_KEY = "larptrix_noise_suppression";
 const SAVED_MESSAGES_KEY = "larptrix_saved_messages_v1";
@@ -494,6 +496,14 @@ function showBrowserNotification(title, body, tag) {
 
 function startCallRingtone() {
   if (!readStoredBool(CALL_SOUND_KEY, true) || localStorage.getItem(PRESENCE_KEY) === "dnd") return;
+  if (!callRingtone) return;
+  callRingtone.currentTime = 0;
+  callRingtone.loop = true;
+  callRingtone.play().catch(() => {});
+}
+
+function startOutgoingCallRingtone() {
+  if (!readStoredBool(OUTGOING_CALL_SOUND_KEY, true)) return;
   if (!callRingtone) return;
   callRingtone.currentTime = 0;
   callRingtone.loop = true;
@@ -1082,6 +1092,7 @@ function openSettings() {
   customThemeEditor.hidden = settingsTheme.value !== "custom";
   settingsPresence.value = localStorage.getItem(PRESENCE_KEY) || "online";
   settingsCallSounds.checked = readStoredBool(CALL_SOUND_KEY, true);
+  settingsOutgoingCallSounds.checked = readStoredBool(OUTGOING_CALL_SOUND_KEY, true);
   settingsMessageSounds.checked = readStoredBool(MESSAGE_SOUND_KEY, true);
   renderNotificationSettings();
 
@@ -1117,7 +1128,10 @@ menuMusic.addEventListener("click", () => {
   closeAppMenu();
 });
 menuNewGroup.addEventListener("click", () => {
-  document.getElementById("create-group-open").click();
+  renderGroupMemberChoices();
+  document.getElementById("group-create-error").hidden = true;
+  document.getElementById("group-name").value = "";
+  createGroupDialog.showModal();
   closeAppMenu();
 });
 menuNewChannel?.addEventListener("click", () => {
@@ -1194,6 +1208,7 @@ settingsTheme.addEventListener("change", () => {
 themeSaveCustom.addEventListener("click", saveCustomTheme);
 settingsPresence.addEventListener("change", () => setPresence(settingsPresence.value));
 settingsCallSounds.addEventListener("change", () => localStorage.setItem(CALL_SOUND_KEY, settingsCallSounds.checked ? "1" : "0"));
+settingsOutgoingCallSounds.addEventListener("change", () => localStorage.setItem(OUTGOING_CALL_SOUND_KEY, settingsOutgoingCallSounds.checked ? "1" : "0"));
 settingsMessageSounds.addEventListener("change", () => localStorage.setItem(MESSAGE_SOUND_KEY, settingsMessageSounds.checked ? "1" : "0"));
 
 menuSaved?.addEventListener("click", openSavedMessagesChat);
@@ -1294,12 +1309,7 @@ forgetE2eDeviceButton.addEventListener("click", async () => {
   cryptoProfileStatus.textContent = "This device will ask for the recovery key at the next sign-in.";
   forgetE2eDeviceButton.hidden = true;
 });
-document.getElementById("create-group-open").addEventListener("click", () => {
-  renderGroupMemberChoices();
-  document.getElementById("group-create-error").hidden = true;
-  document.getElementById("group-name").value = "";
-  createGroupDialog.showModal();
-});
+
 document.getElementById("create-group-cancel").addEventListener("click", () => createGroupDialog.close());
 document.getElementById("create-group-form").addEventListener("submit", createGroup);
 userSearchInput.addEventListener("input", renderUsers);
@@ -2641,6 +2651,7 @@ async function startGroupCall(kind) {
   groupCallGroupId = group.user_id;
   groupCallMemberIds = [...group.group_member_ids];
   groupCallInitiatorId = me.user_id;
+  startOutgoingCallRingtone();
   groupCallJoinedMembers.clear();
   groupCallJoinedMembers.add(me.user_id);
   callPeerId = group.user_id;
@@ -2840,6 +2851,7 @@ async function handleGroupCallSignal(signal) {
   if (groupCallId !== callId || groupCallGroupId !== groupId) return;
 
   if (signal.kind === "group_join") {
+    stopCallRingtone();
     const alreadyKnown = groupCallJoinedMembers.has(signal.sender_id);
     groupCallJoinedMembers.add(signal.sender_id);
     refreshGroupCallParticipants();
@@ -3009,6 +3021,7 @@ async function startCall(kind) {
   if (peerConnection) endCall(true);
   callPeerId = peerId;
   callMediaKind = kind;
+  startOutgoingCallRingtone();
   try {
     localMediaStream = await acquireCallMedia(kind);
     showCallStage();
@@ -3160,6 +3173,7 @@ async function handleCallSignal(signal) {
   if (signal.sender_id !== callPeerId) return;
   if (!peerConnection) return;
   if (signal.kind === "answer") {
+    stopCallRingtone();
     await peerConnection.setRemoteDescription(signal.payload);
     await flushIceCandidates();
   } else if (signal.kind === "ice_candidate") {
