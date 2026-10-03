@@ -261,11 +261,76 @@
     if (index >= 0) loadTrack(index, true);
   }
 
+  function clampPosition(x, y) {
+    const rect = els.library.getBoundingClientRect();
+    return {
+      x: Math.min(Math.max(8, x), Math.max(8, window.innerWidth - rect.width - 8)),
+      y: Math.min(Math.max(8, y), Math.max(8, window.innerHeight - rect.height - 8)),
+    };
+  }
+
+  function savePosition(x, y) {
+    try {
+      localStorage.setItem("larptrix_music_window_position", JSON.stringify({ x, y }));
+    } catch {}
+  }
+
+  function applySavedPosition() {
+    let saved = null;
+    try {
+      saved = JSON.parse(localStorage.getItem("larptrix_music_window_position") || "null");
+    } catch {}
+    if (!saved || !Number.isFinite(saved.x) || !Number.isFinite(saved.y)) return;
+    const position = clampPosition(saved.x, saved.y);
+    els.library.style.left = `${position.x}px`;
+    els.library.style.top = `${position.y}px`;
+    els.library.style.right = "auto";
+    els.library.style.bottom = "auto";
+  }
+
+  function wireDragging() {
+    const handle = $("music-library-drag-area");
+    if (!handle) return;
+
+    let dragging = false;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || event.target.closest("button")) return;
+      const rect = els.library.getBoundingClientRect();
+      dragging = true;
+      offsetX = event.clientX - rect.left;
+      offsetY = event.clientY - rect.top;
+      handle.setPointerCapture?.(event.pointerId);
+      handle.classList.add("dragging");
+      event.preventDefault();
+    });
+
+    handle.addEventListener("pointermove", (event) => {
+      if (!dragging) return;
+      const position = clampPosition(event.clientX - offsetX, event.clientY - offsetY);
+      els.library.style.left = `${position.x}px`;
+      els.library.style.top = `${position.y}px`;
+      els.library.style.right = "auto";
+      els.library.style.bottom = "auto";
+    });
+
+    const stop = (event) => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove("dragging");
+      handle.releasePointerCapture?.(event.pointerId);
+      const rect = els.library.getBoundingClientRect();
+      savePosition(rect.left, rect.top);
+    };
+    handle.addEventListener("pointerup", stop);
+    handle.addEventListener("pointercancel", stop);
+  }
+
   function wire() {
-    els.chat = document.querySelector(".chat");
     els.library = $("music-library");
-    els.chatOpen = $("chat-view-open");
-    els.libraryOpen = $("music-library-open");
+    els.close = $("music-library-close");
     els.file = $("music-library-file");
     els.search = $("music-library-search");
     els.refresh = $("music-library-refresh");
@@ -288,8 +353,7 @@
     els.repeat = $("music-repeat");
     els.volume = $("music-volume");
 
-    els.chatOpen.addEventListener("click", () => setMode(false));
-    els.libraryOpen.addEventListener("click", () => setMode(true));
+    els.close?.addEventListener("click", () => setMode(false));
     els.file.addEventListener("change", () => {
       void addFiles(els.file.files);
       els.file.value = "";
@@ -372,16 +436,31 @@
       }
     });
 
+    wireDragging();
     setMode(false);
+    window.addEventListener("resize", () => {
+      if (!els.library.hidden) {
+        const rect = els.library.getBoundingClientRect();
+        const position = clampPosition(rect.left, rect.top);
+        els.library.style.left = `${position.x}px`;
+        els.library.style.top = `${position.y}px`;
+        els.library.style.right = "auto";
+        els.library.style.bottom = "auto";
+        savePosition(position.x, position.y);
+      }
+    });
     void refresh();
   }
 
   function setMode(libraryMode) {
-    els.chat.classList.toggle("library-mode", libraryMode);
     els.library.hidden = !libraryMode;
-    els.chatOpen.classList.toggle("active", !libraryMode);
-    els.libraryOpen.classList.toggle("active", libraryMode);
   }
+
+  window.larptixMusicLibrary = {
+    open: () => setMode(true),
+    close: () => setMode(false),
+    toggle: () => setMode(els.library.hidden),
+  };
 
   document.addEventListener("DOMContentLoaded", wire, { once: true });
 })();
