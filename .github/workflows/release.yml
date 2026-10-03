@@ -32,7 +32,7 @@ jobs:
       - name: Set Android release version code
         working-directory: desktop
         env:
-          RELEASE_VERSION: \${{ github.ref_name }}
+          RELEASE_VERSION: ${{ github.ref_name }}
         run: |
           node - <<'NODE'
           const fs = require("fs");
@@ -49,7 +49,7 @@ jobs:
 
       - name: Check release version
         env:
-          GITHUB_REF_NAME: \${{ github.ref_name }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
         run: npm run release:check
 
   linux:
@@ -84,12 +84,12 @@ jobs:
 
       - name: Prepare release assets
         env:
-          RELEASE_VERSION: \${{ github.ref_name }}
+          RELEASE_VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          VERSION="\${RELEASE_VERSION#v}"
+          VERSION="${RELEASE_VERSION#v}"
           mkdir -p release
-          cp "dist/Larptrix-\${VERSION}-x64.AppImage" "release/Larptrix-\${VERSION}-x64.AppImage"
+          cp "dist/Larptrix-${VERSION}-x64.AppImage" "release/Larptrix-${VERSION}-x64.AppImage"
           PACMAN="$(find dist -maxdepth 1 -type f \( -name "*.pacman" -o -name "*.pkg.tar.zst" \) | head -n1)"
           test -n "$PACMAN"
           cp "$PACMAN" "release/$(basename "$PACMAN")"
@@ -131,12 +131,12 @@ jobs:
 
       - name: Prepare release assets
         env:
-          RELEASE_VERSION: \${{ github.ref_name }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+        shell: pwsh
         run: |
-          set -euo pipefail
-          VERSION="\${RELEASE_VERSION#v}"
-          mkdir -p release
-          cp "dist/Larptrix-\${VERSION}-win-x64.exe" "release/Larptrix-\${VERSION}-win-x64.exe"
+          $Version = $env:RELEASE_VERSION -replace '^v', ''
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item "dist/Larptrix-$Version-win-x64.exe" "release/Larptrix-$Version-win-x64.exe"
 
       - name: Upload Windows release assets
         uses: actions/upload-artifact@v4
@@ -198,9 +198,9 @@ jobs:
 
       - name: Require Android signing secrets
         env:
-          ANDROID_KEY_BASE64: \${{ secrets.ANDROID_KEY_BASE64 }}
-          ANDROID_KEY_ALIAS: \${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: \${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           test -n "$ANDROID_KEY_BASE64"
           test -n "$ANDROID_KEY_ALIAS"
@@ -208,9 +208,9 @@ jobs:
 
       - name: Configure Android signing
         env:
-          ANDROID_KEY_BASE64: \${{ secrets.ANDROID_KEY_BASE64 }}
-          ANDROID_KEY_ALIAS: \${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: \${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           cd src-tauri/gen/android
           printf 'keyAlias=%s\\n' "$ANDROID_KEY_ALIAS" > keystore.properties
@@ -237,14 +237,14 @@ jobs:
 
       - name: Prepare release asset
         env:
-          RELEASE_VERSION: \${{ github.ref_name }}
+          RELEASE_VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          VERSION="\${RELEASE_VERSION#v}"
+          VERSION="${RELEASE_VERSION#v}"
           mkdir -p release
           APK="$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | grep -i 'release' | head -n1)"
           test -n "$APK"
-          cp "$APK" "release/Larptrix-\${VERSION}-android.apk"
+          cp "$APK" "release/Larptrix-${VERSION}-android.apk"
 
       - name: Upload Android release assets
         uses: actions/upload-artifact@v4
@@ -276,8 +276,8 @@ jobs:
 
       - name: Publish GitHub release
         env:
-          GH_TOKEN: \${{ github.token }}
-          RELEASE_TAG: \${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           gh release create "$RELEASE_TAG" release/* \
