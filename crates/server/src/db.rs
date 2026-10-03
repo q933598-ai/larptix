@@ -1992,7 +1992,7 @@ mod tests {
     fn legacy_account_can_be_assigned_an_access_key() {
         let db = Database::open(Path::new(":memory:")).unwrap();
         let user = db
-            .create_user("legacy@example.test", "password-hash", "Legacy", 123)
+            .create_user("legacy@example.test", "password-hash", "Legacy", "legacy", 123)
             .unwrap();
         db.set_access_key_hash(&user.id, "new-key-hash").unwrap();
         let found = db.user_by_access_key_hash("new-key-hash").unwrap().unwrap();
@@ -2222,10 +2222,10 @@ mod tests {
     fn first_e2e_activation_preserves_existing_history_and_attachments() {
         let db = Database::open(Path::new(":memory:")).unwrap();
         let alice = db
-            .create_user("alice@example.test", "hash-a", "Alice", 1)
+            .create_user("alice@example.test", "hash-a", "Alice", "alice", 1)
             .unwrap();
         let bob = db
-            .create_user("bob@example.test", "hash-b", "Bob", 1)
+            .create_user("bob@example.test", "hash-b", "Bob", "bob", 1)
             .unwrap();
         let avatar_id = db
             .insert_attachment(&alice.id, "image/png", "png", "avatar.png", 3, 1)
@@ -2246,7 +2246,7 @@ mod tests {
         db.insert_dm(&bob.id, &alice.id, "another old message", None, 2)
             .unwrap();
         let carol = db
-            .create_user("carol@example.test", "hash-c", "Carol", 1)
+            .create_user("carol@example.test", "hash-c", "Carol", "carol", 1)
             .unwrap();
         db.insert_dm(&bob.id, &carol.id, "preserved history", None, 3)
             .unwrap();
