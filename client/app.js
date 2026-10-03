@@ -1675,8 +1675,15 @@ async function handleGroupCallSignal(signal) {
   if (groupCallId !== callId || groupCallGroupId !== groupId) return;
 
   if (signal.kind === "group_join") {
+    const alreadyKnown = groupCallJoinedMembers.has(signal.sender_id);
     groupCallJoinedMembers.add(signal.sender_id);
-    await establishGroupOffers();
+    if (!alreadyKnown) {
+      sendGroupCallSignal(signal.sender_id, "group_join", {
+        group_id: groupId,
+        call_id: callId,
+      });
+      await establishGroupOffers();
+    }
     return;
   }
 
