@@ -2369,3 +2369,19 @@ body.menu-open {
   cursor: default;
 }
 
+
+
+.message-delete-button {
+  margin-left: auto;
+  padding: 4px 8px;
+  font-size: .7rem;
+  opacity: .55;
+}
+.log li:hover .message-delete-button,
+.message-delete-button:focus-visible {
+  opacity: 1;
+}
+.message-delete-button:disabled {
+  opacity: .35;
+  cursor: wait;
+}
