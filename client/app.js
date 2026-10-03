@@ -1893,28 +1893,6 @@ function appendMessage(message) {
       body.textContent = "Encrypted message";
       encryptedBodyElement = body;
 
-      const queuedRecovery = cryptoRecoveryResponsesByMessageId.get(message.id);
-      if (queuedRecovery) {
-        const recoveredEnvelope = parseCryptoEnvelope(message.body);
-        if (
-          recoveredEnvelope?.version === 2
-          && recoveredEnvelope.message_type === "message"
-          && recoveredEnvelope.sender_device_id
-        ) {
-          const mergedEnvelope = {
-            ...recoveredEnvelope,
-            ciphertexts: {
-              ...recoveredEnvelope.ciphertexts,
-              [queuedRecovery.device_id]: queuedRecovery.ciphertext,
-            },
-          };
-          message = {
-            ...message,
-            body: JSON.stringify(mergedEnvelope),
-          };
-          cryptoRecoveryResponsesByMessageId.delete(message.id);
-        }
-      }
     } else {
       body.textContent = cryptoEnabled
         ? `⚠️ Legacy message (not end-to-end encrypted): ${message.body}`
@@ -1962,9 +1940,12 @@ function appendMessage(message) {
     const queuedResponse = cryptoRecoveryResponsesByMessageId.get(message.id);
     if (queuedResponse) {
       effectiveMessage =
-        queuedResponse.sender_id === me?.user_id
-          ? (mergeCryptoRecoveryResponse(message, queuedResponse) || { ...message, body: queuedResponse.ciphertext })
-          : (mergeCryptoRecoveryResponse(message, queuedResponse) || message);
+        mergeCryptoRecoveryResponse(message, queuedResponse)
+        || (
+          parseCryptoEnvelope(message.body)?.version === 1
+            ? { ...message, body: queuedResponse.ciphertext }
+            : message
+        );
       if (effectiveMessage !== message) {
         cryptoRecoveryResponsesByMessageId.delete(message.id);
       }
