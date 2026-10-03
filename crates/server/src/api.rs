@@ -82,6 +82,7 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/api/users/{id}/crypto-key", get(get_crypto_key))
         .route("/api/matrix/config", get(matrix_config))
+        .route("/api/matrix/key-backup", get(matrix_key_backup_get).put(matrix_key_backup_put))
         .route("/api/matrix/keys/upload", post(matrix_keys_upload))
         .route("/api/matrix/keys/query", post(matrix_keys_query))
         .route("/api/matrix/keys/claim", post(matrix_keys_claim))
@@ -147,6 +148,11 @@ pub struct MatrixToDeviceBody {
 #[derive(Deserialize)]
 pub struct MatrixToDeviceAckBody {
     pub event_ids: Vec<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct MatrixKeyBackupBody {
+    pub encrypted_backup: String,
 }
 
 #[derive(Deserialize)]
@@ -393,6 +399,36 @@ async fn matrix_config(
     Ok(Json(serde_json::json!({
         "server_name": matrix_server_name(&headers)?,
     })))
+}
+
+async fn matrix_key_backup_get(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let encrypted_backup = state
+        .db
+        .get_matrix_key_backup(&user.id)
+        .map_err(ApiError::db)?;
+    Ok(Json(serde_json::json!({
+        "encrypted_backup": encrypted_backup
+    })))
+}
+
+async fn matrix_key_backup_put(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<MatrixKeyBackupBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    if body.encrypted_backup.trim().is_empty() || body.encrypted_backup.len() > 16 * 1024 * 1024 {
+        return Err(ApiError::bad("invalid Matrix key backup"));
+    }
+    state
+        .db
+        .upsert_matrix_key_backup(&user.id, &body.encrypted_backup)
+        .map_err(ApiError::db)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 async fn matrix_keys_upload(
