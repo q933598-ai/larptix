@@ -75,6 +75,9 @@ pub async fn handle_socket(
             group_id: group.id,
             name: group.name,
             member_ids: group.member_ids,
+            is_channel: group.is_channel,
+            admin_ids: group.admin_ids,
+            post_policy: group.post_policy,
         })
         .collect();
     let _ = tx.send(ServerMessage::Groups { groups });
@@ -791,6 +794,9 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
                 avatar_url: None,
                 activity: None,
                 is_group: true,
+                is_channel: group.is_channel,
+                admin_ids: group.admin_ids,
+                post_policy: group.post_policy,
                 e2e_enabled: true,
                 group_member_ids: group.member_ids,
             },
