@@ -453,12 +453,19 @@ fn relay_call_signal(
 ) -> Result<(), String> {
     if !matches!(
         kind,
-        "offer" | "answer" | "ice_candidate" | "hangup" | "reject" | "group_invite"
+        "offer" | "answer" | "ice_candidate" | "hangup" | "reject" | "group_invite" | "group_join"
     ) {
         return Err("unsupported call signal".into());
     }
     if peer_id == user.id {
         return Err("cannot call yourself".into());
+    }
+
+    let payload_size = serde_json::to_vec(&payload)
+        .map_err(|_| "invalid call signal".to_string())?
+        .len();
+    if payload_size > 64 * 1024 {
+        return Err("call signal is too large".into());
     }
 
     if let Some(group) = state.db.group(peer_id).map_err(|err| err.to_string())? {
