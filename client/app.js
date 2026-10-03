@@ -1731,7 +1731,8 @@ function sendGroupCallSignal(targetId, kind, payload) {
 
 function renderGroupRemoteTrack(remoteId, stream, kind) {
   const container = document.getElementById("group-remotes");
-  const selector = "[data-group-remote-id="" + CSS.escape(remoteId) + ""][data-kind="" + kind + ""]";
+  const selector =
+    '[data-group-remote-id="' + CSS.escape(remoteId) + '"][data-kind="' + kind + '"]';
   let media = container.querySelector(selector);
   if (!media) {
     media = kind === "video" ? document.createElement("video") : document.createElement("audio");
@@ -1756,7 +1757,7 @@ function removeGroupPeer(remoteId) {
   groupPeerConnections.delete(remoteId);
   groupPendingIceCandidates.delete(remoteId);
   document.getElementById("group-remotes")
-    ?.querySelectorAll("[data-group-remote-id="" + CSS.escape(remoteId) + ""]")
+    ?.querySelectorAll('[data-group-remote-id="' + CSS.escape(remoteId) + '"]')
     .forEach((element) => element.remove());
   if (groupCallId && groupPeerConnections.size === 0 && !pendingIncomingCall) {
     callStatus.textContent = "Waiting for group participants" + callMediaNotice;
