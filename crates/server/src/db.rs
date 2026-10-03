@@ -115,14 +115,26 @@ impl Database {
         email: &str,
         password_hash: &str,
         display_name: &str,
+        username: &str,
         created_at: i64,
     ) -> Result<UserRow, DbError> {
         let id = Uuid::new_v4().to_string();
         let conn = self.conn.lock().expect("db lock");
+        let username_taken: bool = conn
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM users WHERE username = ?1 COLLATE NOCASE AND username <> ''
+                )",
+                [username],
+                |row| row.get(0),
+            )?;
+        if username_taken {
+            return Err(DbError::UsernameTaken);
+        }
         match conn.execute(
-            "INSERT INTO users (id, email, password_hash, display_name, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, email, password_hash, display_name, created_at],
+            "INSERT INTO users (id, email, password_hash, display_name, username, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, email, password_hash, display_name, username, created_at],
         ) {
             Ok(_) => Ok(UserRow {
                 id,
@@ -139,16 +151,28 @@ impl Database {
     pub fn create_key_user(
         &self,
         display_name: &str,
+        username: &str,
         access_key_hash: &str,
         created_at: i64,
     ) -> Result<UserRow, DbError> {
         let id = Uuid::new_v4().to_string();
         let internal_email = format!("{id}@key.larptrix.invalid");
         let conn = self.conn.lock().expect("db lock");
+        let username_taken: bool = conn
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM users WHERE username = ?1 COLLATE NOCASE AND username <> ''
+                )",
+                [username],
+                |row| row.get(0),
+            )?;
+        if username_taken {
+            return Err(DbError::UsernameTaken);
+        }
         conn.execute(
-            "INSERT INTO users (id, email, password_hash, display_name, created_at, access_key_hash)
-             VALUES (?1, ?2, '', ?3, ?4, ?5)",
-            params![id, internal_email, display_name, created_at, access_key_hash],
+            "INSERT INTO users (id, email, password_hash, display_name, username, created_at, access_key_hash)
+             VALUES (?1, ?2, '', ?3, ?4, ?5, ?6)",
+            params![id, internal_email, display_name, username, created_at, access_key_hash],
         )
         .map_err(DbError::Sqlite)?;
         Ok(UserRow {
@@ -1660,6 +1684,7 @@ pub struct AttachmentRow {
 #[derive(Debug)]
 pub enum DbError {
     EmailTaken,
+    UsernameTaken,
     BadRequest(&'static str),
     Sqlite(rusqlite::Error),
 }
