@@ -82,8 +82,13 @@ async fn ws_upgrade(
     if !same_origin(&headers) {
         return (StatusCode::FORBIDDEN, "cross-origin WebSocket request").into_response();
     }
+    let server_name = match api::matrix_server_name(&headers) {
+        Ok(name) => name,
+        Err(err) => return err.into_response(),
+    };
+
     match require_user(&state, &headers) {
-        Ok(user) => ws.on_upgrade(move |socket| ws::handle_socket(socket, state, user)),
+        Ok(user) => ws.on_upgrade(move |socket| ws::handle_socket(socket, state, user, server_name)),
         Err(err) => err.into_response(),
     }
 }
