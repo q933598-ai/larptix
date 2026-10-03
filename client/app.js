@@ -1206,7 +1206,14 @@ settingsWallpaperTint?.addEventListener("change", () => {
   localStorage.setItem("larptrix_wallpaper_tint", settingsWallpaperTint.value);
   if (peerId) applyChatWallpaper(peerId);
 });
-document.getElementById("screen-audio-mode")?.addEventListener("change", () => {
+const screenAudioMode = document.getElementById("screen-audio-mode");
+if (screenAudioMode && /Firefox\//.test(navigator.userAgent) && !/Seamonkey\//.test(navigator.userAgent)) {
+  for (const option of screenAudioMode.options) {
+    if (option.value !== "none") option.disabled = true;
+  }
+  screenAudioMode.title = "Firefox does not currently expose screen/system audio through getDisplayMedia(). Use Chromium for screen audio.";
+}
+screenAudioMode?.addEventListener("change", () => {
   if (screenMediaStream) appendSystem("Screen sharing audio settings apply to the next share. Stop and start sharing again to change them.");
 });
 document.getElementById("call-audio-volume")?.addEventListener("input", (event) => {
@@ -3090,8 +3097,23 @@ function renderGroupRemoteTrack(remoteId, stream, kind) {
     if (kind === "audio") {
       const volume = Number(localStorage.getItem("larptrix_call_audio_volume"));
       if (Number.isFinite(volume)) media.volume = Math.min(1, Math.max(0, volume));
+      const audioStream = media.srcObject instanceof MediaStream
+        ? media.srcObject
+        : new MediaStream();
+      for (const track of stream.getAudioTracks()) {
+        if (!audioStream.getTracks().includes(track)) audioStream.addTrack(track);
+      }
+      media.srcObject = audioStream;
+      for (const track of stream.getAudioTracks()) {
+        track.addEventListener("ended", () => {
+          if (media.srcObject instanceof MediaStream && media.srcObject.getTracks().includes(track)) {
+            media.srcObject.removeTrack(track);
+          }
+        }, { once: true });
+      }
+    } else {
+      media.srcObject = stream;
     }
-    media.srcObject = stream;
     media.play?.().catch(() => {});
     applyRemoteMuteStates();
   }
@@ -3195,7 +3217,16 @@ async function createPeerConnection() {
     if (event.track.kind === "audio") {
       const volume = Number(localStorage.getItem("larptrix_call_audio_volume"));
       if (Number.isFinite(volume)) remoteAudio.volume = Math.min(1, Math.max(0, volume));
-      remoteAudio.srcObject = new MediaStream([event.track]);
+      const stream = remoteAudio.srcObject instanceof MediaStream
+        ? remoteAudio.srcObject
+        : new MediaStream();
+      if (!stream.getTracks().includes(event.track)) stream.addTrack(event.track);
+      remoteAudio.srcObject = stream;
+      event.track.addEventListener("ended", () => {
+        if (remoteAudio.srcObject instanceof MediaStream && remoteAudio.srcObject.getTracks().includes(event.track)) {
+          remoteAudio.srcObject.removeTrack(event.track);
+        }
+      }, { once: true });
       remoteAudio.play().then(() => {
         enableCallAudio.hidden = true;
       }).catch(() => {
@@ -3490,7 +3521,8 @@ async function toggleScreenShare() {
       throw new Error("Screen capture is not supported by this desktop runtime.");
     }
     const audioMode = document.getElementById("screen-audio-mode")?.value || "none";
-    const captureAudio = audioMode !== "none" && !webkitGtk;
+    const firefox = /Firefox\//.test(navigator.userAgent) && !/Seamonkey\//.test(navigator.userAgent);
+    const captureAudio = audioMode !== "none" && !webkitGtk && !firefox;
     const supported = navigator.mediaDevices.getSupportedConstraints?.() || {};
     const audioConstraints = captureAudio
       ? {
@@ -3586,7 +3618,9 @@ async function toggleScreenShare() {
       ? " with shared audio"
       : webkitGtk
         ? " (screen audio unavailable in WebKitGTK)"
-        : " (source audio unavailable)";
+        : firefox && audioMode !== "none"
+          ? " (Firefox does not provide screen audio)"
+          : " (source audio unavailable)";
     callStatus.textContent = `Sharing ${settings.width || "?"}×${settings.height || "?"} at ${Math.round(settings.frameRate || 0)} fps${audioStatus}`;
     screenTrack.addEventListener("ended", stopScreenShare, { once: true });
     document.getElementById("toggle-screen-share").textContent = "Stop sharing";
@@ -4919,11 +4953,21 @@ function parseEncryptedPayload(raw) {
   return null;
 }
 
+async function blobSha256(blob) {
+  const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 async function encryptAttachment(file) {
   const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt"]);
   const rawKey = await crypto.subtle.exportKey("raw", key);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, await file.arrayBuffer());
+  const gifId = file.type === "image/gif"
+    ? (file.larptrixGifId || await blobSha256(file))
+    : null;
   return {
     file: new File([ciphertext], `${file.name}.encrypted`, { type: "application/octet-stream" }),
     metadata: {
@@ -4932,6 +4976,7 @@ async function encryptAttachment(file) {
       name: file.name,
       mime: file.type || "application/octet-stream",
       size: file.size,
+      ...(gifId ? { gif_id: gifId } : {}),
     },
   };
 }
@@ -4953,19 +4998,7 @@ function openGifFavoritesDb() {
   });
 }
 
-async function saveGifFavorite(blob, name) {
-  const db = await openGifFavoritesDb();
-  const item = { id: crypto.randomUUID(), name: name || "saved.gif", mime: blob.type || "image/gif", blob, createdAt: Date.now() };
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction(GIF_FAVORITES_STORE, "readwrite");
-    tx.objectStore(GIF_FAVORITES_STORE).put(item);
-    tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error || new Error("Could not save GIF."));
-  });
-  db.close();
-}
-
-async function listGifFavorites() {
+async function readGifFavoritesRaw() {
   const db = await openGifFavoritesDb();
   const items = await new Promise((resolve, reject) => {
     const tx = db.transaction(GIF_FAVORITES_STORE, "readonly");
@@ -4974,6 +5007,50 @@ async function listGifFavorites() {
     request.onerror = () => reject(request.error || new Error("Could not load saved GIFs."));
   });
   db.close();
+  return items;
+}
+
+async function saveGifFavorite(blob, name, gifId = null) {
+  const stableId = gifId || await blobSha256(blob);
+  const items = await readGifFavoritesRaw();
+  for (const existing of items) {
+    const existingId = existing.gif_id || await blobSha256(existing.blob);
+    if (existingId === stableId) {
+      if (!existing.gif_id) {
+        const db = await openGifFavoritesDb();
+        await new Promise((resolve, reject) => {
+          const tx = db.transaction(GIF_FAVORITES_STORE, "readwrite");
+          tx.objectStore(GIF_FAVORITES_STORE).put({ ...existing, gif_id: stableId });
+          tx.oncomplete = resolve;
+          tx.onerror = () => reject(tx.error || new Error("Could not update saved GIF."));
+        });
+        db.close();
+      }
+      throw new Error("This GIF is already saved.");
+    }
+  }
+
+  const db = await openGifFavoritesDb();
+  const item = {
+    id: crypto.randomUUID(),
+    gif_id: stableId,
+    name: name || "saved.gif",
+    mime: blob.type || "image/gif",
+    blob,
+    createdAt: Date.now(),
+  };
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(GIF_FAVORITES_STORE, "readwrite");
+    tx.objectStore(GIF_FAVORITES_STORE).put(item);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error || new Error("Could not save GIF."));
+  });
+  db.close();
+  return stableId;
+}
+
+async function listGifFavorites() {
+  const items = await readGifFavoritesRaw();
   return items.sort((a, b) => b.createdAt - a.createdAt);
 }
 
@@ -4988,19 +5065,31 @@ async function deleteGifFavorite(id) {
   db.close();
 }
 
-async function addGifToFavorites(blob, name, container) {
+async function addGifToFavorites(blob, name, container, gifId = null) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "ghost gif-save-button";
   button.textContent = "♡ Save GIF";
+  const stableId = gifId || await blobSha256(blob);
+
+  try {
+    const favorites = await listGifFavorites();
+    const alreadySaved = favorites.some((favorite) => favorite.gif_id === stableId);
+    if (alreadySaved) {
+      button.textContent = "♥ Saved";
+      button.disabled = true;
+    }
+  } catch {}
+
   button.addEventListener("click", async () => {
     button.disabled = true;
     try {
-      await saveGifFavorite(blob, name);
+      await saveGifFavorite(blob, name, stableId);
       button.textContent = "♥ Saved";
     } catch (err) {
       button.disabled = false;
       button.textContent = err?.message || "Save failed";
+      if (err?.message === "This GIF is already saved.") button.disabled = true;
     }
   });
   container.append(button);
@@ -5027,9 +5116,11 @@ async function renderGifFavorites() {
       send.type = "button";
       send.textContent = "Send";
       send.addEventListener("click", () => {
-        queueAttachment(new File([favorite.blob], favorite.name || "saved.gif", {
+        const file = new File([favorite.blob], favorite.name || "saved.gif", {
           type: favorite.mime || favorite.blob.type || "image/gif",
-        }));
+        });
+        file.larptrixGifId = favorite.gif_id;
+        queueAttachment(file);
         gifDialog.close();
       });
       const remove = document.createElement("button");
@@ -5071,7 +5162,7 @@ async function renderEncryptedAttachment(attachment, metadata, container) {
     image.setAttribute("role", "button");
     image.addEventListener("click", () => openImageViewer(url, metadata.name));
     container.append(image);
-    void addGifToFavorites(blob, metadata.name, container);
+    void addGifToFavorites(blob, metadata.name, container, metadata.gif_id || null);
   } else if (metadata.mime.startsWith("image/")) {
     const image = document.createElement("img");
     image.className = "photo";
