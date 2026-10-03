@@ -1,6 +1,6 @@
 [package]
 name = "larptrix-desktop"
-version = "0.2.4"
+version = "0.4.0"
 description = "Larptrix Linux desktop client"
 authors = ["Larptrix"]
 edition = "2021"
