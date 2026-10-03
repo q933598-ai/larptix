@@ -123,6 +123,9 @@ let cryptoReady = Promise.resolve();
 let cryptoLoadResolve = null;
 let customActivity = "";
 let musicActivityEnabled = localStorage.getItem("larptrix_show_music_activity") !== "0";
+let matrixCrypto = null;
+let matrixServerName = null;
+let matrixCryptoReady = Promise.resolve(false);
 
 let cryptoStateQueue = Promise.resolve();
 
@@ -521,42 +524,21 @@ composer.addEventListener("submit", async (event) => {
 
       await withCryptoStateLock(async () => {
         if (peer.is_group) {
-          const ciphertexts = {};
-
-          for (const memberId of peer.group_member_ids.filter((id) => id !== me.user_id)) {
-            const bundleResponse = await api(
-              "GET",
-              `/api/users/${encodeURIComponent(memberId)}/crypto-key`
-            );
-            const bundle = Array.isArray(bundleResponse?.devices)
-              ? bundleResponse.devices[0]
-              : bundleResponse;
-
-            const member = users.find((item) => item.user_id === memberId);
-
-            if (!member || !(await ensurePeerFingerprint(member, bundle))) {
-              throw new Error("Group member device could not be verified.");
-            }
-
-            if (!cryptoDevice.has_session(memberId)) {
-              const claimedBundle = await claimPeerOneTimeKey(memberId, bundle.device_id);
-              if (!(await ensurePeerFingerprint(member, claimedBundle))) {
-                throw new Error(`Device ${bundle.device_id} could not be verified.`);
-              }
-              cryptoDevice.establish_session(
-                memberId,
-                JSON.stringify(claimedBundle),
-                claimedBundle.fingerprint
-              );
-            }
-
-            ciphertexts[memberId] = cryptoDevice.encrypt(memberId, payload);
+          await matrixCryptoReady;
+          if (!matrixCrypto) {
+            throw new Error("Matrix E2E is not initialized for this device.");
           }
 
+          const roomId = matrixCrypto.groupRoomId(peer.user_id);
+          await matrixCrypto.prepareRoom(roomId, peer.group_member_ids);
+          const ciphertext = await matrixCrypto.encrypt(roomId, payload);
+
           encryptedBody = JSON.stringify({
-            version: 1,
-            message_type: "group",
-            ciphertexts,
+            version: 3,
+            message_type: "matrix",
+            sender_device_id: matrixCrypto.deviceId,
+            room_id: roomId,
+            ciphertext,
           });
         } else {
           await matrixCryptoReady;
