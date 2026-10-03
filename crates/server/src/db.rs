@@ -2265,3 +2265,172 @@ mod tests {
             .enqueue_matrix_to_device(
                 &bob.id,
                 &device_id,
+                &alice.id,
+                &Uuid::new_v4().to_string(),
+                "m.room_key",
+                "txn-1",
+                r#"{"ciphertext":"x"}"#,
+            )
+            .unwrap();
+        let event_b = db
+            .enqueue_matrix_to_device(
+                &bob.id,
+                &device_id,
+                &alice.id,
+                &Uuid::new_v4().to_string(),
+                "m.room_key",
+                "txn-1",
+                r#"{"ciphertext":"x"}"#,
+            )
+            .unwrap();
+
+        // Different sender device ids are different Matrix transactions.
+        assert_ne!(event_a, event_b);
+
+        let sender_device = Uuid::new_v4().to_string();
+        let same_a = db
+            .enqueue_matrix_to_device(
+                &bob.id,
+                &device_id,
+                &alice.id,
+                &sender_device,
+                "m.room_key",
+                "txn-2",
+                r#"{"ciphertext":"y"}"#,
+            )
+            .unwrap();
+        let same_b = db
+            .enqueue_matrix_to_device(
+                &bob.id,
+                &device_id,
+                &alice.id,
+                &sender_device,
+                "m.room_key",
+                "txn-2",
+                r#"{"ciphertext":"y"}"#,
+            )
+            .unwrap();
+        assert_eq!(same_a, same_b);
+    }
+
+    #[test]
+    fn first_e2e_activation_preserves_existing_history_and_attachments() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        let alice = db
+            .create_user("alice@example.test", "hash-a", "Alice", "alice", 1)
+            .unwrap();
+        let bob = db
+            .create_user("bob@example.test", "hash-b", "Bob", "bob", 1)
+            .unwrap();
+        let avatar_id = db
+            .insert_attachment(&alice.id, "image/png", "png", "avatar.png", 3, 1)
+            .unwrap();
+        db.set_avatar(&alice.id, &avatar_id).unwrap();
+        let file_id = db
+            .insert_attachment(
+                &alice.id,
+                "application/octet-stream",
+                "txt",
+                "old.txt",
+                3,
+                1,
+            )
+            .unwrap();
+        db.insert_dm(&alice.id, &bob.id, "old plaintext", Some(&file_id), 1)
+            .unwrap();
+        db.insert_dm(&bob.id, &alice.id, "another old message", None, 2)
+            .unwrap();
+        let carol = db
+            .create_user("carol@example.test", "hash-c", "Carol", "carol", 1)
+            .unwrap();
+        db.insert_dm(&bob.id, &carol.id, "preserved history", None, 3)
+            .unwrap();
+
+        let device_id_1 = Uuid::new_v4().to_string();
+
+        let device_1 = db
+            .create_crypto_device(
+                &alice.id,
+                &device_id_1,
+                &format!(
+                    r#"{{"version":2,"device_id":"{}","fingerprint":"alice-device-1"}}"#,
+                    device_id_1
+                ),
+                "encrypted-state-1",
+            )
+            .unwrap();
+
+        assert_eq!(device_1.device_id, device_id_1);
+        assert_eq!(device_1.user_id, alice.id);
+        assert_eq!(device_1.state_version, 1);
+
+        assert!(db.attachment(&avatar_id).unwrap().is_some());
+        assert_eq!(db.dm_history(&alice.id, &bob.id, 100).unwrap().len(), 2);
+        assert!(db.attachment(&file_id).unwrap().is_some());
+        assert_eq!(db.dm_history(&bob.id, &carol.id, 100).unwrap().len(), 1);
+
+        let device_id_2 = Uuid::new_v4().to_string();
+
+        let device_2 = db
+            .create_crypto_device(
+                &alice.id,
+                &device_id_2,
+                &format!(
+                    r#"{{"version":2,"device_id":"{}","fingerprint":"alice-device-2"}}"#,
+                    device_id_2
+                ),
+                "encrypted-state-2",
+            )
+            .unwrap();
+
+        assert_eq!(device_2.state_version, 1);
+        assert_ne!(device_1.device_id, device_2.device_id);
+
+        let devices = db.crypto_devices_for_user(&alice.id).unwrap();
+
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].user_id, alice.id);
+        assert_eq!(devices[1].user_id, alice.id);
+
+        let updated = db
+            .update_crypto_device(
+                &alice.id,
+                &device_id_1,
+                1,
+                &format!(
+                    r#"{{"version":2,"device_id":"{}","fingerprint":"alice-device-1-updated"}}"#,
+                    device_id_1
+                ),
+                "encrypted-state-1-updated",
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(updated.state_version, 2);
+
+        let stale_update = db
+            .update_crypto_device(&alice.id, &device_id_1, 1, "{}", "stale-state")
+            .unwrap();
+
+        assert!(stale_update.is_none());
+
+        assert!(db.crypto_device(&device_id_1).unwrap().is_some());
+        assert!(db.user_has_crypto_devices(&alice.id).unwrap());
+
+        let directory = db.list_users(&[]).unwrap();
+        assert!(
+            directory
+                .iter()
+                .find(|user| user.user_id == alice.id)
+                .unwrap()
+                .e2e_enabled
+        );
+        assert!(
+            !directory
+                .iter()
+                .find(|user| user.user_id == bob.id)
+                .unwrap()
+                .e2e_enabled
+        );
+    }
+}
