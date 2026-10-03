@@ -12,6 +12,37 @@
   let currentUrl = null;
   let shuffle = false;
   let repeat = false;
+  let savedPosition = 0;
+  let restoredPlayback = false;
+
+  function savePlaybackState() {
+    const track = tracks[currentIndex];
+    try {
+      localStorage.setItem("larptrix_music_state", JSON.stringify({
+        trackId: track?.id || null,
+        currentTime: Number.isFinite(els.audio.currentTime) ? els.audio.currentTime : 0,
+        volume: Number(els.volume.value),
+        shuffle,
+        repeat,
+      }));
+    } catch {}
+  }
+
+  function loadPlaybackState() {
+    try {
+      const state = JSON.parse(localStorage.getItem("larptrix_music_state") || "null");
+      if (!state || typeof state !== "object") return;
+      savedPosition = Number.isFinite(state.currentTime) ? Math.max(0, state.currentTime) : 0;
+      if (typeof state.volume === "number" && Number.isFinite(state.volume)) {
+        els.volume.value = String(Math.min(1, Math.max(0, state.volume)));
+      }
+      shuffle = state.shuffle === true;
+      repeat = state.repeat === true;
+      return typeof state.trackId === "string" ? state.trackId : null;
+    } catch {
+      return null;
+    }
+  }
 
   const $ = (id) => document.getElementById(id);
 
@@ -138,6 +169,30 @@
   async function refresh() {
     tracks = await listTracks();
     if (currentIndex >= tracks.length) currentIndex = -1;
+    const savedTrackId = loadPlaybackState();
+    if (savedTrackId && !restoredPlayback) {
+      const index = tracks.findIndex((track) => track.id === savedTrackId);
+      if (index >= 0) {
+        currentIndex = index;
+        const track = tracks[index];
+        if (currentUrl) URL.revokeObjectURL(currentUrl);
+        currentUrl = URL.createObjectURL(track.blob);
+        els.audio.src = currentUrl;
+        els.audio.volume = Number(els.volume.value);
+        els.name.textContent = track.name;
+        els.meta.textContent = `${track.filename} · ${formatSize(track.size)}`;
+        els.player.hidden = false;
+        els.audio.addEventListener("loadedmetadata", () => {
+          if (savedPosition > 0 && Number.isFinite(els.audio.duration)) {
+            els.audio.currentTime = Math.min(savedPosition, Math.max(0, els.audio.duration - 0.1));
+          }
+          restoredPlayback = true;
+          updatePlayer();
+        }, { once: true });
+      } else {
+        restoredPlayback = true;
+      }
+    }
     render();
   }
 
@@ -215,6 +270,7 @@
   function loadTrack(index, autoplay = true) {
     if (index < 0 || index >= tracks.length) return;
     currentIndex = index;
+    savedPosition = 0;
     const track = tracks[index];
     if (currentUrl) URL.revokeObjectURL(currentUrl);
     currentUrl = URL.createObjectURL(track.blob);
@@ -395,14 +451,17 @@
     els.next.addEventListener("click", () => next(1));
     els.shuffle.addEventListener("click", () => {
       shuffle = !shuffle;
+      savePlaybackState();
       updatePlayer();
     });
     els.repeat.addEventListener("click", () => {
       repeat = !repeat;
+      savePlaybackState();
       updatePlayer();
     });
     els.volume.addEventListener("input", () => {
       els.audio.volume = Number(els.volume.value);
+      savePlaybackState();
     });
     els.progress.addEventListener("input", () => {
       if (els.audio.duration) {
@@ -410,18 +469,21 @@
       }
     });
     els.audio.addEventListener("timeupdate", () => {
+      savePlaybackState();
       const duration = els.audio.duration || trackDuration(tracks[currentIndex] || {});
       const current = els.audio.currentTime || 0;
       els.progress.value = duration ? Math.round((current / duration) * 1000) : 0;
       els.time.textContent = `${formatTime(current)} / ${formatTime(duration)}`;
     });
     els.audio.addEventListener("play", () => {
+      savePlaybackState();
       els.play.textContent = "Ⅱ";
       const track = tracks[currentIndex];
       if (track) window.larptixMusicStatus?.update?.(track.name, true);
       render();
     });
     els.audio.addEventListener("pause", () => {
+      savePlaybackState();
       els.play.textContent = "▶";
       const track = tracks[currentIndex];
       if (track) window.larptixMusicStatus?.update?.(track.name, false);
