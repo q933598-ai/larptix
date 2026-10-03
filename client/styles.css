@@ -125,7 +125,7 @@ h1 {
 
 .people button:hover,
 .people button.active {
-  background: var(--me);
+  background: var(--panel-2);
 }
 
 .person-name {
@@ -1159,8 +1159,11 @@ body.is-resizing * {
 }
 
 .log {
-  background-color: #050c08;
-  background-blend-mode: soft-light;
+  background-color: var(--bg);
+  background-blend-mode: normal;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 
 #composer {
@@ -2860,5 +2863,193 @@ html[data-theme="custom"] .music-library {
   }
   .top .status {
     font-size: .68rem;
+  }
+}
+
+/* Larptrix feature batch: message actions, floating windows, and call settings */
+.message-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+  opacity: .72;
+}
+.log li:hover .message-actions,
+.message-actions:focus-within { opacity: 1; }
+.message-actions button {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: .72rem;
+}
+.message-context-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 5px 0;
+  padding: 6px 9px;
+  border-left: 3px solid var(--accent);
+  border-radius: 5px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: .72rem;
+}
+.message-context-preview strong { color: var(--accent-strong); }
+.forwarded-preview { flex-direction: row; }
+.reply-preview-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 7px;
+  background: var(--panel-2);
+}
+.reply-preview-bar > div { display: grid; min-width: 0; gap: 2px; }
+.reply-preview-bar span {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reply-preview-bar button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+.forward-message-dialog { width: min(520px, 94vw); }
+.forward-message-list {
+  display: grid;
+  gap: 7px;
+  max-height: 58vh;
+  overflow: auto;
+}
+.forward-target {
+  width: 100%;
+  justify-content: flex-start;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+.saved-avatar {
+  background: var(--panel-3);
+  color: var(--accent);
+  border-color: var(--accent);
+  font-size: 1rem;
+}
+.saved-dot {
+  background: var(--accent);
+  box-shadow: 0 0 7px rgb(53 212 122 / 38%);
+}
+.people li > button,
+.people li > button:hover,
+.people li > button.active {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.people li > button:hover { background: var(--panel-3); }
+.people li > button.active {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.call-dock-heading {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.call-dock-heading:active { cursor: grabbing; }
+.call-stage {
+  z-index: 100;
+  resize: both;
+  min-width: 320px;
+  min-height: 220px;
+}
+.call-stage.window-pinned { z-index: 200; }
+.call-stage.window-pinned {
+  top: 82px;
+  right: 16px;
+  bottom: auto;
+}
+.call-settings-panel {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+.call-settings-title {
+  font-weight: 700;
+  color: var(--text);
+}
+.call-participant-settings {
+  display: grid;
+  gap: 6px;
+}
+.call-participant-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.call-participant-setting span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.window-pin-button {
+  min-width: 30px;
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  color: #fff;
+  background: rgb(255 255 255 / 10%);
+  border-color: rgb(255 255 255 / 32%);
+}
+#music-library {
+  position: fixed;
+  z-index: 180;
+  left: 50%;
+  top: 96px;
+  width: min(760px, calc(100vw - 32px));
+  height: min(720px, calc(100vh - 112px));
+  min-height: 360px;
+  max-height: none;
+  flex: none;
+  resize: both;
+  border: 1px solid var(--line-bright);
+  border-radius: 10px;
+  box-shadow: 0 24px 70px rgb(0 0 0 / 55%);
+}
+#music-library.window-pinned {
+  z-index: 190;
+  top: 82px;
+}
+.music-library-drag-area {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.music-library-drag-area:active { cursor: grabbing; }
+
+@media (max-width: 760px) {
+  .call-stage {
+    left: 8px;
+    right: 8px;
+    bottom: 66px;
+    width: calc(100vw - 16px);
+  }
+  #music-library {
+    left: 8px;
+    top: 64px;
+    width: calc(100vw - 16px);
+    height: min(680px, 84vh);
   }
 }
