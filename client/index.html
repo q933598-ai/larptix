@@ -218,6 +218,7 @@
         </section>
         <section class="profile-section">
           <h3>Account</h3>
+          <p id="profile-server" class="profile-server"></p>
           <label id="profile-email-label" for="profile-email">Email</label>
           <input id="profile-email" type="email" readonly />
           <button id="issue-access-key" type="button" class="ghost">Create / replace sign-in key</button>
@@ -277,6 +278,7 @@
         <button type="button" id="tab-register" class="tab">Create account</button>
       </div>
       <form id="auth">
+        <p id="auth-server" class="auth-server">Server: detecting…</p>
         <p id="auth-error" class="error" hidden></p>
         <button id="register-password-toggle" type="button" class="ghost" hidden>Create account with email and password</button>
         <textarea id="access-key" rows="3" placeholder="Paste your access key" autocomplete="off" spellcheck="false" required></textarea>
@@ -297,6 +299,14 @@
           maxlength="32"
           placeholder="display name"
           autocomplete="nickname"
+          hidden
+        />
+        <input
+          id="register-username"
+          type="text"
+          maxlength="24"
+          placeholder="@username (optional)"
+          autocomplete="username"
           hidden
         />
         <button type="submit" id="auth-submit">Log in with key</button>
