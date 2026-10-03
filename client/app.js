@@ -1849,8 +1849,13 @@ function connect() {
         }
         document.getElementById("start-audio-call").hidden = false;
         document.getElementById("start-video-call").hidden = false;
-        document.getElementById("start-audio-call").textContent = msg.peer.is_group ? "Group call" : "Call";
+        document.getElementById("start-audio-call").textContent = msg.peer.is_group ? "Group audio" : "Call";
         document.getElementById("start-video-call").textContent = msg.peer.is_group ? "Group video" : "Video";
+        groupCallStart.hidden = !msg.peer.is_group;
+        groupCallStart.textContent = msg.peer.is_group
+          ? (activeGroupCalls.get(msg.peer.user_id)?.active ? "Join group call" : "Group call")
+          : "Group call";
+        renderGroupCallBanner();
         logEl.replaceChildren();
         messageBodyElementsById.clear();
         msg.history.forEach(appendMessage);
