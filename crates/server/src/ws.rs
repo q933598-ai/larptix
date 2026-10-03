@@ -1346,6 +1346,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
         let caller = state
             .db
@@ -1423,6 +1425,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
 
         let alice = state
@@ -1499,6 +1503,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
 
         let alice = state
@@ -1562,6 +1568,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
 
         let alice = state
@@ -1628,6 +1636,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
 
         let alice = state
@@ -1691,6 +1701,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
 
         let alice = state
@@ -1768,6 +1780,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
 
         let alice = state
@@ -1827,6 +1841,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
 
         let alice = state
@@ -1888,6 +1904,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
 
         let alice = state
@@ -1939,6 +1957,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
         let alice = state
             .db
