@@ -2048,12 +2048,17 @@ function openChat(id) {
   if (!selected?.is_group) void refreshPeerVerification(id);
   document.getElementById("start-audio-call").hidden = false;
   document.getElementById("start-video-call").hidden = false;
-  document.getElementById("start-audio-call").textContent = selected?.is_group ? "Group call" : "Call";
+  document.getElementById("start-audio-call").textContent = selected?.is_group ? "Group audio" : "Call";
   document.getElementById("start-video-call").textContent = selected?.is_group ? "Group video" : "Video";
   groupMembersOpen.hidden = !selected?.is_group;
+  groupCallStart.hidden = !selected?.is_group;
+  groupCallStart.textContent = selected?.is_group
+    ? (activeGroupCalls.get(id)?.active ? "Join group call" : "Group call")
+    : "Group call";
   applyChatWallpaper(id);
   chatTitlebar.hidden = false;
   renderUsers();
+  renderGroupCallBanner();
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "open", peer_id: id }));
   }
