@@ -159,6 +159,13 @@ const groupMembersHelp = document.getElementById("group-members-help");
 const groupMembersList = document.getElementById("group-members-list");
 const groupCallInvite = document.getElementById("group-call-invite");
 const groupCallCount = document.getElementById("group-call-count");
+const callDeafenButton = document.getElementById("toggle-call-deafen");
+const callSettingsOpen = document.getElementById("call-settings-open");
+const callSettingsPanel = document.getElementById("call-settings-panel");
+const callNoiseSuppression = document.getElementById("call-noise-suppression");
+const callParticipantSettings = document.getElementById("call-participant-settings");
+const callWindowPin = document.getElementById("call-window-pin");
+const musicWindowPin = document.getElementById("music-window-pin");
 
 
 let socket = null;
@@ -214,6 +221,8 @@ const deletedMessageIds = new Set();
 const SAVED_MESSAGES_ID = "__larptrix_saved_messages__";
 let replyingToMessage = null;
 const decryptedPayloadByMessageId = new Map();
+const mutedRemoteUserIds = new Set();
+let callDeafened = false;
 
 function pinnedChatsKey() {
   return me ? `larptrix_pinned_chats_${me.user_id}` : null;
@@ -444,6 +453,172 @@ function stopCallRingtone() {
   callRingtone.pause();
   callRingtone.currentTime = 0;
 }
+
+function clampWindowPosition(element, x, y) {
+  const rect = element.getBoundingClientRect();
+  return {
+    x: Math.min(Math.max(8, x), Math.max(8, window.innerWidth - rect.width - 8)),
+    y: Math.min(Math.max(8, y), Math.max(8, window.innerHeight - rect.height - 8)),
+  };
+}
+
+function applySavedCallPosition() {
+  if (!callStage) return;
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem("larptrix_call_window_position") || "null"); } catch {}
+  if (!saved || !Number.isFinite(saved.x) || !Number.isFinite(saved.y)) return;
+  const p = clampWindowPosition(callStage, saved.x, saved.y);
+  callStage.style.left = p.x + "px";
+  callStage.style.top = p.y + "px";
+  callStage.style.right = "auto";
+  callStage.style.bottom = "auto";
+}
+
+function showCallStage() {
+  callStage.hidden = false;
+  applySavedCallPosition();
+  renderCallParticipantSettings();
+}
+
+function wireCallWindowDragging() {
+  const handle = document.querySelector(".call-dock-heading");
+  if (!handle || !callStage) return;
+  let dragging = false;
+  let offsetX = 0;
+  let offsetY = 0;
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || event.target.closest("button,select,input,a")) return;
+    const rect = callStage.getBoundingClientRect();
+    dragging = true;
+    offsetX = event.clientX - rect.left;
+    offsetY = event.clientY - rect.top;
+    handle.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    const p = clampWindowPosition(callStage, event.clientX - offsetX, event.clientY - offsetY);
+    callStage.style.left = p.x + "px";
+    callStage.style.top = p.y + "px";
+    callStage.style.right = "auto";
+    callStage.style.bottom = "auto";
+  });
+  const stop = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    handle.releasePointerCapture?.(event.pointerId);
+    const rect = callStage.getBoundingClientRect();
+    localStorage.setItem("larptrix_call_window_position", JSON.stringify({ x: rect.left, y: rect.top }));
+  };
+  handle.addEventListener("pointerup", stop);
+  handle.addEventListener("pointercancel", stop);
+}
+
+function setCallPinned(pinned) {
+  callStage.classList.toggle("window-pinned", pinned);
+  callWindowPin?.setAttribute("aria-pressed", String(pinned));
+  if (callWindowPin) callWindowPin.textContent = pinned ? "📍" : "📌";
+  localStorage.setItem("larptrix_call_window_pinned", pinned ? "1" : "0");
+}
+
+function renderCallParticipantSettings() {
+  if (!callParticipantSettings) return;
+  callParticipantSettings.replaceChildren();
+  const ids = groupCallId
+    ? [...groupCallJoinedMembers].filter((id) => id !== me?.user_id)
+    : callPeerId && callPeerId !== me?.user_id ? [callPeerId] : [];
+  if (!ids.length) {
+    const p = document.createElement("p");
+    p.className = "settings-help";
+    p.textContent = "No remote participants.";
+    callParticipantSettings.append(p);
+    return;
+  }
+  for (const id of ids) {
+    const row = document.createElement("div");
+    row.className = "call-participant-setting";
+    const label = document.createElement("span");
+    label.textContent = users.find((item) => item.user_id === id)?.display_name || "Participant";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ghost";
+    const muted = mutedRemoteUserIds.has(id);
+    btn.textContent = muted ? "Unmute" : "Mute";
+    btn.setAttribute("aria-pressed", String(muted));
+    btn.addEventListener("click", () => toggleRemoteUserMuted(id));
+    row.append(label, btn);
+    callParticipantSettings.append(row);
+  }
+}
+
+function applyRemoteMuteStates() {
+  if (remoteAudio) remoteAudio.muted = callDeafened || mutedRemoteUserIds.has(callPeerId);
+  document.querySelectorAll("#group-remotes audio[data-group-remote-id]").forEach((audio) => {
+    audio.muted = callDeafened || mutedRemoteUserIds.has(audio.dataset.groupRemoteId);
+  });
+}
+
+function toggleRemoteUserMuted(userId) {
+  if (!userId) return;
+  if (mutedRemoteUserIds.has(userId)) mutedRemoteUserIds.delete(userId);
+  else mutedRemoteUserIds.add(userId);
+  applyRemoteMuteStates();
+  renderCallParticipantSettings();
+}
+
+function toggleCallDeafen() {
+  callDeafened = !callDeafened;
+  if (callDeafenButton) {
+    callDeafenButton.textContent = callDeafened ? "🔇 Sound off" : "🔊 Deafen";
+    callDeafenButton.setAttribute("aria-pressed", String(callDeafened));
+  }
+  applyRemoteMuteStates();
+}
+
+async function replaceCallMicrophoneTrack() {
+  const oldTrack = localMediaStream?.getAudioTracks()[0];
+  if (!oldTrack || !navigator.mediaDevices?.getUserMedia) return;
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: callAudioConstraints(),
+    video: false,
+  });
+  const newTrack = stream.getAudioTracks()[0];
+  if (!newTrack) {
+    stream.getTracks().forEach((track) => track.stop());
+    throw new Error("Microphone unavailable.");
+  }
+  newTrack.enabled = oldTrack.enabled;
+  const connections = groupCallId ? [...groupPeerConnections.values()] : peerConnection ? [peerConnection] : [];
+  for (const connection of connections) {
+    const sender = connection.getSenders().find((item) => item.track?.kind === "audio");
+    if (sender) await sender.replaceTrack(newTrack);
+  }
+  oldTrack.stop();
+  localMediaStream.removeTrack(oldTrack);
+  localMediaStream.addTrack(newTrack);
+}
+
+async function toggleCallNoiseSuppression() {
+  const enabled = Boolean(callNoiseSuppression?.checked);
+  localStorage.setItem(NOISE_SUPPRESSION_KEY, enabled ? "1" : "0");
+  try {
+    await replaceCallMicrophoneTrack();
+    callStatus.textContent = enabled ? "Noise suppression enabled" : "Noise suppression disabled";
+  } catch (err) {
+    appendSystem("Could not change noise suppression: " + (err.message || err));
+    if (callNoiseSuppression) callNoiseSuppression.checked = !enabled;
+    localStorage.setItem(NOISE_SUPPRESSION_KEY, enabled ? "0" : "1");
+  }
+}
+
+function setMusicWindowPinned(pinned) {
+  const library = document.getElementById("music-library");
+  library?.classList.toggle("window-pinned", pinned);
+  musicWindowPin?.setAttribute("aria-pressed", String(pinned));
+  if (musicWindowPin) musicWindowPin.textContent = pinned ? "📍" : "📌";
+  localStorage.setItem("larptrix_music_window_pinned", pinned ? "1" : "0");
+}
+
 
 async function getSavedMessages() {
   if (!cryptoRecoveryKey) return [];
@@ -1320,6 +1495,21 @@ enableCallAudio.addEventListener("click", () => {
   }).catch((err) => appendSystem(err.message || "Could not play call audio."));
 });
 document.getElementById("toggle-microphone").addEventListener("click", toggleMicrophone);
+callDeafenButton?.addEventListener("click", toggleCallDeafen);
+callSettingsOpen?.addEventListener("click", () => {
+  if (!callSettingsPanel) return;
+  callSettingsPanel.hidden = !callSettingsPanel.hidden;
+  if (callNoiseSuppression) callNoiseSuppression.checked = readStoredBool(NOISE_SUPPRESSION_KEY, true);
+  renderCallParticipantSettings();
+});
+callNoiseSuppression?.addEventListener("change", () => void toggleCallNoiseSuppression());
+callWindowPin?.addEventListener("click", () => {
+  setCallPinned(localStorage.getItem("larptrix_call_window_pinned") !== "1");
+});
+musicWindowPin?.addEventListener("click", () => {
+  setMusicWindowPinned(localStorage.getItem("larptrix_music_window_pinned") !== "1");
+});
+
 document.getElementById("call-collapse").addEventListener("click", (event) => {
   callStage.classList.toggle("call-collapsed");
   const collapsed = callStage.classList.contains("call-collapsed");
@@ -1355,6 +1545,9 @@ avatarFile.addEventListener("change", async () => {
   avatarFile.value = "";
 });
 
+wireCallWindowDragging();
+setCallPinned(localStorage.getItem("larptrix_call_window_pinned") === "1");
+setMusicWindowPinned(localStorage.getItem("larptrix_music_window_pinned") === "1");
 bootstrap();
 
 async function bootstrap() {
@@ -2212,7 +2405,7 @@ async function joinActiveGroupCall() {
   const state = group ? activeGroupCalls.get(group.user_id) : null;
   if (!state?.active) return;
   if (groupCallId === state.call_id && groupCallGroupId === group.user_id) {
-    callStage.hidden = false;
+    showCallStage();
     return;
   }
   if (peerConnection || groupPeerConnections.size || groupCallId) endCall(true);
@@ -2316,7 +2509,7 @@ async function startGroupCall(kind) {
 
   try {
     localMediaStream = await acquireCallMedia(kind);
-    callStage.hidden = false;
+    showCallStage();
     callStage.classList.remove("call-collapsed");
     remoteVideo.hidden = true;
     remoteAudio.hidden = true;
@@ -2443,7 +2636,7 @@ async function acceptGroupInvite(signal) {
   stopCallRingtone();
   try {
     localMediaStream = await acquireCallMedia(callMediaKind);
-    callStage.hidden = false;
+    showCallStage();
     callStage.classList.remove("call-collapsed");
     remoteVideo.hidden = true;
     remoteAudio.hidden = true;
@@ -2667,7 +2860,7 @@ async function startCall(kind) {
   callMediaKind = kind;
   try {
     localMediaStream = await acquireCallMedia(kind);
-    callStage.hidden = false;
+    showCallStage();
     await attachLocalMediaPreview();
     callStatus.textContent = `Calling…${callMediaNotice}`;
     peerConnection = await createPeerConnection();
@@ -2799,6 +2992,7 @@ async function handleCallSignal(signal) {
     document.getElementById("accept-call").textContent = typeof globalThis.RTCPeerConnection === "function"
       ? "Accept"
       : "Open browser";
+    startCallRingtone();
     incomingCallDialog.showModal();
     return;
   }
@@ -2862,7 +3056,7 @@ async function acceptIncomingCall() {
   }
   try {
     localMediaStream = await acquireCallMedia(callMediaKind);
-    callStage.hidden = false;
+    showCallStage();
     await attachLocalMediaPreview();
     callStatus.textContent = `Connecting…${callMediaNotice}`;
     peerConnection = await createPeerConnection();
@@ -3145,6 +3339,14 @@ function endCall(notifyPeer) {
     sendCallSignal("hangup", {});
   }
 
+  if (callSettingsPanel) callSettingsPanel.hidden = true;
+  callDeafened = false;
+  mutedRemoteUserIds.clear();
+  applyRemoteMuteStates();
+  if (callDeafenButton) {
+    callDeafenButton.textContent = "🔊 Deafen";
+    callDeafenButton.setAttribute("aria-pressed", "false");
+  }
   const endedPeerId = callPeerId;
   if (incomingCallDialog.open) incomingCallDialog.close();
   screenMediaStream?.getTracks().forEach((track) => track.stop());
