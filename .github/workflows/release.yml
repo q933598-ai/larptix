@@ -173,6 +173,23 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Set Android release version code
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          node - <<'NODE'
+          const fs = require("fs");
+          const path = "src-tauri/tauri.conf.json";
+          const cfg = JSON.parse(fs.readFileSync(path, "utf8"));
+          const version = process.env.RELEASE_VERSION.replace(/^v/i, "");
+          const match = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
+          if (!match) throw new Error("Invalid release tag: " + version);
+          const [, major, minor, patch] = match.map(Number);
+          cfg.bundle.android.versionCode =
+            1_000_000 + major * 100_000 + minor * 1_000 + patch;
+          fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + "\n");
+          NODE
+
       - name: Generate app icons
         run: npm run tauri icon src-tauri/icon-source.png
 
