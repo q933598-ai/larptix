@@ -1114,6 +1114,7 @@ fn user_info(user: &UserRow, online: bool) -> UserInfo {
 fn db_err(err: DbError) -> String {
     match err {
         DbError::EmailTaken => "email already registered".into(),
+        DbError::UsernameTaken => "username is already taken".into(),
         DbError::BadRequest(msg) => msg.into(),
         DbError::Sqlite(err) => {
             tracing::error!("db: {err}");
