@@ -1616,6 +1616,28 @@ impl Database {
         })
     }
 
+    pub fn delete_message(
+        &self,
+        requester_id: &str,
+        conversation_id: &str,
+        message_id: &str,
+    ) -> Result<bool, DbError> {
+        if requester_id.is_empty() || conversation_id.is_empty() || message_id.is_empty() {
+            return Err(DbError::BadRequest("message deletion is missing required identifiers"));
+        }
+
+        let conn = self.conn.lock().expect("db lock");
+        let deleted = conn.execute(
+            "DELETE FROM messages
+             WHERE id = ?1
+               AND conversation_id = ?2
+               AND sender_id = ?3",
+            params![message_id, conversation_id, requester_id],
+        )?;
+
+        Ok(deleted > 0)
+    }
+
     pub fn group_history(
         &self,
         user_id: &str,
