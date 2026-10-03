@@ -6,7 +6,7 @@ use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use larptrix_protocol::{
     attachment_url, avatar_url, sanitize_display_name, sanitize_email, sanitize_password,
