@@ -1771,6 +1771,8 @@ function connect() {
   nextSocket.addEventListener("open", () => {
     if (socket !== nextSocket) return;
     setStatus("online");
+    const savedPresence = localStorage.getItem(PRESENCE_KEY) || "online";
+    if (me) nextSocket.send(JSON.stringify({ type: "set_presence", status: savedPresence }));
     if (socketHeartbeatTimer) clearInterval(socketHeartbeatTimer);
     socketHeartbeatTimer = setInterval(() => {
       if (socket !== nextSocket || nextSocket.readyState !== WebSocket.OPEN) return;
@@ -1797,6 +1799,8 @@ function connect() {
           setStatus("online");
         }
         me = msg.user;
+        presenceByUserId.set(me.user_id, localStorage.getItem(PRESENCE_KEY) || "online");
+        renderPresenceStatus(presenceByUserId.get(me.user_id));
         users = msg.users;
         renderMe();
         renderUsers();
@@ -1817,6 +1821,7 @@ function connect() {
       case "directory":
         users = msg.users;
         renderUsers();
+        renderGroupCallBanner();
         break;
       case "groups":
         groups = msg.groups.map((group) => ({
@@ -1827,6 +1832,7 @@ function connect() {
           group_member_ids: group.member_ids,
         }));
         renderUsers();
+        renderGroupCallBanner();
         break;
       case "chat":
         emptyEl.hidden = true;
@@ -1851,6 +1857,14 @@ function connect() {
         break;
       case "message":
         if (isForOpenChat(msg.message)) appendMessage(msg.message);
+        if (msg.message?.sender_id !== me?.user_id) playIncomingMessageSound();
+        break;
+      case "presence":
+        if (msg.user_id) {
+          presenceByUserId.set(msg.user_id, msg.status);
+          if (msg.user_id === me?.user_id) renderPresenceStatus(msg.status);
+          renderUsers();
+        }
         break;
       case "message_deleted":
         deletedMessageIds.add(msg.message_id);
@@ -1860,6 +1874,9 @@ function connect() {
         recoveredBodiesByMessageId.delete(msg.message_id);
         cryptoRecoveryResponsesByMessageId.delete(msg.message_id);
         logEl.querySelector(`[data-message-id="${CSS.escape(msg.message_id)}"]`)?.remove();
+        break;
+      case "group_call_state":
+        handleGroupCallState(msg);
         break;
       case "crypto_resync":
         void handleCryptoResyncRequest(msg);
@@ -2977,8 +2994,11 @@ function isForOpenChat(message) {
 }
 
 function setStatus(text) {
-  statusEl.textContent = text;
-  statusEl.classList.toggle("online", text === "online");
+  if (text === "online") {
+    renderPresenceStatus(localStorage.getItem(PRESENCE_KEY) || "online");
+    return;
+  }
+  renderPresenceStatus(text);
 }
 
 function renderMe() {
@@ -3019,7 +3039,9 @@ function renderUsers() {
     avatar.className = "avatar";
     paintAvatar(avatar, user);
     const dot = document.createElement("span");
-    dot.className = user.online ? "dot on" : "dot";
+    const presence = getPresence(user);
+    dot.className = presence === "online" ? "dot on" : presence === "dnd" ? "dot dnd" : "dot";
+    dot.title = presence === "dnd" ? "Do Not Disturb" : presence === "invisible" ? "Invisible" : presence;
     const name = document.createElement("span");
     name.className = "person-name";
     const displayName = document.createElement("span");
