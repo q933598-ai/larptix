@@ -2314,8 +2314,6 @@ async function handleGroupCallSignal(signal) {
 
   if (signal.kind === "group_invite") {
     if (groupCallId === callId && groupCallGroupId === groupId) return;
-    const activeState = activeGroupCalls.get(groupId);
-    if (activeState?.active && activeState.call_id === callId && !pendingIncomingCall) return;
     if (
       pendingIncomingCall?.payload?.group_id === groupId
       && pendingIncomingCall?.payload?.call_id === callId
@@ -2632,6 +2630,7 @@ async function handleCallSignal(signal) {
     const caller = users.find((user) => user.user_id === signal.sender_id);
     incomingCallTitle.textContent = `Call from ${caller?.display_name || "Larptrix user"}`;
     const requestedKind = callMediaKind === "video" ? "Video call" : "Voice call";
+    callWindowTitle.textContent = "call.exe";
     incomingCallKind.textContent = typeof globalThis.RTCPeerConnection === "function"
       ? requestedKind
       : `${requestedKind} · open the browser client and ask the caller to retry`;
@@ -2692,6 +2691,7 @@ async function acceptIncomingCall() {
     return;
   }
   const incoming = pendingIncomingCall;
+  stopCallRingtone();
   incomingCallDialog.close();
   peerId = incoming.sender_id;
   renderUsers();
