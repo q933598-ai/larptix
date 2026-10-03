@@ -119,6 +119,7 @@ function preferredUpdateAsset(release) {
   if (process.platform === "linux") {
     return release.assets.find((asset) =>
       asset.name === `Larptrix-${version}-x64.pacman`
+      || asset.name === `Larptrix-${version}-x64.pkg.tar.zst`
     ) || null;
   }
 
