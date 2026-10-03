@@ -609,22 +609,21 @@ fn delete_message(state: &AppState, user: &UserRow, peer_id: &str, message_id: &
     };
     let deleted = state.db.delete_message(&user.id, &conversation_id, message_id).map_err(db_err)?;
     if !deleted { return Err("message not found or you are not its author".into()); }
-    fanout_deleted(state, peer_id, message_id);
+    fanout_deleted(state, &user.id, peer_id, message_id);
     Ok(())
 }
 
-fn fanout_deleted(state: &AppState, peer_id: &str, message_id: &str) {
+fn fanout_deleted(state: &AppState, requester_id: &str, peer_id: &str, message_id: &str) {
     let payload = ServerMessage::MessageDeleted { peer_id: peer_id.to_string(), message_id: message_id.to_string() };
+    if let Ok(requester) = Uuid::parse_str(requester_id) { state.hub.send_to(requester, payload.clone()); }
     if let Ok(Some(group)) = state.db.group(peer_id) {
         for member_id in group.member_ids {
+            if member_id == requester_id { continue; }
             if let Ok(member) = Uuid::parse_str(&member_id) { state.hub.send_to(member, payload.clone()); }
         }
-    } else if let Ok(recipient) = Uuid::parse_str(peer_id) {
-        state.hub.send_to(recipient, payload.clone());
+    } else if peer_id != requester_id {
+        if let Ok(recipient) = Uuid::parse_str(peer_id) { state.hub.send_to(recipient, payload); }
     }
-    // The requester receives the same event through the group/DM fanout above only for groups.
-    // For DMs the requester is not peer_id, so send it explicitly.
-    // Duplicate delivery is harmless but avoid it by checking group membership here.
 }
 fn send_dm(
     state: &AppState,
