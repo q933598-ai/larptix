@@ -222,6 +222,57 @@ pub async fn handle_socket(
     state.hub.leave(user_id, &tx);
     let went_offline = !state.hub.online_ids().iter().any(|id| id == &user.id);
     if went_offline {
+        let mut group_updates = Vec::new();
+        let mut group_ended = Vec::new();
+        {
+            let mut calls = state.group_calls.lock().expect("group call lock");
+            let group_ids: Vec<String> = calls.keys().cloned().collect();
+            for group_id in group_ids {
+                let Some(call) = calls.get_mut(&group_id) else { continue; };
+                if call.initiator_id == user.id {
+                    let ended_call = call.clone();
+                    calls.remove(&group_id);
+                    group_ended.push((group_id, ended_call));
+                } else if call.participant_ids.iter().any(|id| id == &user.id) {
+                    call.participant_ids.retain(|id| id != &user.id);
+                    group_updates.push((group_id.clone(), call.clone()));
+                }
+            }
+        }
+        for (group_id, call) in group_updates {
+            let update = ServerMessage::GroupCallState {
+                group_id: group_id.clone(),
+                call_id: call.call_id,
+                media: call.media,
+                initiator_id: call.initiator_id,
+                participant_ids: call.participant_ids,
+                active: true,
+            };
+            if let Ok(Some(group)) = state.db.group(&group_id) {
+                for member_id in &group.member_ids {
+                    if let Ok(member) = Uuid::parse_str(member_id) {
+                        state.hub.send_to(member, update.clone());
+                    }
+                }
+            }
+        }
+        for (group_id, call) in group_ended {
+            let ended = ServerMessage::GroupCallState {
+                group_id: group_id.clone(),
+                call_id: call.call_id,
+                media: call.media,
+                initiator_id: call.initiator_id,
+                participant_ids: Vec::new(),
+                active: false,
+            };
+            if let Ok(Some(group)) = state.db.group(&group_id) {
+                for member_id in &group.member_ids {
+                    if let Ok(member) = Uuid::parse_str(member_id) {
+                        state.hub.send_to(member, ended.clone());
+                    }
+                }
+            }
+        }
         state.presence.lock().expect("presence lock").remove(&user.id);
         state.hub.broadcast(ServerMessage::Presence {
             user_id: user.id.clone(),
