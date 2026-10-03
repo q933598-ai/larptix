@@ -15,8 +15,17 @@
   },
   "bundle": {
     "active": true,
-    "icon": ["icons/icon.png"],
-    "targets": ["deb", "appimage"],
-    "shortDescription": "End-to-end encrypted messenger"
+    "icon": [
+      "icons/icon.png"
+    ],
+    "targets": [
+      "deb",
+      "appimage"
+    ],
+    "shortDescription": "End-to-end encrypted messenger",
+    "android": {
+      "minSdkVersion": 24,
+      "versionCode": 402400
+    }
   }
 }
