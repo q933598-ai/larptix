@@ -1363,7 +1363,7 @@ async fn add_group_member(
         .map_err(ApiError::db)?
         .ok_or_else(|| ApiError::not_found("group not found"))?;
     if creator != user.id {
-        return Err(ApiError::forbidden("only the group creator can add members"));
+        return Err(ApiError::bad("only the group creator can add members"));
     }
     if state
         .db
@@ -1498,79 +1498,3 @@ async fn user_banner(
         .map_err(ApiError::db)?
         .ok_or_else(|| ApiError::not_found("no profile banner"))?;
     file_response(&state, &attachment_id)
-}
-
-async fn set_avatar(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    multipart: Multipart,
-) -> Result<Json<UserInfo>, ApiError> {
-    let user = require_user(&state, &headers)?;
-    let saved = save_image(&state, &user.id, multipart).await?;
-    state
-        .db
-        .set_avatar(&user.id, &saved.id)
-        .map_err(ApiError::db)?;
-    let mut info = public_me(&user);
-    info.avatar_url = Some(avatar_url(&user.id));
-    Ok(Json(info))
-}
-
-async fn user_avatar(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-) -> Result<Response, ApiError> {
-    require_user(&state, &headers)?;
-    let user = state
-        .db
-        .user_by_id(&id)
-        .map_err(ApiError::db)?
-        .ok_or_else(|| ApiError::not_found("user not found"))?;
-    let avatar_id = user
-        .avatar_id
-        .ok_or_else(|| ApiError::not_found("no avatar"))?;
-    file_response(&state, &avatar_id)
-}
-
-async fn get_attachment(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-) -> Result<Response, ApiError> {
-    let user = require_user(&state, &headers)?;
-    let allowed = state
-        .db
-        .can_view_attachment(&user.id, &id)
-        .map_err(ApiError::db)?;
-    if !allowed {
-        return Err(ApiError::not_found("attachment not found"));
-    }
-    file_response(&state, &id)
-}
-
-fn file_response(state: &AppState, id: &str) -> Result<Response, ApiError> {
-    let row = state
-        .db
-        .attachment(id)
-        .map_err(ApiError::db)?
-        .ok_or_else(|| ApiError::not_found("attachment not found"))?;
-    let path = upload_path(&state.upload_dir, &row.id, &row.ext);
-    let bytes = std::fs::read(&path).map_err(|_| ApiError::not_found("file missing"))?;
-    let mut response = Response::new(Body::from(bytes));
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_str(&row.mime)
-            .unwrap_or(HeaderValue::from_static("application/octet-stream")),
-    );
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("private, max-age=3600"),
-    );
-    let disposition = if row.mime.starts_with("image/") || row.mime.starts_with("audio/") {
-        "inline"
-    } else {
-        "attachment"
-    };
-    response.headers_mut().insert(
-        header::CONTENT_DISPOSITION,
