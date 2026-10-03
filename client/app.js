@@ -2700,6 +2700,7 @@ async function acceptIncomingCall() {
 }
 
 function rejectIncomingCall() {
+  stopCallRingtone();
   if (pendingIncomingCall?.payload?.group_id) {
     const incoming = pendingIncomingCall;
     const groupId = incoming.payload.group_id;
