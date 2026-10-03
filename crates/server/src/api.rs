@@ -222,11 +222,7 @@ async fn register_password(
     let online = state.hub.online_ids();
     let users = state.db.list_users(&online).map_err(ApiError::db)?;
     state.hub.broadcast(ServerMessage::Directory { users });
-    let response = cookie_response(&state, user)?;
-    if let Ok(body) = response.into_body().collect().await {
-        let _ = body;
-    }
-    Ok(response)
+    cookie_response(&state, user)
 }
 
 async fn login(
