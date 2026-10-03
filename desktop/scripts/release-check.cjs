@@ -39,7 +39,7 @@ const [major, minor, patch] = expectedVersion.split(".").map(Number);
 const expectedVersionCode = major * 1_000_000 + minor * 1_000 + patch;
 const actualVersionCode = Number(tauriConfig.bundle?.android?.versionCode);
 
-if (!Number.isInteger(actualVersionCode) || actualVersionCode < expectedVersionCode) {
+if (!Number.isInteger(actualVersionCode) || actualVersionCode !== expectedVersionCode) {
   throw new Error(
     `Android versionCode ${actualVersionCode} is too low; expected at least ${expectedVersionCode}`,
   );
