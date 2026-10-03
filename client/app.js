@@ -3915,6 +3915,12 @@ function paintAvatar(el, user) {
     el.textContent = "★";
     return;
   }
+  if (user?.is_channel) {
+    el.classList.add("emoji-avatar");
+    el.classList.remove("saved-avatar");
+    el.textContent = "#";
+    return;
+  }
   el.classList.toggle("emoji-avatar", !user.avatar_url);
   if (user.avatar_url) {
     const img = document.createElement("img");
