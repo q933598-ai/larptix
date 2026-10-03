@@ -3203,6 +3203,7 @@ function appendMessage(message) {
   }
 
   let encryptedBodyElement = null;
+  let messageBodyForSave = null;
   if (message.body) {
     const body = document.createElement("div");
     const envelope = parseCryptoEnvelope(message.body);
@@ -3216,6 +3217,19 @@ function appendMessage(message) {
         : message.body;
     }
     li.append(body);
+    messageBodyForSave = body;
+  }
+
+  if (messageBodyForSave) {
+    const saveButton = document.createElement("button");
+    saveButton.type = "button";
+    saveButton.className = "message-save-button ghost";
+    saveButton.textContent = "☆ Save";
+    saveButton.title = "Save this message";
+    saveButton.addEventListener("click", () => {
+      void toggleSavedMessage(message, messageBodyForSave.textContent || "");
+    });
+    li.append(saveButton);
   }
   if (message.attachment && !parseCryptoEnvelope(message.body)) {
     if (message.attachment.mime.startsWith("image/")) {
