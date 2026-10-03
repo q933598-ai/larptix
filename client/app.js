@@ -97,6 +97,26 @@ const createGroupDialog = document.getElementById("create-group-dialog");
 const groupMemberList = document.getElementById("group-member-list");
 const userSearchInput = document.getElementById("user-search");
 const emojiPicker = document.getElementById("emoji-picker");
+const menuOpenButton = document.getElementById("menu-open");
+const menuCloseButton = document.getElementById("menu-close");
+const menuBackdrop = document.getElementById("menu-backdrop");
+const appMenu = document.getElementById("app-menu");
+const menuAvatar = document.getElementById("menu-avatar");
+const menuName = document.getElementById("menu-name");
+const menuUsername = document.getElementById("menu-username");
+const menuServer = document.getElementById("menu-server");
+const menuChats = document.getElementById("menu-chats");
+const menuMusic = document.getElementById("menu-music");
+const menuNewGroup = document.getElementById("menu-new-group");
+const menuSettings = document.getElementById("menu-settings");
+const settingsDialog = document.getElementById("settings-dialog");
+const settingsServer = document.getElementById("settings-server");
+const settingsName = document.getElementById("settings-name");
+const settingsUsername = document.getElementById("settings-username");
+const settingsE2eStatus = document.getElementById("settings-e2e-status");
+const settingsE2eFingerprint = document.getElementById("settings-e2e-fingerprint");
+const settingsLayoutStatus = document.getElementById("settings-layout-status");
+
 
 let socket = null;
 let me = null;
@@ -200,6 +220,117 @@ let callMediaNotice = "";
 let pendingIceCandidates = [];
 const iceCandidatesBeforeOffer = new Map();
 
+function closeAppMenu() {
+  appMenu.hidden = true;
+  menuBackdrop.hidden = true;
+  menuOpenButton.setAttribute("aria-expanded", "false");
+  document.body.classList.remove("menu-open");
+}
+
+function openAppMenu() {
+  if (!me) return;
+  renderMenuAccount();
+  appMenu.hidden = false;
+  menuBackdrop.hidden = false;
+  menuOpenButton.setAttribute("aria-expanded", "true");
+  document.body.classList.add("menu-open");
+}
+
+function renderMenuAccount() {
+  if (!me) return;
+  menuName.textContent = me.display_name || "";
+  menuUsername.textContent = me.username ? "@" + me.username : "";
+  menuAvatar.replaceChildren();
+  if (me.avatar_url) {
+    const image = document.createElement("img");
+    image.src = me.avatar_url;
+    image.alt = "";
+    menuAvatar.append(image);
+  } else {
+    menuAvatar.textContent = (me.display_name || "?").trim().charAt(0).toUpperCase() || "?";
+  }
+  menuServer.textContent = location.host;
+}
+
+function openSettings() {
+  if (!me) return;
+  settingsServer.value = location.host;
+  settingsName.textContent = me.display_name || "—";
+  settingsUsername.textContent = me.username ? "@" + me.username : "No username";
+  const unlocked = cryptoEnabled && Boolean(cryptoDevice);
+  settingsE2eStatus.textContent = !cryptoEnabled
+    ? "E2E is not configured."
+    : unlocked
+      ? "E2E is enabled and unlocked on this device."
+      : "E2E is enabled, but this device is locked.";
+  settingsE2eFingerprint.hidden = !cryptoDeviceBundle?.fingerprint;
+  settingsE2eFingerprint.textContent = cryptoDeviceBundle?.fingerprint || "";
+  settingsLayoutStatus.textContent = "";
+  settingsDialog.showModal();
+  closeAppMenu();
+}
+
+function resetChatListWidth() {
+  localStorage.removeItem("larptrix_chat_list_width");
+  document.documentElement.style.setProperty("--chat-list-width", "280px");
+  settingsLayoutStatus.textContent = "Chat list width reset to 280px.";
+}
+
+menuOpenButton.addEventListener("click", () => {
+  if (appMenu.hidden) openAppMenu();
+  else closeAppMenu();
+});
+menuCloseButton.addEventListener("click", closeAppMenu);
+menuBackdrop.addEventListener("click", closeAppMenu);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !appMenu.hidden) {
+    event.preventDefault();
+    closeAppMenu();
+  }
+});
+menuChats.addEventListener("click", () => {
+  document.getElementById("chat-view-open").click();
+  closeAppMenu();
+});
+menuMusic.addEventListener("click", () => {
+  document.getElementById("music-library-open").click();
+  closeAppMenu();
+});
+menuNewGroup.addEventListener("click", () => {
+  document.getElementById("create-group-open").click();
+  closeAppMenu();
+});
+profileOpen.addEventListener("click", async () => {
+  closeAppMenu();
+  try {
+    const profile = await api("GET", `/api/users/${encodeURIComponent(me.user_id)}/profile`);
+    profileName.value = profile.display_name;
+    profileUsername.value = profile.username;
+    profileAbout.value = profile.about;
+    updateOwnProfileCard(profile);
+    customActivity = profile.activity?.startsWith("Listening to ") ? "" : (profile.activity || "");
+    profileActivity.value = customActivity;
+    showMusicActivity.checked = musicActivityEnabled;
+    profileDialog.showModal();
+  } catch (err) {
+    profileError.textContent = err.message;
+    profileError.hidden = false;
+  }
+});
+menuSettings.addEventListener("click", openSettings);
+document.getElementById("settings-close").addEventListener("click", () => settingsDialog.close());
+document.getElementById("settings-done").addEventListener("click", () => settingsDialog.close());
+document.getElementById("settings-open-profile").addEventListener("click", () => {
+  settingsDialog.close();
+  profileOpen.click();
+});
+document.getElementById("settings-open-profile-e2e").addEventListener("click", () => {
+  settingsDialog.close();
+  profileOpen.click();
+  setTimeout(() => enableE2eButton.click(), 0);
+});
+document.getElementById("settings-reset-layout").addEventListener("click", resetChatListWidth);
+
 tabLogin.addEventListener("click", () => setMode("login"));
 tabRegister.addEventListener("click", () => setMode("register"));
 legacyLoginButton.addEventListener("click", toggleLegacyLogin);
@@ -260,22 +391,6 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && imageViewer.open) {
     event.preventDefault();
     imageViewer.close();
-  }
-});
-profileOpen.addEventListener("click", async () => {
-  try {
-    const profile = await api("GET", `/api/users/${encodeURIComponent(me.user_id)}/profile`);
-    profileName.value = profile.display_name;
-    profileUsername.value = profile.username;
-    profileAbout.value = profile.about;
-    updateOwnProfileCard(profile);
-    customActivity = profile.activity?.startsWith("Listening to ") ? "" : (profile.activity || "");
-    profileActivity.value = customActivity;
-    showMusicActivity.checked = musicActivityEnabled;
-    profileDialog.showModal();
-  } catch (err) {
-    profileError.textContent = err.message;
-    profileError.hidden = false;
   }
 });
 document.getElementById("peer-profile-open").addEventListener("click", () => {
@@ -480,7 +595,9 @@ logoutBtn.addEventListener("click", async () => {
   me = null;
   peerId = null;
   logoutBtn.hidden = true;
+  profileOpen.hidden = true;
   composer.hidden = true;
+  closeAppMenu();
   meLabel.textContent = "";
   meUsername.textContent = "";
   meAvatar.textContent = "?";
@@ -1127,7 +1244,6 @@ function signedIn(user) {
   forgetE2eDeviceButton.hidden = true;
   gate.close();
   logoutBtn.hidden = false;
-  profileOpen.hidden = false;
   renderMe();
   cryptoReady = loadCryptoStatus().catch((err) => {
     cryptoProfileStatus.textContent = `E2E setup error: ${err.message}`;
@@ -1747,8 +1863,10 @@ function setStatus(text) {
 
 function renderMe() {
   if (!me) return;
+  profileOpen.hidden = false;
   meLabel.textContent = me.display_name;
   meUsername.textContent = me.username ? `@${me.username}` : "";
+  renderMenuAccount();
   profileName.value = me.display_name;
   profileEmail.value = me.email || "";
   profileEmail.hidden = !me.email;

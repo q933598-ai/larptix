@@ -9,18 +9,52 @@
   <body>
     <div class="shell">
       <header class="top">
-        <div>
-          <h1>Larptrix</h1>
-          <p class="tag">v0.2 · private chats · end-to-end encryption</p>
+        <div class="brand">
+          <button id="menu-open" type="button" class="menu-button ghost" aria-label="Open menu" aria-controls="app-menu" aria-expanded="false">☰</button>
+          <div>
+            <h1>Larptrix</h1>
+            <p class="tag">v0.2 · private chats · end-to-end encryption</p>
+          </div>
         </div>
         <div class="top-right">
           <span id="me-label" class="me-label"></span>
           <small id="me-username" class="me-username"></small>
-          <button id="profile-open" type="button" class="ghost" hidden>Profile</button>
           <div id="status" class="status offline">offline</div>
-          <button id="logout" type="button" class="ghost" hidden>Log out</button>
         </div>
       </header>
+
+      <div id="menu-backdrop" class="menu-backdrop" hidden></div>
+      <aside id="app-menu" class="app-menu" hidden aria-label="Larptrix menu">
+        <div class="app-menu-header">
+          <div class="app-menu-user">
+            <span id="menu-avatar" class="avatar">?</span>
+            <div>
+              <strong id="menu-name"></strong>
+              <small id="menu-username"></small>
+            </div>
+          </div>
+          <button id="menu-close" type="button" class="ghost menu-close" aria-label="Close menu">×</button>
+        </div>
+
+        <nav class="app-menu-nav" aria-label="Larptrix navigation">
+          <button id="menu-chats" type="button" class="app-menu-item active"><span aria-hidden="true">▣</span><span>Chats</span></button>
+          <button id="menu-music" type="button" class="app-menu-item"><span aria-hidden="true">♫</span><span>Music Library</span></button>
+          <button id="menu-new-group" type="button" class="app-menu-item"><span aria-hidden="true">＋</span><span>New group</span></button>
+        </nav>
+
+        <div class="app-menu-divider"></div>
+
+        <nav class="app-menu-nav" aria-label="Account">
+          <button id="profile-open" type="button" class="app-menu-item" hidden><span aria-hidden="true">◉</span><span>Profile</span></button>
+          <button id="menu-settings" type="button" class="app-menu-item"><span aria-hidden="true">⚙</span><span>Settings</span></button>
+          <button id="logout" type="button" class="app-menu-item danger-item" hidden><span aria-hidden="true">⏻</span><span>Log out</span></button>
+        </nav>
+
+        <div class="app-menu-footer">
+          <span>Server</span>
+          <code id="menu-server"></code>
+        </div>
+      </aside>
 
       <aside class="people">
         <div class="people-heading">
@@ -234,6 +268,50 @@
           <button type="submit">Save changes</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="settings-dialog" class="settings-dialog">
+      <header class="settings-header">
+        <div>
+          <p class="eyebrow">LARPTRIX</p>
+          <h2>Settings</h2>
+        </div>
+        <button id="settings-close" type="button" class="ghost" aria-label="Close settings">×</button>
+      </header>
+
+      <section class="settings-section">
+        <h3>Server</h3>
+        <label for="settings-server">Connected server</label>
+        <input id="settings-server" type="text" readonly />
+        <p class="settings-help">Your account belongs to this independent Larptrix server.</p>
+      </section>
+
+      <section class="settings-section">
+        <h3>Account</h3>
+        <dl class="settings-list">
+          <div><dt>Display name</dt><dd id="settings-name"></dd></div>
+          <div><dt>Username</dt><dd id="settings-username"></dd></div>
+        </dl>
+        <button id="settings-open-profile" type="button" class="ghost">Open profile</button>
+      </section>
+
+      <section class="settings-section">
+        <h3>End-to-end encryption</h3>
+        <p id="settings-e2e-status" class="settings-value"></p>
+        <code id="settings-e2e-fingerprint" class="crypto-fingerprint" hidden></code>
+        <p class="settings-help">Encrypted chat keys stay on your device and are protected by your separate E2E recovery key.</p>
+        <button id="settings-open-profile-e2e" type="button" class="ghost">Open E2E settings</button>
+      </section>
+
+      <section class="settings-section">
+        <h3>Interface</h3>
+        <button id="settings-reset-layout" type="button" class="ghost">Reset chat list width</button>
+        <p id="settings-layout-status" class="settings-help" aria-live="polite"></p>
+      </section>
+
+      <div class="profile-actions settings-footer">
+        <button id="settings-done" type="button">Done</button>
+      </div>
     </dialog>
 
     <dialog id="peer-profile-dialog" class="profile-view-dialog">
