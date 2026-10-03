@@ -1152,11 +1152,11 @@ mod call_signal_tests {
         };
         let caller = state
             .db
-            .create_key_user("Caller", "caller-hash", 1)
+            .create_key_user("Caller", "caller", "caller-hash", 1)
             .unwrap();
         let recipient = state
             .db
-            .create_key_user("Recipient", "recipient-hash", 1)
+            .create_key_user("Recipient", "recipient", "recipient-hash", 1)
             .unwrap();
         let recipient_id = Uuid::parse_str(&recipient.id).unwrap();
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -1474,7 +1474,7 @@ mod call_signal_tests {
 
         let alice = state.db.create_key_user("Alice", "alice_user", "alice", 1).unwrap();
         let bob = state.db.create_key_user("Bob", "bob_user", "bob", 1).unwrap();
-        let carol = state.db.create_key_user("Carol", "carol", 1).unwrap();
+        let carol = state.db.create_key_user("Carol", "carol", "carol", 1).unwrap();
 
         state
             .db
