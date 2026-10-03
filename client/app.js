@@ -1391,6 +1391,12 @@ function connect() {
         if (socket === nextSocket && nextSocket.readyState === WebSocket.OPEN) setStatus("online");
         break;
       case "welcome":
+        // The server sends welcome only after the authenticated WebSocket
+        // connection has been fully established. Use it as a definitive
+        // online signal in addition to the WebSocket open event.
+        if (socket === nextSocket && nextSocket.readyState === WebSocket.OPEN) {
+          setStatus("online");
+        }
         me = msg.user;
         users = msg.users;
         renderMe();
