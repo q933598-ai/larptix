@@ -503,8 +503,8 @@ fn relay_call_signal(
             return Err("group call target is offline".into());
         }
 
-        let recipient = Uuid::parse_str(&target.id)
-            .map_err(|_| "invalid group call target id".to_string())?;
+        let recipient =
+            Uuid::parse_str(&target.id).map_err(|_| "invalid group call target id".to_string())?;
 
         state.hub.send_to(
             recipient,
