@@ -1698,6 +1698,13 @@ impl ApiError {
         }
     }
 
+    fn conflict(message: impl ToString) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            message: message.to_string(),
+        }
+    }
+
     fn unauthorized(message: impl ToString) -> Self {
         Self {
             status: StatusCode::UNAUTHORIZED,
@@ -1774,6 +1781,7 @@ mod tests {
         assert_eq!(sanitize_username("").unwrap(), "");
         assert!(sanitize_username("ab").is_err());
         assert!(sanitize_username("alice.name").is_err());
+        assert!(sanitize_username("@admin").is_err());
     }
 
     #[test]
