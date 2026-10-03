@@ -317,9 +317,7 @@ fn klipy_media_url(value: &serde_json::Value) -> Option<String> {
     let url = value.as_str()?;
     let parsed = url.parse::<axum::http::Uri>().ok()?;
     let host = parsed.authority()?.host();
-    if parsed.scheme_str() != Some("https")
-        || !host.eq_ignore_ascii_case("static.klipy.com")
-    {
+    if parsed.scheme_str() != Some("https") || !host.eq_ignore_ascii_case("static.klipy.com") {
         return None;
     }
     Some(url.to_string())
@@ -354,7 +352,9 @@ async fn klipy_search(
 
     let q = query.q.trim();
     if !valid_short_value(q, 200) {
-        return Err(ApiError::bad("GIF search query must be between 1 and 200 characters"));
+        return Err(ApiError::bad(
+            "GIF search query must be between 1 and 200 characters",
+        ));
     }
 
     let country = query
@@ -388,17 +388,15 @@ async fn klipy_search(
             ApiError::internal("GIF service client could not start")
         })?;
 
-    let mut request = client
-        .get("https://api.klipy.com/v2/search")
-        .query(&[
-            ("key", api_key.as_str()),
-            ("q", q),
-            ("country", country.as_str()),
-            ("locale", locale.as_str()),
-            ("contentfilter", "high"),
-            ("media_filter", "gif,tinygif"),
-            ("limit", &limit.to_string()),
-        ]);
+    let mut request = client.get("https://api.klipy.com/v2/search").query(&[
+        ("key", api_key.as_str()),
+        ("q", q),
+        ("country", country.as_str()),
+        ("locale", locale.as_str()),
+        ("contentfilter", "high"),
+        ("media_filter", "gif,tinygif"),
+        ("limit", &limit.to_string()),
+    ]);
 
     if let Some(pos) = query.pos.as_deref().filter(|value| !value.is_empty()) {
         if !valid_short_value(pos, 200) {
@@ -423,7 +421,10 @@ async fn klipy_search(
     })?;
 
     let mut results = Vec::new();
-    if let Some(items) = upstream.get("results").and_then(serde_json::Value::as_array) {
+    if let Some(items) = upstream
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+    {
         for item in items {
             let Some(id) = item.get("id").and_then(json_scalar_string) else {
                 continue;
@@ -432,12 +433,13 @@ async fn klipy_search(
                 continue;
             }
 
-            let Some(formats) = item.get("media_formats").and_then(serde_json::Value::as_object)
+            let Some(formats) = item
+                .get("media_formats")
+                .and_then(serde_json::Value::as_object)
             else {
                 continue;
             };
-            let Some(gif_format) = formats.get("gif").and_then(serde_json::Value::as_object)
-            else {
+            let Some(gif_format) = formats.get("gif").and_then(serde_json::Value::as_object) else {
                 continue;
             };
             let Some(url) = gif_format.get("url").and_then(klipy_media_url) else {
@@ -516,12 +518,7 @@ async fn klipy_register_share(
         return Err(ApiError::bad("invalid GIF share country"));
     }
 
-    let locale = body
-        .locale
-        .as_deref()
-        .unwrap_or("en_US")
-        .trim()
-        .to_string();
+    let locale = body.locale.as_deref().unwrap_or("en_US").trim().to_string();
     if !valid_short_value(&locale, 16) {
         return Err(ApiError::bad("invalid GIF share locale"));
     }
