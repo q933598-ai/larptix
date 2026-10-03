@@ -1617,6 +1617,9 @@ async fn add_group_member(
                     group_id: item.id,
                     name: item.name,
                     member_ids: item.member_ids,
+                    is_channel: item.is_channel,
+                    admin_ids: item.admin_ids,
+                    post_policy: item.post_policy,
                 })
                 .collect();
             state
