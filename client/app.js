@@ -1200,6 +1200,15 @@ settingsWallpaperTint?.addEventListener("change", () => {
   localStorage.setItem("larptrix_wallpaper_tint", settingsWallpaperTint.value);
   if (peerId) applyChatWallpaper(peerId);
 });
+document.getElementById("screen-audio-mode")?.addEventListener("change", () => {
+  if (screenMediaStream) appendSystem("Screen sharing audio settings apply to the next share. Stop and start sharing again to change them.");
+});
+document.getElementById("call-audio-volume")?.addEventListener("input", (event) => {
+  const volume = Number(event.target.value);
+  if (remoteAudio) remoteAudio.volume = volume;
+  document.querySelectorAll("#group-remotes audio[data-kind=\"audio\"]").forEach((audio) => { audio.volume = volume; });
+  localStorage.setItem("larptrix_call_audio_volume", String(volume));
+});
 settingsTheme.addEventListener("change", () => {
   customThemeEditor.hidden = settingsTheme.value !== "custom";
   if (settingsTheme.value === "custom") loadThemeEditor();
@@ -1610,6 +1619,12 @@ groupCallJoin?.addEventListener("click", () => void joinActiveGroupCall());
 document.getElementById("accept-call").addEventListener("click", acceptIncomingCall);
 document.getElementById("reject-call").addEventListener("click", rejectIncomingCall);
 document.getElementById("end-call").addEventListener("click", () => endCall(true));
+const savedCallVolume = Number(localStorage.getItem("larptrix_call_audio_volume"));
+if (Number.isFinite(savedCallVolume)) {
+  remoteAudio.volume = Math.min(1, Math.max(0, savedCallVolume));
+  const volumeControl = document.getElementById("call-audio-volume");
+  if (volumeControl) volumeControl.value = String(remoteAudio.volume);
+}
 enableCallAudio.addEventListener("click", () => {
   remoteAudio.play().then(() => {
     enableCallAudio.hidden = true;
@@ -2979,8 +2994,13 @@ function renderGroupRemoteTrack(remoteId, stream, kind) {
 
   const media = tile.querySelector('[data-kind="' + kind + '"]');
   if (media) {
+    if (kind === "audio") {
+      const volume = Number(localStorage.getItem("larptrix_call_audio_volume"));
+      if (Number.isFinite(volume)) media.volume = Math.min(1, Math.max(0, volume));
+    }
     media.srcObject = stream;
     media.play?.().catch(() => {});
+    applyRemoteMuteStates();
   }
 }
 
@@ -3080,6 +3100,8 @@ async function createPeerConnection() {
   });
   connection.addEventListener("track", (event) => {
     if (event.track.kind === "audio") {
+      const volume = Number(localStorage.getItem("larptrix_call_audio_volume"));
+      if (Number.isFinite(volume)) remoteAudio.volume = Math.min(1, Math.max(0, volume));
       remoteAudio.srcObject = new MediaStream([event.track]);
       remoteAudio.play().then(() => {
         enableCallAudio.hidden = true;
@@ -3374,16 +3396,48 @@ async function toggleScreenShare() {
     if (!navigator.mediaDevices?.getDisplayMedia) {
       throw new Error("Screen capture is not supported by this desktop runtime.");
     }
+    const audioMode = document.getElementById("screen-audio-mode")?.value || "none";
+    const captureAudio = audioMode !== "none" && !webkitGtk;
+    const supported = navigator.mediaDevices.getSupportedConstraints?.() || {};
+    const audioConstraints = captureAudio
+      ? {
+          suppressLocalAudioPlayback: true,
+          ...(supported.restrictOwnAudio ? { restrictOwnAudio: true } : {}),
+        }
+      : false;
     screenMediaStream = await navigator.mediaDevices.getDisplayMedia({
       video: {
         width: { ideal: resolution.width, max: resolution.width },
         height: { ideal: resolution.height, max: resolution.height },
         frameRate: { ideal: frameRate, max: frameRate },
       },
-      audio: !webkitGtk,
+      audio: audioConstraints,
+      selfBrowserSurface: "exclude",
+      surfaceSwitching: "include",
+      monitorTypeSurfaces: "include",
+      systemAudio: audioMode === "system" ? "include" : "exclude",
+      windowAudio: audioMode === "window" ? "window" : "exclude",
     });
     const screenTrack = screenMediaStream.getVideoTracks()[0];
+    if (!screenTrack) throw new Error("The selected share source has no video track.");
+    try {
+      await screenTrack.applyConstraints({
+        width: { ideal: resolution.width },
+        height: { ideal: resolution.height },
+        frameRate: { ideal: frameRate },
+      });
+    } catch {}
+    const actual = screenTrack.getSettings?.() || {};
+    const actualWidth = actual.width || resolution.width;
+    const actualHeight = actual.height || resolution.height;
+    const actualFps = actual.frameRate ? Math.round(actual.frameRate) : frameRate;
+    const audioTracks = screenMediaStream.getAudioTracks();
+    callMediaNotice = audioTracks.length
+      ? ` · sharing ${actualWidth}×${actualHeight} @ ${actualFps} fps + audio`
+      : ` · sharing ${actualWidth}×${actualHeight} @ ${actualFps} fps`;
     localScreenVideo.srcObject = screenMediaStream;
+    localScreenVideo.muted = true;
+    localScreenVideo.defaultMuted = true;
     localScreenVideo.hidden = false;
     localScreenVideo.play().catch(() => {});
 
@@ -3469,6 +3523,7 @@ async function stopScreenShare() {
   screenMediaStream.getTracks().forEach((track) => track.stop());
   screenMediaStream = null;
   localScreenVideo.srcObject = null;
+  localScreenVideo.muted = true;
   localScreenVideo.hidden = true;
   document.getElementById("toggle-screen-share").textContent = "Share screen";
   if (callStatus.textContent.startsWith("Sharing ")) callStatus.textContent = "Connected";
@@ -5087,7 +5142,20 @@ function chatWallpaperKey(id) {
 
 function applyChatWallpaper(id) {
   const wallpaper = localStorage.getItem(chatWallpaperKey(id));
-  logEl.style.backgroundImage = wallpaper ? `url("${wallpaper}")` : "";
+  const tint = localStorage.getItem("larptrix_wallpaper_tint") || "theme";
+  if (!wallpaper) {
+    logEl.style.backgroundImage = "";
+    logEl.style.backgroundBlendMode = "";
+    return;
+  }
+  if (tint === "none") {
+    logEl.style.backgroundImage = `url("${wallpaper}")`;
+    logEl.style.backgroundBlendMode = "normal";
+    return;
+  }
+  const accent = "color-mix(in srgb, var(--accent) 18%, transparent)";
+  logEl.style.backgroundImage = `linear-gradient(${accent}, ${accent}), url("${wallpaper}")`;
+  logEl.style.backgroundBlendMode = "normal, normal";
 }
 
 async function saveChatWallpaper(file, id) {
