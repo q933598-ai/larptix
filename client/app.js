@@ -1333,6 +1333,8 @@ function openSettings() {
   settingsOutgoingCallSounds.checked = readStoredBool(OUTGOING_CALL_SOUND_KEY, true);
   settingsMessageSounds.checked = readStoredBool(MESSAGE_SOUND_KEY, true);
   renderNotificationSettings();
+  settingsInstallUpdate.hidden = true;
+  void checkForClientUpdate({ silent: true });
 
   settingsLayoutStatus.textContent = "";
   settingsDialog.showModal();
