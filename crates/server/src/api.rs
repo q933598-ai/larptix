@@ -1269,20 +1269,24 @@ async fn create_group(
         {
             return Err(ApiError::bad("a selected group member does not exist"));
         }
-        if !state
+        if state
             .db
-            .user_has_crypto_devices(member_id)
+            .matrix_devices_for_user(member_id)
             .map_err(ApiError::db)?
+            .is_empty()
         {
-            return Err(ApiError::bad("all group members must set up E2E first"));
+            return Err(ApiError::bad(
+                "all group members must finish Matrix E2E device setup first",
+            ));
         }
     }
-    if !state
+    if state
         .db
-        .user_has_crypto_devices(&user.id)
+        .matrix_devices_for_user(&user.id)
         .map_err(ApiError::db)?
+        .is_empty()
     {
-        return Err(ApiError::bad("set up E2E before creating a group"));
+        return Err(ApiError::bad("finish Matrix E2E device setup before creating a group"));
     }
     let group = state
         .db
