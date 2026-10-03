@@ -3,7 +3,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use axum::body::Body;
-use axum::extract::{DefaultBodyLimit, Multipart, Path, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
@@ -78,6 +78,8 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/api/matrix/to-device/ack", post(matrix_ack_to_device))
         .route("/api/rtc-config", get(rtc_config))
+        .route("/api/gifs/search", get(klipy_search))
+        .route("/api/gifs/share", post(klipy_register_share))
         .route("/api/users/{id}/avatar", get(user_avatar))
         .route("/api/attachments/{id}", get(get_attachment))
         .route(
@@ -275,6 +277,289 @@ async fn me(
         info.username = username;
     }
     Ok(Json(info))
+}
+
+#[derive(Deserialize)]
+pub struct KlipySearchQuery {
+    pub q: String,
+    pub country: Option<String>,
+    pub locale: Option<String>,
+    pub limit: Option<u8>,
+    pub pos: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct KlipyShareBody {
+    pub id: String,
+    pub q: Option<String>,
+    pub country: Option<String>,
+    pub locale: Option<String>,
+}
+
+fn klipy_api_key() -> Result<String, ApiError> {
+    let key = std::env::var("LARPTRIX_KLIPY_API_KEY")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if key.is_empty() {
+        return Err(ApiError::service_unavailable(
+            "Klipy GIF search is not configured on this server",
+        ));
+    }
+    Ok(key)
+}
+
+fn valid_short_value(value: &str, max: usize) -> bool {
+    !value.is_empty() && value.chars().count() <= max && !value.chars().any(char::is_control)
+}
+
+fn klipy_media_url(value: &serde_json::Value) -> Option<String> {
+    let url = value.as_str()?;
+    let parsed = url.parse::<axum::http::Uri>().ok()?;
+    if parsed.scheme_str() != Some("https")
+        || !parsed
+            .host()
+            .is_some_and(|host| host.eq_ignore_ascii_case("static.klipy.com"))
+    {
+        return None;
+    }
+    Some(url.to_string())
+}
+
+fn klipy_item_url(value: &serde_json::Value) -> Option<String> {
+    let url = value.as_str()?;
+    let parsed = url.parse::<axum::http::Uri>().ok()?;
+    if parsed.scheme_str() != Some("https")
+        || !parsed
+            .host()
+            .is_some_and(|host| host.eq_ignore_ascii_case("klipy.com")
+                || host.ends_with(".klipy.com"))
+    {
+        return None;
+    }
+    Some(url.to_string())
+}
+
+fn json_scalar_string(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(value) => Some(value.clone()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+async fn klipy_search(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<KlipySearchQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_user(&state, &headers)?;
+
+    let q = query.q.trim();
+    if !valid_short_value(q, 200) {
+        return Err(ApiError::bad("GIF search query must be between 1 and 200 characters"));
+    }
+
+    let country = query
+        .country
+        .as_deref()
+        .unwrap_or("US")
+        .trim()
+        .to_ascii_uppercase();
+    if country.len() != 2 || !country.chars().all(|char| char.is_ascii_alphabetic()) {
+        return Err(ApiError::bad("invalid GIF search country"));
+    }
+
+    let locale = query
+        .locale
+        .as_deref()
+        .unwrap_or("en_US")
+        .trim()
+        .to_string();
+    if !valid_short_value(&locale, 16) {
+        return Err(ApiError::bad("invalid GIF search locale"));
+    }
+
+    let limit = query.limit.unwrap_or(24).clamp(1, 50);
+    let api_key = klipy_api_key()?;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|err| {
+            tracing::error!("klipy client: {err}");
+            ApiError::internal("GIF service client could not start")
+        })?;
+
+    let mut request = client
+        .get("https://api.klipy.com/v2/search")
+        .query(&[
+            ("key", api_key.as_str()),
+            ("q", q),
+            ("country", country.as_str()),
+            ("locale", locale.as_str()),
+            ("contentfilter", "high"),
+            ("media_filter", "gif,tinygif"),
+            ("limit", &limit.to_string()),
+        ]);
+
+    if let Some(pos) = query.pos.as_deref().filter(|value| !value.is_empty()) {
+        if !valid_short_value(pos, 200) {
+            return Err(ApiError::bad("invalid GIF pagination cursor"));
+        }
+        request = request.query(&[("pos", pos)]);
+    }
+
+    let response = request.send().await.map_err(|err| {
+        tracing::error!("klipy search request failed: {err}");
+        ApiError::internal("GIF search request failed")
+    })?;
+
+    if !response.status().is_success() {
+        tracing::warn!("klipy search returned {}", response.status());
+        return Err(ApiError::internal("GIF search service returned an error"));
+    }
+
+    let upstream = response.json::<serde_json::Value>().await.map_err(|err| {
+        tracing::error!("klipy search response parse failed: {err}");
+        ApiError::internal("GIF search response was invalid")
+    })?;
+
+    let mut results = Vec::new();
+    if let Some(items) = upstream.get("results").and_then(serde_json::Value::as_array) {
+        for item in items {
+            let Some(id) = item.get("id").and_then(json_scalar_string) else {
+                continue;
+            };
+            if !valid_short_value(&id, 128) {
+                continue;
+            }
+
+            let Some(formats) = item.get("media_formats").and_then(serde_json::Value::as_object)
+            else {
+                continue;
+            };
+            let Some(gif_format) = formats.get("gif").and_then(serde_json::Value::as_object)
+            else {
+                continue;
+            };
+            let Some(url) = gif_format.get("url").and_then(klipy_media_url) else {
+                continue;
+            };
+
+            let preview_url = formats
+                .get("tinygif")
+                .and_then(serde_json::Value::as_object)
+                .and_then(|format| format.get("url"))
+                .and_then(klipy_media_url)
+                .unwrap_or_else(|| url.clone());
+
+            let title = item
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .or_else(|| {
+                    item.get("content_description")
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|value| !value.is_empty())
+                })
+                .unwrap_or("GIF")
+                .chars()
+                .take(160)
+                .collect::<String>();
+
+            let item_url = item.get("itemurl").and_then(klipy_item_url);
+
+            results.push(serde_json::json!({
+                "id": id,
+                "title": title,
+                "url": url,
+                "preview_url": preview_url,
+                "item_url": item_url,
+                "search_term": q,
+            }));
+        }
+    }
+
+    let next = upstream
+        .get("next")
+        .and_then(json_scalar_string)
+        .filter(|value| valid_short_value(value, 200));
+
+    Ok(Json(serde_json::json!({
+        "results": results,
+        "next": next,
+    })))
+}
+
+async fn klipy_register_share(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<KlipyShareBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_user(&state, &headers)?;
+
+    let id = body.id.trim();
+    if !valid_short_value(id, 128) {
+        return Err(ApiError::bad("invalid GIF id"));
+    }
+
+    let q = body.q.as_deref().unwrap_or("").trim();
+    if q.len() > 200 || q.chars().any(char::is_control) {
+        return Err(ApiError::bad("invalid GIF search term"));
+    }
+
+    let country = body
+        .country
+        .as_deref()
+        .unwrap_or("US")
+        .trim()
+        .to_ascii_uppercase();
+    if country.len() != 2 || !country.chars().all(|char| char.is_ascii_alphabetic()) {
+        return Err(ApiError::bad("invalid GIF share country"));
+    }
+
+    let locale = body
+        .locale
+        .as_deref()
+        .unwrap_or("en_US")
+        .trim()
+        .to_string();
+    if !valid_short_value(&locale, 16) {
+        return Err(ApiError::bad("invalid GIF share locale"));
+    }
+
+    let api_key = klipy_api_key()?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|err| {
+            tracing::error!("klipy client: {err}");
+            ApiError::internal("GIF service client could not start")
+        })?;
+
+    let response = client
+        .get("https://api.klipy.com/v2/registershare")
+        .query(&[
+            ("key", api_key.as_str()),
+            ("id", id),
+            ("country", country.as_str()),
+            ("locale", locale.as_str()),
+            ("q", q),
+        ])
+        .send()
+        .await
+        .map_err(|err| {
+            tracing::error!("klipy share request failed: {err}");
+            ApiError::internal("GIF share registration failed")
+        })?;
+
+    if !response.status().is_success() {
+        tracing::warn!("klipy share returned {}", response.status());
+        return Err(ApiError::internal("GIF share registration failed"));
+    }
+
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 async fn rtc_config(
@@ -1608,6 +1893,13 @@ impl ApiError {
     fn not_found(message: impl ToString) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
+            message: message.to_string(),
+        }
+    }
+
+    fn service_unavailable(message: impl ToString) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
             message: message.to_string(),
         }
     }
