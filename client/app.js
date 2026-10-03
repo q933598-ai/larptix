@@ -1961,7 +1961,10 @@ function appendMessage(message) {
     let effectiveMessage = message;
     const queuedResponse = cryptoRecoveryResponsesByMessageId.get(message.id);
     if (queuedResponse) {
-      effectiveMessage = mergeCryptoRecoveryResponse(message, queuedResponse) || message;
+      effectiveMessage =
+        queuedResponse.sender_id === me?.user_id
+          ? (mergeCryptoRecoveryResponse(message, queuedResponse) || { ...message, body: queuedResponse.ciphertext })
+          : (mergeCryptoRecoveryResponse(message, queuedResponse) || message);
       if (effectiveMessage !== message) {
         cryptoRecoveryResponsesByMessageId.delete(message.id);
       }
@@ -2207,16 +2210,27 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
           throw new Error("No encrypted copy was addressed to this account.");
         }
       } else {
-        senderBundle = await api(
+        const senderBundleResponse = await api(
           "GET",
           `/api/users/${encodeURIComponent(message.sender_id)}/crypto-key`
         );
+        const senderDevices = Array.isArray(senderBundleResponse?.devices)
+          ? senderBundleResponse.devices
+          : [senderBundleResponse];
 
+        if (!senderDevices.length || !senderDevices[0]) {
+          throw new Error("Sender E2E device was not found.");
+        }
+
+        // Historical v1 sessions were keyed by the sender account id, not
+        // the sender device id. Keep that identity so old messages remain
+        // decryptable after the Matrix migration.
+        senderBundle = senderDevices[0];
         if (!(await ensurePeerFingerprint(sender, senderBundle))) {
           throw new Error("Encrypted. Device was not verified; message was not decrypted.");
         }
 
-        senderDeviceId = senderBundle.device_id;
+        senderDeviceId = message.sender_id;
         encryptedBody = message.body;
       }
 
@@ -2273,8 +2287,16 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
 
         if (
           allowRecovery
-          && envelope.version === 2
-          && envelope.message_type === "message"
+          && (
+            (
+              envelope.version === 1
+              && ["message", "prekey"].includes(envelope.message_type)
+            )
+            || (
+              envelope.version === 2
+              && envelope.message_type === "message"
+            )
+          )
           && socket?.readyState === WebSocket.OPEN
         ) {
           const recoveryDevice = cryptoDevice.device_id();
@@ -2375,8 +2397,16 @@ async function handleCryptoResyncResponse(response) {
     const currentEnvelope = knownMessage ? parseCryptoEnvelope(knownMessage.body) : null;
 
     if (
-      currentEnvelope?.version === 2
-      && currentEnvelope.message_type === "message"
+      (
+        (
+          currentEnvelope?.version === 1
+          && ["message", "prekey"].includes(currentEnvelope.message_type)
+        )
+        || (
+          currentEnvelope?.version === 2
+          && currentEnvelope.message_type === "message"
+        )
+      )
       && typeof response.device_id === "string"
     ) {
       cryptoRecoveryResponsesByMessageId.set(response.message_id, {
@@ -2386,7 +2416,10 @@ async function handleCryptoResyncResponse(response) {
       });
       const bodyElement = messageBodyElementsById.get(response.message_id);
       if (bodyElement) {
-        const recoveredMessage = mergeCryptoRecoveryResponse(knownMessage, response);
+        const recoveredMessage =
+          currentEnvelope?.version === 1
+            ? { ...knownMessage, body: response.ciphertext }
+            : mergeCryptoRecoveryResponse(knownMessage, response);
         if (!recoveredMessage) return;
         const ok = await displayEncryptedMessage(
           recoveredMessage,
@@ -2434,12 +2467,16 @@ async function handleCryptoResyncResponse(response) {
   cryptoRecoveryPending.delete(response.message_id);
 
   let originalEnvelope = parseCryptoEnvelope(pending.message.body);
-  if (
-    !originalEnvelope
-    || originalEnvelope.version !== 2
-    || originalEnvelope.message_type !== "message"
-    || originalEnvelope.sender_device_id !== pending.senderDeviceId
-  ) {
+  const validV2Original =
+    originalEnvelope?.version === 2
+    && originalEnvelope.message_type === "message"
+    && originalEnvelope.sender_device_id === pending.senderDeviceId;
+  const validV1Original =
+    originalEnvelope?.version === 1
+    && ["message", "prekey"].includes(originalEnvelope.message_type)
+    && pending.senderDeviceId === pending.senderId;
+
+  if (!validV2Original && !validV1Original) {
     console.warn("[E2E] recovery response ignored: original message binding is invalid", {
       message: response.message_id,
     });
@@ -2456,25 +2493,37 @@ async function handleCryptoResyncResponse(response) {
       throw new Error("Recovery response was not a valid v1 ciphertext.");
     }
   } catch (err) {
-    console.warn("[E2E] recovery response ignored: invalid pre-key ciphertext", {
+    console.warn("[E2E] recovery response ignored: invalid v1 ciphertext", {
       message: response.message_id,
       error: err?.message || String(err),
     });
     return;
   }
 
-  originalEnvelope = {
-    ...originalEnvelope,
-    ciphertexts: {
-      ...originalEnvelope.ciphertexts,
-      [response.device_id]: response.ciphertext,
-    },
-  };
+  let recoveredMessage;
 
-  const recoveredMessage = {
-    ...pending.message,
-    body: JSON.stringify(originalEnvelope),
-  };
+  if (
+    originalEnvelope.version === 1
+    && ["message", "prekey"].includes(originalEnvelope.message_type)
+  ) {
+    recoveredMessage = {
+      ...pending.message,
+      body: response.ciphertext,
+    };
+  } else {
+    originalEnvelope = {
+      ...originalEnvelope,
+      ciphertexts: {
+        ...originalEnvelope.ciphertexts,
+        [response.device_id]: response.ciphertext,
+      },
+    };
+
+    recoveredMessage = {
+      ...pending.message,
+      body: JSON.stringify(originalEnvelope),
+    };
+  }
   const bodyElement = messageBodyElementsById.get(response.message_id);
 
   if (!bodyElement) {
@@ -2573,6 +2622,79 @@ async function handleCryptoResyncRequest(request) {
 
       if (!(await ensurePeerFingerprint(peer, target))) {
         throw new Error("The recovering device is not verified.");
+      }
+
+      const original = parseCryptoEnvelope(request.body);
+
+      if (
+        original?.version === 1
+        && ["message", "prekey"].includes(original.message_type)
+      ) {
+        // Legacy v1 used the peer account id as the Olm session key.
+        const legacySessionId = request.requester_id;
+        if (!cryptoDevice.has_session(legacySessionId)) {
+          console.log("[E2E] recovery: establishing legacy v1 session");
+          const devicesResponse = await api(
+            "GET",
+            `/api/users/${encodeURIComponent(request.requester_id)}/crypto-key`
+          );
+          const requesterDevices = Array.isArray(devicesResponse?.devices)
+            ? devicesResponse.devices
+            : [];
+
+          const requesterBundle = requesterDevices.find(
+            (device) => device?.device_id === request.device_id
+          ) || requesterDevices[0];
+
+          if (!requesterBundle) {
+            throw new Error("The recovering device has no E2E bundle.");
+          }
+
+          if (!(await ensurePeerFingerprint(peer, requesterBundle))) {
+            throw new Error(`Device ${request.device_id} could not be verified.`);
+          }
+
+          const claimedBundle = requesterDevices.length
+            ? await claimPeerOneTimeKey(request.requester_id, requesterBundle.device_id)
+            : requesterBundle;
+
+          if (!(await ensurePeerFingerprint(peer, claimedBundle))) {
+            throw new Error(`Device ${request.device_id} could not be verified.`);
+          }
+
+          cryptoDevice.establish_session(
+            legacySessionId,
+            JSON.stringify(claimedBundle),
+            claimedBundle.fingerprint,
+          );
+        }
+
+        const recoveryCipher = cryptoDevice.encrypt(legacySessionId, cached);
+        const recoveryCipherEnvelope = JSON.parse(recoveryCipher);
+        if (
+          recoveryCipherEnvelope?.version !== 1
+          || !["message", "prekey"].includes(recoveryCipherEnvelope.message_type)
+        ) {
+          throw new Error("automatic legacy recovery did not produce a v1 ciphertext");
+        }
+
+        await persistCryptoState();
+
+        socket?.send(JSON.stringify({
+          type: "crypto_resync_response",
+          peer_id: request.requester_id,
+          message_id: request.message_id,
+          device_id: request.device_id,
+          ciphertext: recoveryCipher,
+        }));
+
+        console.log("[E2E] recovery: legacy v1 ciphertext sent", {
+          peer: request.requester_id,
+          message: request.message_id,
+          session: legacySessionId,
+          sessionCount: cryptoDevice.session_count(legacySessionId),
+        });
+        return;
       }
 
       console.log("[E2E] recovery: claiming one-time key");
