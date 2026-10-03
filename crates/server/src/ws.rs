@@ -9,7 +9,7 @@ use larptrix_protocol::{
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::db::{DbError, UserRow};
+use crate::db::{CryptoResyncRequestRow, CryptoResyncResponseRow, DbError, UserRow};
 use crate::hub::Outbound;
 use crate::now_ms;
 use crate::AppState;
@@ -69,6 +69,18 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: UserRo
                 txn_id: event.txn_id,
                 content,
             });
+        }
+    }
+
+    if let Ok(requests) = state.db.crypto_resync_requests_for_user(&user.id) {
+        for request in requests {
+            send_crypto_resync_request(&tx, request);
+        }
+    }
+
+    if let Ok(responses) = state.db.crypto_resync_responses_for_user(&user.id) {
+        for response in responses {
+            send_crypto_resync_response(&tx, response);
         }
     }
     state.hub.broadcast(ServerMessage::Directory {
@@ -141,6 +153,21 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: UserRo
                         send_error(&tx, "bad_crypto_resync_response", err);
                     }
                 }
+                Ok(ClientMessage::CryptoResyncResponseAck {
+                    peer_id,
+                    message_id,
+                    device_id,
+                }) => {
+                    if let Err(err) = ack_crypto_resync_response(
+                        &state,
+                        &user,
+                        &peer_id,
+                        &message_id,
+                        &device_id,
+                    ) {
+                        send_error(&tx, "bad_crypto_resync_response_ack", err);
+                    }
+                }
                 Err(err) => send_error(&tx, "bad_json", err.to_string()),
             },
             Message::Close(_) => break,
@@ -155,6 +182,25 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: UserRo
     });
     tracing::info!(user_id = %user.id, "disconnected");
     let _ = writer.await;
+}
+
+fn send_crypto_resync_request(tx: &Outbound, request: CryptoResyncRequestRow) {
+    let _ = tx.send(ServerMessage::CryptoResync {
+        requester_id: request.requester_user_id,
+        message_id: request.message_id,
+        device_id: request.device_id,
+        body: request.body,
+        attachment_id: request.attachment_id,
+    });
+}
+
+fn send_crypto_resync_response(tx: &Outbound, response: CryptoResyncResponseRow) {
+    let _ = tx.send(ServerMessage::CryptoResyncResponse {
+        sender_id: response.sender_user_id,
+        message_id: response.message_id,
+        device_id: response.device_id,
+        ciphertext: response.ciphertext,
+    });
 }
 
 fn relay_crypto_resync(
@@ -199,9 +245,30 @@ fn relay_crypto_resync(
         return Err("recovery target device does not belong to requester".into());
     }
     let recipient = Uuid::parse_str(&peer.id).map_err(|_| "invalid peer id".to_string())?;
+
+    state
+        .db
+        .enqueue_crypto_resync_request(
+            &user.id,
+            &peer.id,
+            message_id,
+            device_id,
+            body,
+            attachment_id.as_deref(),
+        )
+        .map_err(|err| err.to_string())?;
+
     if state.hub.online_ids().iter().all(|id| id != &peer.id) {
-        return Err("peer is offline; recovery will retry when they reconnect".into());
+        tracing::info!(
+            requester = %user.id,
+            peer = %peer.id,
+            message_id = %message_id,
+            device_id = %device_id,
+            "crypto recovery request queued for offline peer"
+        );
+        return Ok(());
     }
+
     tracing::info!(
         requester = %user.id,
         peer = %peer.id,
@@ -286,8 +353,35 @@ fn relay_crypto_resync_response(
     }
 
     let recipient = Uuid::parse_str(&peer.id).map_err(|_| "invalid peer id".to_string())?;
+
+    if !state
+        .db
+        .delete_crypto_resync_request(&peer.id, &user.id, message_id, device_id)
+        .map_err(|err| err.to_string())?
+    {
+        return Err("crypto recovery request is no longer pending".into());
+    }
+
+    state
+        .db
+        .enqueue_crypto_resync_response(
+            &peer.id,
+            &user.id,
+            message_id,
+            device_id,
+            ciphertext,
+        )
+        .map_err(|err| err.to_string())?;
+
     if state.hub.online_ids().iter().all(|id| id != &peer.id) {
-        return Err("peer is offline".into());
+        tracing::info!(
+            sender = %user.id,
+            peer = %peer.id,
+            message_id = %message_id,
+            device_id = %device_id,
+            "crypto recovery response queued for offline peer"
+        );
+        return Ok(());
     }
 
     let delivered = state.hub.send_to(
@@ -311,6 +405,32 @@ fn relay_crypto_resync_response(
 
     if delivered == 0 {
         return Err("peer connection disappeared before recovery response delivery".into());
+    }
+
+    Ok(())
+}
+
+fn ack_crypto_resync_response(
+    state: &AppState,
+    user: &UserRow,
+    peer_id: &str,
+    message_id: &str,
+    device_id: &str,
+) -> Result<(), String> {
+    if peer_id == user.id {
+        return Err("cannot acknowledge E2E recovery from yourself".into());
+    }
+    if message_id.is_empty() || device_id.is_empty() {
+        return Err("crypto recovery acknowledgement is missing message or device id".into());
+    }
+
+    let deleted = state
+        .db
+        .ack_crypto_resync_response(&user.id, peer_id, message_id, device_id)
+        .map_err(|err| err.to_string())?;
+
+    if !deleted {
+        return Err("crypto recovery response is no longer pending".into());
     }
 
     Ok(())
