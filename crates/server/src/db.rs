@@ -1199,6 +1199,24 @@ impl Database {
         .optional()
     }
 
+    pub fn add_channel_admin(&self, group_id: &str, user_id: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "INSERT OR IGNORE INTO channel_admins (group_id, user_id) VALUES (?1, ?2)",
+            params![group_id, user_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_channel_post_policy(&self, group_id: &str, policy: &str) -> Result<(), DbError> {
+        if policy != "admins" && policy != "members" {
+            return Err(DbError::BadRequest("invalid channel posting policy"));
+        }
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute("UPDATE groups SET post_policy = ?1 WHERE id = ?2 AND is_channel = 1", params![policy, group_id])?;
+        Ok(())
+    }
+
     pub fn add_group_member(&self, group_id: &str, user_id: &str) -> Result<(), DbError> {
         let conn = self.conn.lock().expect("db lock");
         conn.execute(
