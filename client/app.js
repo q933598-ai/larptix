@@ -4,7 +4,7 @@ import {
   getOrCreateMatrixDeviceId,
 } from "/matrix-crypto.js";
 
-await initCrypto();
+const cryptoWasmReady = initCrypto();
 
 const statusEl = document.getElementById("status");
 const usersEl = document.getElementById("users");
@@ -456,7 +456,14 @@ issueAccessKeyButton.addEventListener("click", async () => {
     issueAccessKeyButton.disabled = false;
   }
 });
-enableE2eButton.addEventListener("click", () => {
+enableE2eButton.addEventListener("click", async () => {
+  try {
+    await cryptoWasmReady;
+  } catch (err) {
+    profileError.textContent = err.message || "Could not initialize E2E encryption.";
+    profileError.hidden = false;
+    return;
+  }
   if (cryptoEnabled) {
     if (cryptoDevice) {
       cryptoProfileStatus.textContent = "E2E is already unlocked on this device.";
@@ -934,6 +941,7 @@ async function completeCryptoDialog() {
 }
 
 async function loadCryptoStatus() {
+  await cryptoWasmReady;
   try {
     cryptoStoredState = await api("GET", "/api/me/crypto-device");
   } catch (err) {

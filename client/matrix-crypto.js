@@ -11,7 +11,7 @@ import {
   initAsync,
 } from "/matrix-crypto-pkg/index.mjs";
 
-await initAsync();
+const matrixCryptoReady = initAsync();
 
 const MATRIX_ROOM_ALGORITHM = "m.megolm.v1.aes-sha2";
 
@@ -62,8 +62,8 @@ export class LarptrixMatrixCrypto {
     this.processingRequests = null;
     this.processingToDevice = Promise.resolve();
     this.processedToDeviceIds = new Set();
-    this.decryptionSettings = new DecryptionSettings(TrustRequirement.Untrusted);
-    this.encryptionSettings = new EncryptionSettings();
+    this.decryptionSettings = null;
+    this.encryptionSettings = null;
   }
 
   get deviceId() {
@@ -75,6 +75,9 @@ export class LarptrixMatrixCrypto {
   }
 
   async initialize() {
+    await matrixCryptoReady;
+    this.decryptionSettings = new DecryptionSettings(TrustRequirement.Untrusted);
+    this.encryptionSettings = new EncryptionSettings();
     this.machine = await OlmMachine.initialize(
       new UserId(this.matrixUserId),
       new DeviceId(this.deviceIdValue),
