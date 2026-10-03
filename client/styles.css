@@ -3174,3 +3174,35 @@ html[data-theme="custom"] .music-library {
     flex-direction: column;
   }
 }
+
+/* Profile banner must stay behind the avatar/identity row. */
+.profile-banner { position: relative; z-index: 0; }
+.profile-identity { position: relative; z-index: 2; }
+.profile-identity .avatar,
+.profile-identity > img,
+.avatar-btn { position: relative; z-index: 3; }
+
+/* Emoji picker must escape the horizontally scrollable composer toolbar. */
+.composer-tools {
+  overflow: visible;
+  flex-wrap: wrap;
+}
+.emoji-control { z-index: 20; }
+.emoji-picker {
+  z-index: 200;
+  box-shadow: 0 14px 36px rgb(0 0 0 / 38%);
+}
+
+/* Screen-share controls are compact enough to keep the call window usable. */
+.call-volume-select { min-width: 150px; }
+.call-volume-select input[type="range"] { min-width: 120px; width: 150px; }
+
+/* Let the draggable music window move on mobile too; JS owns its position. */
+@media (max-width: 760px) {
+  #music-library {
+    left: 8px;
+    top: 64px;
+    right: auto;
+    bottom: auto;
+  }
+}
