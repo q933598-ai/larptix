@@ -643,6 +643,12 @@ composer.addEventListener("submit", async (event) => {
 
       await withCryptoStateLock(async () => {
         if (peer.is_group) {
+          await waitForMatrixDevices(peer.group_member_ids);
+        } else {
+          await waitForMatrixDevices([peerId]);
+        }
+
+        if (peer.is_group) {
           await matrixCryptoReady;
           if (!matrixCrypto) {
             throw new Error("Matrix E2E is not initialized for this device.");
@@ -1214,7 +1220,40 @@ function setPeerVerified(userId, verified) {
   if (peerId === userId) peerVerified.hidden = !verified;
 }
 
-async function refreshPeerVerification(userId) {
+async async function waitForMatrixDevices(userIds, { attempts = 8, delayMs = 350 } = {}) {
+  const ids = [...new Set(userIds.filter((id) => id && id !== me?.user_id))];
+  if (!ids.length) return;
+
+  let lastMissing = [];
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    lastMissing = [];
+    await Promise.all(ids.map(async (userId) => {
+      try {
+        const result = await api(
+          "GET",
+          `/api/users/${encodeURIComponent(userId)}/matrix-devices`,
+        );
+        const devices = Array.isArray(result?.devices) ? result.devices : [];
+        if (!devices.length) lastMissing.push(userId);
+      } catch {
+        lastMissing.push(userId);
+      }
+    }));
+
+    if (!lastMissing.length) return;
+    if (attempt + 1 < attempts) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  throw new Error(
+    lastMissing.length === 1
+      ? "The recipient's Matrix E2E device is still registering. Ask them to keep Larptrix open for a moment and try again."
+      : "One or more group members' Matrix E2E devices are still registering. Ask them to keep Larptrix open for a moment and try again.",
+  );
+}
+
+function refreshPeerVerification(userId) {
   peerVerified.hidden = true;
 
   try {
