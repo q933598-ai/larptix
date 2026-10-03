@@ -1236,7 +1236,7 @@ function setPeerVerified(userId, verified) {
   if (peerId === userId) peerVerified.hidden = !verified;
 }
 
-async async function waitForMatrixDevices(userIds, { attempts = 8, delayMs = 350 } = {}) {
+async function waitForMatrixDevices(userIds, { attempts = 8, delayMs = 350 } = {}) {
   const ids = [...new Set(userIds.filter((id) => id && id !== me?.user_id))];
   if (!ids.length) return;
 
