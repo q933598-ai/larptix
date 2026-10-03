@@ -19,6 +19,11 @@ pub enum ClientMessage {
         #[serde(default)]
         attachment_id: Option<String>,
     },
+    /// Permanently delete a message authored by the requesting user.
+    Delete {
+        peer_id: String,
+        message_id: String,
+    },
     /// Relay ephemeral WebRTC signaling data to one chat peer.
     CallSignal {
         peer_id: String,
@@ -70,6 +75,10 @@ pub enum ServerMessage {
     },
     Message {
         message: ChatMessage,
+    },
+    MessageDeleted {
+        peer_id: String,
+        message_id: String,
     },
     CallSignal {
         sender_id: String,
