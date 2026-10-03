@@ -1,0 +1,268 @@
+name: Release Larptrix
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate release
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set Android release version code
+        working-directory: desktop
+        env:
+          RELEASE_VERSION: \${{ github.ref_name }}
+        run: |
+          node - <<'NODE'
+          const fs = require("fs");
+          const path = "src-tauri/tauri.conf.json";
+          const cfg = JSON.parse(fs.readFileSync(path, "utf8"));
+          const version = process.env.RELEASE_VERSION.replace(/^v/i, "");
+          const match = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
+          if (!match) throw new Error("Invalid release tag: " + version);
+          const [, major, minor, patch] = match.map(Number);
+          cfg.bundle.android.versionCode =
+            1_000_000 + major * 100_000 + minor * 1_000 + patch;
+          fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + "\\n");
+          NODE
+
+      - name: Check release version
+        env:
+          GITHUB_REF_NAME: \${{ github.ref_name }}
+        run: npm run release:check
+
+  linux:
+    name: Linux release
+    needs: validate
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install pacman build dependency
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends bsdtar
+
+      - name: Generate app icons
+        run: npm run tauri icon src-tauri/icon-source.png
+
+      - name: Build Linux packages
+        run: npm run build:linux
+
+      - name: Prepare release assets
+        env:
+          RELEASE_VERSION: \${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="\${RELEASE_VERSION#v}"
+          mkdir -p release
+          cp "dist/Larptrix-\${VERSION}-x64.AppImage" "release/Larptrix-\${VERSION}-x64.AppImage"
+          PACMAN="$(find dist -maxdepth 1 -type f \( -name "*.pacman" -o -name "*.pkg.tar.zst" \) | head -n1)"
+          test -n "$PACMAN"
+          cp "$PACMAN" "release/$(basename "$PACMAN")"
+
+      - name: Upload Linux release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: desktop/release/*
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    name: Windows release
+    needs: validate
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate app icons
+        run: npm run tauri icon src-tauri/icon-source.png
+
+      - name: Build Windows installer
+        run: npm run build:windows
+
+      - name: Prepare release assets
+        env:
+          RELEASE_VERSION: \${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="\${RELEASE_VERSION#v}"
+          mkdir -p release
+          cp "dist/Larptrix-\${VERSION}-win-x64.exe" "release/Larptrix-\${VERSION}-win-x64.exe"
+
+      - name: Upload Windows release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: desktop/release/*
+          if-no-files-found: error
+          retention-days: 7
+
+  android:
+    name: Android release
+    needs: validate
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate app icons
+        run: npm run tauri icon src-tauri/icon-source.png
+
+      - name: Initialize Android project
+        run: npx tauri android init --ci
+
+      - name: Require Android signing secrets
+        env:
+          ANDROID_KEY_BASE64: \${{ secrets.ANDROID_KEY_BASE64 }}
+          ANDROID_KEY_ALIAS: \${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: \${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$ANDROID_KEY_BASE64"
+          test -n "$ANDROID_KEY_ALIAS"
+          test -n "$ANDROID_KEY_PASSWORD"
+
+      - name: Configure Android signing
+        env:
+          ANDROID_KEY_BASE64: \${{ secrets.ANDROID_KEY_BASE64 }}
+          ANDROID_KEY_ALIAS: \${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: \${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          cd src-tauri/gen/android
+          printf 'keyAlias=%s\\n' "$ANDROID_KEY_ALIAS" > keystore.properties
+          printf 'keyPassword=%s\\n' "$ANDROID_KEY_PASSWORD" >> keystore.properties
+          printf 'storePassword=%s\\n' "$ANDROID_KEY_PASSWORD" >> keystore.properties
+          printf 'storeFile=%s\\n' "$RUNNER_TEMP/larptrix-release.jks" >> keystore.properties
+          printf '%s' "$ANDROID_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/larptrix-release.jks"
+
+      - name: Patch Gradle release signing
+        run: python3 scripts/configure-android-signing.py
+
+      - name: Build signed release APK
+        run: npx tauri android build --apk --release
+
+      - name: Verify APK signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n1)"
+          APK="$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | grep -i 'release' | head -n1)"
+          test -n "$APKSIGNER"
+          test -n "$APK"
+          "$APKSIGNER" verify --verbose "$APK"
+
+      - name: Prepare release asset
+        env:
+          RELEASE_VERSION: \${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="\${RELEASE_VERSION#v}"
+          mkdir -p release
+          APK="$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | grep -i 'release' | head -n1)"
+          test -n "$APK"
+          cp "$APK" "release/Larptrix-\${VERSION}-android.apk"
+
+      - name: Upload Android release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-android
+          path: desktop/release/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs: [linux, windows, android]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release
+
+      - name: Generate checksums
+        working-directory: release
+        run: |
+          set -euo pipefail
+          sha256sum * > SHA256SUMS.txt
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: \${{ github.token }}
+          RELEASE_TAG: \${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" release/* \
+            --title "Larptrix $RELEASE_TAG" \
+            --generate-notes
