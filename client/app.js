@@ -1985,11 +1985,12 @@ async function handleCallSignal(signal) {
 
 async function acceptIncomingCall() {
   if (pendingIncomingCall?.payload?.group_id || groups.some((group) => group.user_id === pendingIncomingCall?.peer_id && group.is_group)) {
-    const incoming = pendingIncomingCall;
+    const groupIncoming = pendingIncomingCall;
     pendingIncomingCall = null;
     incomingCallDialog.close();
-    await acceptGroupInvite(incoming);
+    await acceptGroupInvite(groupIncoming);
     return;
+  }
   if (!pendingIncomingCall) return;
   if (typeof globalThis.RTCPeerConnection !== "function") {
     const callerId = pendingIncomingCall.sender_id;
