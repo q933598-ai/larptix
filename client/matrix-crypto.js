@@ -62,6 +62,8 @@ export class LarptrixMatrixCrypto {
     this.processingRequests = null;
     this.processingToDevice = Promise.resolve();
     this.processedToDeviceIds = new Set();
+    this.processingKeyBackup = null;
+    this.keyBackupDirty = false;
     this.decryptionSettings = null;
     this.encryptionSettings = null;
   }
@@ -100,12 +102,68 @@ export class LarptrixMatrixCrypto {
     );
     await this.processOutgoingRequests();
     await this.processPendingToDevice();
+    await this.restoreRoomKeyBackup();
+    await this.processOutgoingRequests();
+    await this.syncRoomKeyBackup();
     return this;
   }
 
   async close() {
     this.machine?.close();
     this.machine = null;
+  }
+
+  async restoreRoomKeyBackup() {
+    if (!this.machine) return;
+    try {
+      const result = await this.api("GET", "/api/matrix/key-backup");
+      const encrypted = result?.encrypted_backup;
+      if (!encrypted) return;
+      const exported = OlmMachine.decryptExportedRoomKeys(
+        encrypted,
+        this.storePassphrase,
+      );
+      const parsed = JSON.parse(exported);
+      if (!Array.isArray(parsed) || parsed.length === 0) return;
+      const imported = await this.machine.importExportedRoomKeys(
+        exported,
+        () => {},
+      );
+      console.info("[E2E] restored Matrix room keys", imported);
+    } catch (err) {
+      console.error("[E2E] Matrix room key backup restore failed", err);
+    }
+  }
+
+  async syncRoomKeyBackup() {
+    if (!this.machine) return;
+    this.keyBackupDirty = true;
+    if (this.processingKeyBackup) return this.processingKeyBackup;
+
+    this.processingKeyBackup = (async () => {
+      do {
+        this.keyBackupDirty = false;
+        try {
+          const exported = await this.machine.exportRoomKeys(() => true);
+          const encrypted = OlmMachine.encryptExportedRoomKeys(
+            exported,
+            this.storePassphrase,
+            100000,
+          );
+          await this.api("PUT", "/api/matrix/key-backup", {
+            encrypted_backup: encrypted,
+          });
+        } catch (err) {
+          console.error("[E2E] Matrix room key backup sync failed", err);
+        }
+      } while (this.keyBackupDirty);
+    })();
+
+    try {
+      await this.processingKeyBackup;
+    } finally {
+      this.processingKeyBackup = null;
+    }
   }
 
   async processOutgoingRequests() {
@@ -228,6 +286,7 @@ export class LarptrixMatrixCrypto {
     // consumed while its forwarding request was never delivered.
     await this.processOutgoingRequests();
     this.processedToDeviceIds.add(event.id);
+    void this.syncRoomKeyBackup();
     return true;
   }
 
@@ -321,6 +380,7 @@ export class LarptrixMatrixCrypto {
     }
 
     await this.processOutgoingRequests();
+    void this.syncRoomKeyBackup();
   }
 
   async encrypt(roomId, payload) {
@@ -357,7 +417,9 @@ export class LarptrixMatrixCrypto {
         new RoomId(roomId),
         this.decryptionSettings,
       );
-      return JSON.parse(result.event);
+      const decrypted = JSON.parse(result.event);
+      void this.syncRoomKeyBackup();
+      return decrypted;
     } catch (err) {
       // A missing Megolm room key should enqueue Matrix-style room-key
       // recovery requests. Flush them immediately through our transport.
