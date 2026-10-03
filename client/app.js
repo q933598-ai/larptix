@@ -2278,6 +2278,7 @@ async function acceptGroupInvite(signal) {
   refreshGroupCallParticipants();
 
 
+  stopCallRingtone();
   try {
     localMediaStream = await acquireCallMedia(callMediaKind);
     callStage.hidden = false;
@@ -2313,6 +2314,8 @@ async function handleGroupCallSignal(signal) {
 
   if (signal.kind === "group_invite") {
     if (groupCallId === callId && groupCallGroupId === groupId) return;
+    const activeState = activeGroupCalls.get(groupId);
+    if (activeState?.active && activeState.call_id === callId && !pendingIncomingCall) return;
     if (
       pendingIncomingCall?.payload?.group_id === groupId
       && pendingIncomingCall?.payload?.call_id === callId
