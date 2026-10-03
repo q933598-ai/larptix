@@ -46,14 +46,21 @@ pub async fn handle_socket(
         .hub
         .join(user_id, user.display_name.clone(), tx.clone());
     {
-        let mut presence = state.presence.lock().expect("presence lock");
-        presence.entry(user.id.clone()).or_insert_with(|| "online".to_string());
-        for (id, status) in presence.iter() {
-            let _ = tx.send(ServerMessage::Presence {
-                user_id: id.clone(),
-                status: status.clone(),
-            });
-        }
+        let status = {
+            let mut presence = state.presence.lock().expect("presence lock");
+            let status = presence.entry(user.id.clone()).or_insert_with(|| "online".to_string()).clone();
+            for (id, value) in presence.iter() {
+                let _ = tx.send(ServerMessage::Presence {
+                    user_id: id.clone(),
+                    status: value.clone(),
+                });
+            }
+            status
+        };
+        state.hub.broadcast(ServerMessage::Presence {
+            user_id: user.id.clone(),
+            status,
+        });
     }
     let _ = tx.send(ServerMessage::Welcome {
         user: me_info(&state, &user),
