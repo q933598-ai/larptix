@@ -83,6 +83,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/users/{id}/crypto-key", get(get_crypto_key))
         .route("/api/matrix/config", get(matrix_config))
         .route("/api/matrix/key-backup", get(matrix_key_backup_get).put(matrix_key_backup_put))
+        .route_layer(DefaultBodyLimit::max(16 * 1024 * 1024 + 64 * 1024))
         .route("/api/matrix/keys/upload", post(matrix_keys_upload))
         .route("/api/matrix/keys/query", post(matrix_keys_query))
         .route("/api/matrix/keys/claim", post(matrix_keys_claim))
