@@ -392,14 +392,6 @@ function getPresence(user) {
   return status === "dnd" || status === "invisible" || status === "online" ? status : "online";
 }
 
-function setStatus(text) {
-  if (text === "online") {
-    renderPresenceStatus(localStorage.getItem(PRESENCE_KEY) || "online");
-    return;
-  }
-  renderPresenceStatus(text);
-}
-
 function renderPresenceStatus(status) {
   const value = status || "offline";
   statusEl.textContent = value === "dnd" ? "Do Not Disturb" : value === "invisible" ? "Invisible" : value;
