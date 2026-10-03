@@ -74,7 +74,7 @@ jobs:
         run: npm ci
 
       - name: Install pacman build dependency
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends bsdtar
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libarchive-tools
 
       - name: Generate app icons
         run: npm run tauri icon src-tauri/icon-source.png
