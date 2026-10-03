@@ -100,7 +100,9 @@ const screenFrameRate = document.getElementById("screen-framerate");
 const chatBackgroundInput = document.getElementById("chat-background");
 const peerProfileDialog = document.getElementById("peer-profile-dialog");
 const createGroupDialog = document.getElementById("create-group-dialog");
+const createChannelDialog = document.getElementById("create-channel-dialog");
 const groupMemberList = document.getElementById("group-member-list");
+const channelMemberList = document.getElementById("channel-member-list");
 const userSearchInput = document.getElementById("user-search");
 const emojiPicker = document.getElementById("emoji-picker");
 const menuOpenButton = document.getElementById("menu-open");
@@ -1135,7 +1137,11 @@ menuNewGroup.addEventListener("click", () => {
   closeAppMenu();
 });
 menuNewChannel?.addEventListener("click", () => {
-  appendSystem("Channels are planned for the next protocol milestone.");
+  renderChannelMemberChoices();
+  document.getElementById("channel-create-error").hidden = true;
+  document.getElementById("channel-name").value = "";
+  document.getElementById("channel-post-policy").value = "admins";
+  createChannelDialog?.showModal();
   closeAppMenu();
 });
 menuAbout?.addEventListener("click", () => {
@@ -1321,6 +1327,8 @@ forgetE2eDeviceButton.addEventListener("click", async () => {
 
 document.getElementById("create-group-cancel").addEventListener("click", () => createGroupDialog.close());
 document.getElementById("create-group-form").addEventListener("submit", createGroup);
+document.getElementById("create-channel-cancel")?.addEventListener("click", () => createChannelDialog.close());
+document.getElementById("create-channel-form")?.addEventListener("submit", createChannel);
 userSearchInput.addEventListener("input", renderUsers);
 document.getElementById("emoji-picker-toggle").addEventListener("click", () => {
   emojiPicker.hidden = !emojiPicker.hidden;
@@ -2320,6 +2328,9 @@ function connect() {
           display_name: group.name,
           online: true,
           is_group: true,
+          is_channel: Boolean(group.is_channel),
+          admin_ids: Array.isArray(group.admin_ids) ? group.admin_ids : [],
+          post_policy: group.post_policy || (group.is_channel ? "admins" : "members"),
           group_member_ids: group.member_ids,
         }));
         renderUsers();
@@ -3710,6 +3721,9 @@ async function loadGroups() {
       display_name: group.name,
       online: true,
       is_group: true,
+      is_channel: Boolean(group.is_channel),
+      admin_ids: Array.isArray(group.admin_ids) ? group.admin_ids : [],
+      post_policy: group.post_policy || (group.is_channel ? "admins" : "members"),
       group_member_ids: group.member_ids,
     }));
     renderUsers();
@@ -3751,6 +3765,9 @@ async function createGroup(event) {
       display_name: created.name,
       online: true,
       is_group: true,
+      is_channel: Boolean(created.is_channel),
+      admin_ids: Array.isArray(created.admin_ids) ? created.admin_ids : [me.user_id],
+      post_policy: created.post_policy || "members",
       group_member_ids: created.member_ids,
     };
     groups = [...groups.filter((group) => group.user_id !== newGroup.user_id), newGroup];
@@ -3763,6 +3780,51 @@ async function createGroup(event) {
   }
 }
 
+async function createChannel(event) {
+  event.preventDefault();
+  const error = document.getElementById("channel-create-error");
+  error.hidden = true;
+  const memberIds = [...channelMemberList.querySelectorAll("input:checked")].map((input) => input.value);
+  try {
+    const created = await api("POST", "/api/channels", {
+      name: document.getElementById("channel-name").value.trim(),
+      member_ids: memberIds,
+      post_policy: document.getElementById("channel-post-policy").value,
+    });
+    const newChannel = {
+      user_id: created.group_id,
+      display_name: created.name,
+      online: true,
+      is_group: true,
+      is_channel: true,
+      admin_ids: Array.isArray(created.admin_ids) ? created.admin_ids : [me.user_id],
+      post_policy: created.post_policy || "admins",
+      group_member_ids: created.member_ids,
+    };
+    groups = [...groups.filter((group) => group.user_id !== newChannel.user_id), newChannel];
+    createChannelDialog.close();
+    renderUsers();
+    openChat(created.group_id);
+  } catch (err) {
+    error.textContent = err.message;
+    error.hidden = false;
+  }
+}
+
+function renderChannelMemberChoices() {
+  channelMemberList.replaceChildren();
+  for (const user of users.filter((item) => item.user_id !== me?.user_id && !item.is_group)) {
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = user.user_id;
+    checkbox.disabled = !user.e2e_enabled;
+    const name = document.createElement("span");
+    name.textContent = user.e2e_enabled ? user.display_name + " · E2E ready" : user.display_name + " · E2E required";
+    label.append(checkbox, name);
+    channelMemberList.append(label);
+  }
+}
 function paintAvatar(el, user) {
   el.replaceChildren();
   if (user?.is_saved_chat) {
