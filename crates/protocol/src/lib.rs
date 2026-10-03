@@ -39,6 +39,12 @@ pub enum ClientMessage {
         device_id: String,
         ciphertext: String,
     },
+    /// Acknowledge that an E2E recovery response was consumed.
+    CryptoResyncResponseAck {
+        peer_id: String,
+        message_id: String,
+        device_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
