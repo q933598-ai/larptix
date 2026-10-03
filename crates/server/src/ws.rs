@@ -437,7 +437,25 @@ fn send_dm(
                 .is_some_and(|attachment| attachment.mime == "application/octet-stream"),
             None => true,
         };
-        validate_group_e2e_message(&body, &group.member_ids, &user.id, attachment_is_ciphertext)?;
+        let parsed_envelope = serde_json::from_str::<serde_json::Value>(&body).ok();
+        if parsed_envelope.as_ref()
+            .and_then(|value| value.get("version").and_then(|v| v.as_u64()))
+            == Some(3)
+            && parsed_envelope.as_ref()
+                .and_then(|value| value.get("message_type").and_then(|v| v.as_str()))
+                == Some("matrix")
+        {
+            validate_matrix_group_e2e_message(
+                state,
+                peer_id,
+                &group.member_ids,
+                &user.id,
+                &body,
+                attachment_is_ciphertext,
+            )?;
+        } else {
+            validate_group_e2e_message(&body, &group.member_ids, &user.id, attachment_is_ciphertext)?;
+        }
         let message = state
             .db
             .insert_group_dm(&user.id, peer_id, &body, attachment_id.as_deref(), now_ms())
@@ -481,6 +499,87 @@ fn send_dm(
         .insert_dm(&user.id, peer_id, &body, attachment_id.as_deref(), now_ms())
         .map_err(db_err)?;
     fanout(state, &message);
+    Ok(())
+}
+
+fn validate_matrix_group_e2e_message(
+    state: &AppState,
+    group_id: &str,
+    member_ids: &[String],
+    sender_id: &str,
+    body: &str,
+    attachment_is_ciphertext: bool,
+) -> Result<(), String> {
+    if !attachment_is_ciphertext {
+        return Err("E2E chat attachments must be encrypted before upload".into());
+    }
+
+    let envelope: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| "invalid Matrix group ciphertext envelope".to_string())?;
+
+    if envelope.get("version").and_then(|value| value.as_u64()) != Some(3)
+        || envelope.get("message_type").and_then(|value| value.as_str()) != Some("matrix")
+    {
+        return Err("invalid Matrix group ciphertext envelope".into());
+    }
+
+    let sender_device_id = envelope
+        .get("sender_device_id")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Matrix group message is missing sender device id".to_string())?;
+
+    let room_id = envelope
+        .get("room_id")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Matrix group message is missing room id".to_string())?;
+
+    let server_name = std::env::var("DOMAIN").unwrap_or_else(|_| "localhost".into());
+    let expected_room_id = format!("!larpgrp_{group_id}:{server_name}");
+    if room_id != expected_room_id {
+        return Err("Matrix group message has an invalid room id".into());
+    }
+
+    let ciphertext = envelope
+        .get("ciphertext")
+        .and_then(|value| value.as_object())
+        .ok_or_else(|| "Matrix group message is missing ciphertext".to_string())?;
+
+    if ciphertext.get("algorithm").and_then(|value| value.as_str())
+        != Some("m.megolm.v1.aes-sha2")
+    {
+        return Err("Matrix group message uses an unsupported algorithm".into());
+    }
+
+    if ciphertext
+        .get("ciphertext")
+        .and_then(|value| value.as_str())
+        .is_none()
+    {
+        return Err("Matrix group message is missing ciphertext data".into());
+    }
+
+    if state
+        .db
+        .matrix_device(sender_id, sender_device_id)
+        .map_err(|err| err.to_string())?
+        .is_none()
+    {
+        return Err("Matrix group sender device is not registered".into());
+    }
+
+    for member_id in member_ids {
+        if state
+            .db
+            .matrix_devices_for_user(member_id)
+            .map_err(|err| err.to_string())?
+            .is_empty()
+        {
+            return Err("all group members must have Matrix E2E devices".into());
+        }
+    }
+
     Ok(())
 }
 
