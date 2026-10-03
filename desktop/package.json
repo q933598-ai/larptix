@@ -14,7 +14,8 @@
     "dev:tauri": "tauri dev",
     "build:tauri": "tauri build",
     "build:android": "tauri android build --apk",
-    "release:check": "node scripts/release-check.cjs"
+    "release:check": "node scripts/release-check.cjs",
+    "version:set": "node scripts/set-version.cjs"
   },
   "build": {
     "appId": "com.larptrix.desktop",
