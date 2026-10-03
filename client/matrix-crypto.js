@@ -64,6 +64,7 @@ export class LarptrixMatrixCrypto {
     this.processedToDeviceIds = new Set();
     this.processingKeyBackup = null;
     this.keyBackupDirty = false;
+    this.keyBackupRestoreFailed = false;
     this.decryptionSettings = null;
     this.encryptionSettings = null;
   }
@@ -102,9 +103,9 @@ export class LarptrixMatrixCrypto {
     );
     await this.processOutgoingRequests();
     await this.processPendingToDevice();
-    await this.restoreRoomKeyBackup();
+    const backupRestored = await this.restoreRoomKeyBackup();
     await this.processOutgoingRequests();
-    await this.syncRoomKeyBackup();
+    if (backupRestored) await this.syncRoomKeyBackup();
     return this;
   }
 
@@ -114,24 +115,27 @@ export class LarptrixMatrixCrypto {
   }
 
   async restoreRoomKeyBackup() {
-    if (!this.machine) return;
+    if (!this.machine) return false;
     try {
       const result = await this.api("GET", "/api/matrix/key-backup");
       const encrypted = result?.encrypted_backup;
-      if (!encrypted) return;
+      if (!encrypted) return true;
       const exported = OlmMachine.decryptExportedRoomKeys(
         encrypted,
         this.storePassphrase,
       );
       const parsed = JSON.parse(exported);
-      if (!Array.isArray(parsed) || parsed.length === 0) return;
+      if (!Array.isArray(parsed) || parsed.length === 0) return true;
       const imported = await this.machine.importExportedRoomKeys(
         exported,
         () => {},
       );
       console.info("[E2E] restored Matrix room keys", imported);
+      return true;
     } catch (err) {
+      this.keyBackupRestoreFailed = true;
       console.error("[E2E] Matrix room key backup restore failed", err);
+      return false;
     }
   }
 
