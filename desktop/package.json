@@ -9,11 +9,12 @@
     "tauri": "tauri",
     "dev": "electron .",
     "build": "electron-builder --linux AppImage && electron-builder --win zip --x64",
-    "build:linux": "electron-builder --linux AppImage",
-    "build:windows": "electron-builder --win zip --x64",
+    "build:linux": "electron-builder --linux AppImage pacman",
+    "build:windows": "electron-builder --win nsis",
     "dev:tauri": "tauri dev",
     "build:tauri": "tauri build",
-    "build:android": "tauri android build --apk"
+    "build:android": "tauri android build --apk",
+    "release:check": "node scripts/release-check.cjs"
   },
   "build": {
     "appId": "com.larptrix.desktop",
@@ -28,18 +29,37 @@
     ],
     "linux": {
       "target": [
-        "AppImage"
+        "AppImage",
+        "pacman"
       ],
       "category": "Network",
       "syncDesktopName": true,
       "icon": "src-tauri/icons/icon.png",
-      "artifactName": "Larptrix-${version}-${arch}.${ext}"
+      "artifactName": "Larptrix-${version}-${arch}.${ext}",
+      "executableName": "larptrix"
     },
     "win": {
       "target": [
-        "zip"
+        "nsis"
       ],
       "artifactName": "Larptrix-${version}-win-x64.${ext}"
+    },
+    "pacman": {
+      "depends": [
+        "gtk3",
+        "libnotify",
+        "nss",
+        "libxss",
+        "libxtst",
+        "xdg-utils",
+        "at-spi2-core",
+        "libsecret"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
     }
   },
   "devDependencies": {
