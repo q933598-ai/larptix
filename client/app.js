@@ -220,6 +220,13 @@ let callMediaNotice = "";
 let pendingIceCandidates = [];
 const iceCandidatesBeforeOffer = new Map();
 
+let groupCallId = null;
+let groupCallGroupId = null;
+let groupCallMemberIds = [];
+const groupCallJoinedMembers = new Set();
+const groupPeerConnections = new Map();
+const groupPendingIceCandidates = new Map();
+
 function closeAppMenu() {
   appMenu.hidden = true;
   menuBackdrop.hidden = true;
@@ -1403,8 +1410,10 @@ function connect() {
         } else if (msg.peer.is_group) {
           groups = groups.map((group) => group.user_id === msg.peer.user_id ? { ...group, ...msg.peer } : group);
         }
-        document.getElementById("start-audio-call").hidden = Boolean(msg.peer.is_group);
-        document.getElementById("start-video-call").hidden = Boolean(msg.peer.is_group);
+        document.getElementById("start-audio-call").hidden = false;
+        document.getElementById("start-video-call").hidden = false;
+        document.getElementById("start-audio-call").textContent = msg.peer.is_group ? "Group call" : "Call";
+        document.getElementById("start-video-call").textContent = msg.peer.is_group ? "Group video" : "Video";
         logEl.replaceChildren();
         messageBodyElementsById.clear();
         msg.history.forEach(appendMessage);
@@ -1454,8 +1463,10 @@ function openChat(id) {
   const selected = [...users, ...groups].find((user) => user.user_id === id);
   peerVerified.hidden = true;
   if (!selected?.is_group) void refreshPeerVerification(id);
-  document.getElementById("start-audio-call").hidden = Boolean(selected?.is_group);
-  document.getElementById("start-video-call").hidden = Boolean(selected?.is_group);
+  document.getElementById("start-audio-call").hidden = false;
+  document.getElementById("start-video-call").hidden = false;
+  document.getElementById("start-audio-call").textContent = selected?.is_group ? "Group call" : "Call";
+  document.getElementById("start-video-call").textContent = selected?.is_group ? "Group video" : "Video";
   applyChatWallpaper(id);
   chatTitlebar.hidden = false;
   renderUsers();
@@ -1464,8 +1475,334 @@ function openChat(id) {
   }
 }
 
+
+async function startGroupCall(kind) {
+  if (!peerId || !socket || socket.readyState !== WebSocket.OPEN) return;
+  const group = groups.find((item) => item.user_id === peerId && item.is_group);
+  if (!group) return;
+  if (typeof globalThis.RTCPeerConnection !== "function") {
+    appendSystem("Group calls require WebRTC support in this desktop runtime.");
+    return;
+  }
+
+  const onlineMembers = group.group_member_ids
+    .filter((id) => id !== me.user_id)
+    .filter((id) => users.some((user) => user.user_id === id && user.online));
+  if (!onlineMembers.length) {
+    appendSystem("No other group member is online.");
+    return;
+  }
+
+  if (peerConnection || groupPeerConnections.size) endCall(true);
+
+  groupCallId = crypto.randomUUID();
+  groupCallGroupId = group.user_id;
+  groupCallMemberIds = [...group.group_member_ids];
+  groupCallJoinedMembers.clear();
+  groupCallJoinedMembers.add(me.user_id);
+  callPeerId = group.user_id;
+  callMediaKind = kind;
+
+  try {
+    localMediaStream = await acquireCallMedia(kind);
+    callStage.hidden = false;
+    callStage.classList.remove("call-collapsed");
+    remoteVideo.hidden = true;
+    remoteAudio.hidden = true;
+    document.getElementById("group-remotes").hidden = false;
+    document.getElementById("toggle-screen-share").hidden = true;
+    await attachLocalMediaPreview();
+    callStatus.textContent = "Starting group " + (kind === "video" ? "video " : "") + "call…" + callMediaNotice;
+
+    for (const remoteId of onlineMembers) {
+      sendGroupCallSignal(remoteId, "group_invite", {
+        group_id: groupCallGroupId,
+        call_id: groupCallId,
+        media: kind,
+      });
+    }
+  } catch (err) {
+    appendSystem("Group call setup failed: " + (err.message || "Check camera and microphone permissions."));
+    endCall(false);
+  }
+}
+
+async function establishGroupOffers() {
+  const onlineMembers = groupCallMemberIds
+    .filter((id) => id !== me.user_id)
+    .filter((id) => groupCallJoinedMembers.has(id))
+    .filter((id) => users.some((user) => user.user_id === id && user.online));
+
+  for (const remoteId of onlineMembers) {
+    if (me.user_id < remoteId) {
+      await createGroupOffer(remoteId);
+    }
+  }
+}
+
+async function createGroupPeerConnection(remoteId) {
+  if (typeof globalThis.RTCPeerConnection !== "function") {
+    throw new Error("WebRTC is unavailable.");
+  }
+  const config = await api("GET", "/api/rtc-config");
+  if (!Array.isArray(config.ice_servers) || config.ice_servers.length === 0) {
+    throw new Error("The server returned no ICE servers. Configure STUN/TURN.");
+  }
+
+  const connection = new globalThis.RTCPeerConnection({ iceServers: config.ice_servers });
+  connection.addEventListener("icecandidate", (event) => {
+    if (event.candidate) {
+      sendGroupCallSignal(remoteId, "ice_candidate", {
+        group_id: groupCallGroupId,
+        call_id: groupCallId,
+        candidate: event.candidate.toJSON(),
+      });
+    }
+  });
+  connection.addEventListener("track", (event) => {
+    const stream = event.streams[0] || new MediaStream([event.track]);
+    renderGroupRemoteTrack(remoteId, stream, event.track.kind);
+  });
+  connection.addEventListener("connectionstatechange", () => {
+    if (connection !== groupPeerConnections.get(remoteId)) return;
+    const connected = [...groupPeerConnections.values()]
+      .filter((peer) => peer.connectionState === "connected").length;
+    if (connection.connectionState === "connected") {
+      callStatus.textContent = "Group call · " + (connected + 1) + " participant(s) connected" + callMediaNotice;
+    } else if (connection.connectionState === "failed" || connection.connectionState === "closed") {
+      removeGroupPeer(remoteId);
+    }
+  });
+  connection.addEventListener("iceconnectionstatechange", () => {
+    if (connection !== groupPeerConnections.get(remoteId)) return;
+    if (connection.iceConnectionState === "failed") {
+      const name = users.find((user) => user.user_id === remoteId)?.display_name || "participant";
+      callStatus.textContent = name + " could not connect" + callMediaNotice;
+    }
+  });
+  groupPeerConnections.set(remoteId, connection);
+  return connection;
+}
+
+async function createGroupOffer(remoteId) {
+  if (groupPeerConnections.has(remoteId)) return groupPeerConnections.get(remoteId);
+  const connection = await createGroupPeerConnection(remoteId);
+  for (const track of localMediaStream?.getTracks() || []) {
+    connection.addTrack(track, localMediaStream);
+  }
+  if (!localMediaStream?.getAudioTracks().length && connection.addTransceiver) {
+    connection.addTransceiver("audio", { direction: "recvonly" });
+  }
+  applyCallCodecPreferences(connection);
+  const offer = await connection.createOffer();
+  await connection.setLocalDescription(offer);
+  sendGroupCallSignal(remoteId, "offer", {
+    group_id: groupCallGroupId,
+    call_id: groupCallId,
+    target_id: remoteId,
+    description: connection.localDescription,
+    media: callMediaKind,
+  });
+  return connection;
+}
+
+async function acceptGroupInvite(signal) {
+  const payload = signal.payload || {};
+  const groupId = payload.group_id;
+  const callId = payload.call_id;
+  if (!groupId || !callId) throw new Error("Group call invitation is malformed.");
+
+  const group = groups.find((item) => item.user_id === groupId && item.is_group);
+  if (!group) throw new Error("This group is no longer available.");
+
+  groupCallGroupId = groupId;
+  groupCallId = callId;
+  groupCallMemberIds = [...group.group_member_ids];
+  callPeerId = groupId;
+  callMediaKind = payload.media === "video" ? "video" : "audio";
+  groupCallJoinedMembers.clear();
+  groupCallJoinedMembers.add(me.user_id);
+  groupCallJoinedMembers.add(signal.sender_id);
+
+
+  try {
+    localMediaStream = await acquireCallMedia(callMediaKind);
+    callStage.hidden = false;
+    callStage.classList.remove("call-collapsed");
+    remoteVideo.hidden = true;
+    remoteAudio.hidden = true;
+    document.getElementById("group-remotes").hidden = false;
+    document.getElementById("toggle-screen-share").hidden = true;
+    await attachLocalMediaPreview();
+    callStatus.textContent = "Joining group call…" + callMediaNotice;
+    for (const memberId of groupCallMemberIds) {
+      if (memberId !== me.user_id) {
+        sendGroupCallSignal(memberId, "group_join", {
+          group_id: groupCallGroupId,
+          call_id: groupCallId,
+        });
+      }
+    }
+    await establishGroupOffers();
+  } catch (err) {
+    appendSystem("Could not join group call: " + (err.message || "Check camera and microphone permissions."));
+    endCall(false);
+  }
+}
+
+async function handleGroupCallSignal(signal) {
+  const payload = signal.payload || {};
+  const groupId = payload.group_id || signal.peer_id;
+  const callId = payload.call_id;
+  if (!groupId || !callId) return;
+
+  const group = groups.find((item) => item.user_id === groupId && item.is_group);
+  if (!group || !group.group_member_ids.includes(me.user_id)) return;
+
+  if (signal.kind === "group_invite") {
+    if (groupCallId === callId && groupCallGroupId === groupId) return;
+    pendingIncomingCall = signal;
+    callPeerId = groupId;
+    callMediaKind = payload.media === "video" ? "video" : "audio";
+    const caller = users.find((user) => user.user_id === signal.sender_id);
+    incomingCallTitle.textContent = (caller?.display_name || "Larptrix user") + " invited you";
+    incomingCallKind.textContent = (callMediaKind === "video" ? "Group video" : "Group") + " call · " + group.display_name;
+    document.getElementById("accept-call").textContent = "Join";
+    incomingCallDialog.showModal();
+    return;
+  }
+
+  if (groupCallId !== callId || groupCallGroupId !== groupId) return;
+
+  if (signal.kind === "group_join") {
+    const alreadyKnown = groupCallJoinedMembers.has(signal.sender_id);
+    groupCallJoinedMembers.add(signal.sender_id);
+    if (!alreadyKnown) {
+      sendGroupCallSignal(signal.sender_id, "group_join", {
+        group_id: groupId,
+        call_id: callId,
+      });
+      await establishGroupOffers();
+    }
+    return;
+  }
+
+  if (signal.kind === "offer") {
+    let connection = groupPeerConnections.get(signal.sender_id);
+    if (!connection) connection = await createGroupPeerConnection(signal.sender_id);
+    if (!connection.currentRemoteDescription) {
+      await connection.setRemoteDescription(signal.payload.description);
+      for (const candidate of groupPendingIceCandidates.get(signal.sender_id) || []) {
+        await connection.addIceCandidate(candidate);
+      }
+      groupPendingIceCandidates.delete(signal.sender_id);
+    }
+    for (const track of localMediaStream?.getTracks() || []) {
+      if (!connection.getSenders().some((sender) => sender.track === track)) {
+        connection.addTrack(track, localMediaStream);
+      }
+    }
+    applyCallCodecPreferences(connection);
+    const answer = await connection.createAnswer();
+    await connection.setLocalDescription(answer);
+    sendGroupCallSignal(signal.sender_id, "answer", {
+      group_id: groupId,
+      call_id: callId,
+      target_id: signal.sender_id,
+      description: connection.localDescription,
+      media: callMediaKind,
+    });
+    return;
+  }
+
+  if (signal.kind === "answer") {
+    const connection = groupPeerConnections.get(signal.sender_id);
+    if (!connection) return;
+    await connection.setRemoteDescription(signal.payload.description);
+    for (const candidate of groupPendingIceCandidates.get(signal.sender_id) || []) {
+      await connection.addIceCandidate(candidate);
+    }
+    groupPendingIceCandidates.delete(signal.sender_id);
+    return;
+  }
+
+  if (signal.kind === "ice_candidate") {
+    const candidate = signal.payload?.candidate;
+    if (!candidate) return;
+    const connection = groupPeerConnections.get(signal.sender_id);
+    if (connection?.remoteDescription) await connection.addIceCandidate(candidate);
+    else groupPendingIceCandidates.set(signal.sender_id, [
+      ...(groupPendingIceCandidates.get(signal.sender_id) || []),
+      candidate,
+    ]);
+    return;
+  }
+
+  if (signal.kind === "hangup" || signal.kind === "reject") {
+    removeGroupPeer(signal.sender_id);
+    if (signal.kind === "reject") {
+      const name = users.find((user) => user.user_id === signal.sender_id)?.display_name || "Participant";
+      callStatus.textContent = name + " declined the group call" + callMediaNotice;
+    }
+  }
+}
+
+function sendGroupCallSignal(targetId, kind, payload) {
+  if (!groupCallGroupId || !groupCallId || !socket || socket.readyState !== WebSocket.OPEN) return;
+  if (targetId !== me?.user_id) {
+    const target = users.find((user) => user.user_id === targetId);
+    if (target && !target.online) return;
+  }
+  socket.send(JSON.stringify({
+    type: "call_signal",
+    peer_id: groupCallGroupId,
+    kind,
+    payload: { ...payload, group_id: groupCallGroupId, call_id: groupCallId, target_id: targetId },
+  }));
+}
+
+function renderGroupRemoteTrack(remoteId, stream, kind) {
+  const container = document.getElementById("group-remotes");
+  const selector =
+    '[data-group-remote-id="' + CSS.escape(remoteId) + '"][data-kind="' + kind + '"]';
+  let media = container.querySelector(selector);
+  if (!media) {
+    media = kind === "video" ? document.createElement("video") : document.createElement("audio");
+    media.dataset.groupRemoteId = remoteId;
+    media.dataset.kind = kind;
+    media.autoplay = true;
+    media.playsInline = true;
+    if (kind === "audio") media.hidden = true;
+    if (kind === "video") {
+      media.className = "group-remote-video";
+      media.title = users.find((user) => user.user_id === remoteId)?.display_name || "Participant";
+    }
+    container.append(media);
+  }
+  media.srcObject = stream;
+  media.play?.().catch(() => {});
+}
+
+function removeGroupPeer(remoteId) {
+  const connection = groupPeerConnections.get(remoteId);
+  connection?.close();
+  groupPeerConnections.delete(remoteId);
+  groupPendingIceCandidates.delete(remoteId);
+  document.getElementById("group-remotes")
+    ?.querySelectorAll('[data-group-remote-id="' + CSS.escape(remoteId) + '"]')
+    .forEach((element) => element.remove());
+  if (groupCallId && groupPeerConnections.size === 0 && !pendingIncomingCall) {
+    callStatus.textContent = "Waiting for group participants" + callMediaNotice;
+  }
+}
+
 async function startCall(kind) {
   if (!peerId || !socket || socket.readyState !== WebSocket.OPEN) return;
+  const selectedGroup = groups.find((item) => item.user_id === peerId && item.is_group);
+  if (selectedGroup) {
+    await startGroupCall(kind);
+    return;
+  }
   if (typeof globalThis.RTCPeerConnection !== "function") {
     const handoff = await openCallInSystemBrowser(peerId, kind);
     if (handoff.opened) {
@@ -1591,6 +1928,10 @@ function applyCallCodecPreferences(connection) {
 }
 
 async function handleCallSignal(signal) {
+  if (signal?.payload?.group_id || groups.some((group) => group.user_id === signal?.peer_id && group.is_group)) {
+    await handleGroupCallSignal(signal);
+    return;
+  }
   if (!me || signal.sender_id === me.user_id) return;
   if (signal.kind === "offer" && !peerConnection) {
     pendingIncomingCall = signal;
@@ -1643,6 +1984,13 @@ async function handleCallSignal(signal) {
 }
 
 async function acceptIncomingCall() {
+  if (pendingIncomingCall?.payload?.group_id || groups.some((group) => group.user_id === pendingIncomingCall?.peer_id && group.is_group)) {
+    const groupIncoming = pendingIncomingCall;
+    pendingIncomingCall = null;
+    incomingCallDialog.close();
+    await acceptGroupInvite(groupIncoming);
+    return;
+  }
   if (!pendingIncomingCall) return;
   if (typeof globalThis.RTCPeerConnection !== "function") {
     const callerId = pendingIncomingCall.sender_id;
@@ -1682,6 +2030,22 @@ async function acceptIncomingCall() {
 }
 
 function rejectIncomingCall() {
+  if (pendingIncomingCall?.payload?.group_id) {
+    const incoming = pendingIncomingCall;
+    const groupId = incoming.payload.group_id;
+    const callId = incoming.payload.call_id;
+    const target = incoming.sender_id;
+    pendingIncomingCall = null;
+    incomingCallDialog.close();
+    groupCallGroupId = groupId;
+    groupCallId = callId;
+    callPeerId = groupId;
+    sendGroupCallSignal(target, "reject", { group_id: groupId, call_id: callId });
+    groupCallGroupId = null;
+    groupCallId = null;
+    callPeerId = null;
+    return;
+  }
   if (pendingIncomingCall) {
     const rejectedPeerId = pendingIncomingCall.sender_id;
     callPeerId = pendingIncomingCall.sender_id;
@@ -1854,7 +2218,31 @@ async function stopScreenShare() {
 }
 
 function endCall(notifyPeer) {
-  if (notifyPeer && callPeerId) sendCallSignal("hangup", {});
+  if (groupCallGroupId && groupCallId) {
+    const groupId = groupCallGroupId;
+    const callId = groupCallId;
+    const remoteIds = [...groupPeerConnections.keys()];
+    if (notifyPeer) {
+      for (const remoteId of remoteIds) {
+        sendGroupCallSignal(remoteId, "hangup", { group_id: groupId, call_id: callId });
+      }
+    }
+    for (const [remoteId, connection] of groupPeerConnections) {
+      connection.close();
+      document.getElementById("group-remotes")
+        ?.querySelectorAll("[data-group-remote-id=\"" + CSS.escape(remoteId) + "\"]")
+        .forEach((element) => element.remove());
+    }
+    groupPeerConnections.clear();
+    groupPendingIceCandidates.clear();
+    groupCallJoinedMembers.clear();
+    groupCallId = null;
+    groupCallGroupId = null;
+    groupCallMemberIds = [];
+  } else if (notifyPeer && callPeerId) {
+    sendCallSignal("hangup", {});
+  }
+
   const endedPeerId = callPeerId;
   if (incomingCallDialog.open) incomingCallDialog.close();
   screenMediaStream?.getTracks().forEach((track) => track.stop());
@@ -1872,7 +2260,12 @@ function endCall(notifyPeer) {
   localScreenVideo.srcObject = null;
   localScreenVideo.hidden = true;
   remoteVideo.srcObject = null;
+  remoteVideo.hidden = false;
   remoteAudio.srcObject = null;
+  remoteAudio.hidden = false;
+  document.getElementById("group-remotes").replaceChildren();
+  document.getElementById("group-remotes").hidden = true;
+  document.getElementById("toggle-screen-share").hidden = false;
   enableCallAudio.hidden = true;
   callStage.hidden = true;
   callStage.classList.remove("call-collapsed");

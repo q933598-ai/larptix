@@ -449,17 +449,69 @@ fn relay_call_signal(
     user: &UserRow,
     peer_id: &str,
     kind: &str,
-    payload: serde_json::Value,
+    mut payload: serde_json::Value,
 ) -> Result<(), String> {
     if !matches!(
         kind,
-        "offer" | "answer" | "ice_candidate" | "hangup" | "reject"
+        "offer" | "answer" | "ice_candidate" | "hangup" | "reject" | "group_invite" | "group_join"
     ) {
         return Err("unsupported call signal".into());
     }
     if peer_id == user.id {
         return Err("cannot call yourself".into());
     }
+
+    let payload_size = serde_json::to_vec(&payload)
+        .map_err(|_| "invalid call signal".to_string())?
+        .len();
+    if payload_size > 64 * 1024 {
+        return Err("call signal is too large".into());
+    }
+
+    if let Some(group) = state.db.group(peer_id).map_err(|err| err.to_string())? {
+        if !group.member_ids.iter().any(|member| member == &user.id) {
+            return Err("not a member of this group".into());
+        }
+
+        let object = payload
+            .as_object_mut()
+            .ok_or_else(|| "group call signal payload must be an object".to_string())?;
+        let target_id = object
+            .get("target_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| "group call signal is missing target id".to_string())?;
+
+        if target_id == user.id {
+            return Err("cannot send a group call signal to yourself".into());
+        }
+        if !group.member_ids.iter().any(|member| member == target_id) {
+            return Err("group call target is not a member".into());
+        }
+
+        let target = state
+            .db
+            .user_by_id(target_id)
+            .map_err(|err| err.to_string())?
+            .ok_or_else(|| "unknown group call target".to_string())?;
+        if state.hub.online_ids().iter().all(|id| id != &target.id) {
+            return Err("group call target is offline".into());
+        }
+
+        let recipient =
+            Uuid::parse_str(&target.id).map_err(|_| "invalid group call target id".to_string())?;
+
+        state.hub.send_to(
+            recipient,
+            ServerMessage::CallSignal {
+                sender_id: user.id.clone(),
+                kind: kind.to_string(),
+                payload,
+            },
+        );
+        return Ok(());
+    }
+
     let peer = state
         .db
         .user_by_id(peer_id)
