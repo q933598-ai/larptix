@@ -35,7 +35,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/me", patch(update_profile))
         .route("/api/me/activity", post(update_activity))
         .route("/api/users/{id}/profile", get(get_user_profile))
-        .route("/api/users/{id}/matrix-devices", get(list_user_matrix_devices))
+        .route(
+            "/api/users/{id}/matrix-devices",
+            get(list_user_matrix_devices),
+        )
         .route("/api/users/{id}/music", get(get_user_music))
         .route(
             "/api/me/music",
@@ -1286,7 +1289,9 @@ async fn create_group(
         .map_err(ApiError::db)?
         .is_empty()
     {
-        return Err(ApiError::bad("finish Matrix E2E device setup before creating a group"));
+        return Err(ApiError::bad(
+            "finish Matrix E2E device setup before creating a group",
+        ));
     }
     let group = state
         .db
