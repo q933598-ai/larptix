@@ -3221,3 +3221,158 @@ html[data-theme="custom"] .music-library {
   justify-content: space-between;
   gap: 8px;
 }
+
+
+/* Responsive floating call window overhaul */
+.call-stage {
+  container-type: inline-size;
+  resize: both;
+  min-width: 340px;
+  min-height: 300px;
+  width: min(920px, 76vw);
+  height: min(760px, 80vh);
+  overflow: hidden;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.call-stage .call-dock-heading,
+.call-stage .call-heading-copy {
+  min-width: 0;
+}
+
+.call-stage .call-heading-copy {
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.call-stage .call-heading-copy #call-status,
+.call-stage .call-heading-copy .group-call-count {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.call-stage .call-security-note {
+  margin: 0;
+  overflow: auto;
+  max-height: 4.5em;
+}
+
+.call-stage .call-videos {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+.call-stage .call-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  align-items: stretch;
+  min-width: 0;
+  max-height: min(220px, 31cqh);
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.call-stage .call-controls > button,
+.call-stage .call-controls > .call-select,
+.call-stage .call-controls > .call-volume-select {
+  min-width: 0;
+  width: 100%;
+}
+
+.call-stage .call-controls > .call-select {
+  display: grid;
+  gap: 4px;
+  align-content: center;
+  padding: 0;
+  min-height: 42px;
+}
+
+.call-stage .call-controls > .call-select select,
+.call-stage .call-controls > .call-volume-select input {
+  min-width: 0;
+  width: 100%;
+}
+
+.call-stage .call-controls > audio,
+.call-stage .call-controls > #enable-call-audio {
+  min-width: 0;
+}
+
+.call-stage.call-collapsed {
+  width: min(360px, calc(100vw - 16px));
+  height: auto;
+  min-width: 260px;
+  min-height: 0;
+  max-height: none;
+  resize: none;
+  display: block;
+  overflow: visible;
+  padding: 6px 10px;
+}
+
+.call-stage.call-collapsed .call-dock-heading {
+  min-height: 34px;
+}
+
+@container (max-width: 620px) {
+  .call-stage .call-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-height: min(240px, 38cqh);
+  }
+}
+
+@container (max-width: 460px) {
+  .call-stage {
+    min-width: 320px;
+  }
+
+  .call-stage .call-controls {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    max-height: min(250px, 44cqh);
+  }
+
+  .call-stage .call-controls button,
+  .call-stage .call-controls select {
+    min-height: 38px;
+    padding: 7px 9px;
+    font-size: .78rem;
+  }
+
+  .call-stage .call-videos {
+    min-height: 180px;
+  }
+}
+
+/* Keep the floating music library reliably draggable and responsive */
+#music-library {
+  min-width: 360px;
+  min-height: 360px;
+}
+
+.music-library-drag-area {
+  position: relative;
+  z-index: 2;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.music-library-drag-handle {
+  pointer-events: none;
+}
+
+@media (max-width: 700px) {
+  #music-library {
+    min-width: 0;
+  }
+}
+
+/* Compact desktop widths: controls wrap before the window needs to be resized */
+@media (min-width: 701px) and (max-width: 1150px) {
+  .call-stage {
+    width: min(760px, calc(100vw - 24px));
+  }
+}
