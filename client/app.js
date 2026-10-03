@@ -1957,12 +1957,32 @@ function appendMessage(message) {
   logEl.append(li);
   if (encryptedBodyElement) {
     messageBodyElementsById.set(message.id, encryptedBodyElement);
+
+    let effectiveMessage = message;
+    const queuedResponse = cryptoRecoveryResponsesByMessageId.get(message.id);
+    if (queuedResponse) {
+      effectiveMessage = mergeCryptoRecoveryResponse(message, queuedResponse) || message;
+      if (effectiveMessage !== message) {
+        cryptoRecoveryResponsesByMessageId.delete(message.id);
+      }
+    }
+
     const recoveredBody = recoveredBodiesByMessageId.get(message.id);
-    const effectiveMessage = recoveredBody
-      ? { ...message, body: recoveredBody }
-      : message;
-    if (recoveredBody) recoveredBodiesByMessageId.delete(message.id);
-    void displayEncryptedMessage(effectiveMessage, encryptedBodyElement);
+    if (recoveredBody) {
+      effectiveMessage = { ...effectiveMessage, body: recoveredBody };
+      recoveredBodiesByMessageId.delete(message.id);
+    }
+
+    void displayEncryptedMessage(effectiveMessage, encryptedBodyElement).then((ok) => {
+      if (ok && queuedResponse) {
+        socket?.send(JSON.stringify({
+          type: "crypto_resync_response_ack",
+          peer_id: queuedResponse.sender_id,
+          message_id: message.id,
+          device_id: queuedResponse.device_id,
+        }));
+      }
+    });
   }
   logEl.scrollTop = logEl.scrollHeight;
 }
@@ -1979,6 +1999,30 @@ async function attachLocalMediaPreview() {
       callStatus.textContent = "Camera is on. Click the preview to start local playback.";
     }
   }
+}
+
+function mergeCryptoRecoveryResponse(message, response) {
+  const envelope = parseCryptoEnvelope(message?.body);
+  if (
+    !envelope
+    || envelope.version !== 2
+    || envelope.message_type !== "message"
+    || !response?.device_id
+    || typeof response.ciphertext !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    ...message,
+    body: JSON.stringify({
+      ...envelope,
+      ciphertexts: {
+        ...envelope.ciphertexts,
+        [response.device_id]: response.ciphertext,
+      },
+    }),
+  };
 }
 
 function parseCryptoEnvelope(raw) {
@@ -2342,17 +2386,8 @@ async function handleCryptoResyncResponse(response) {
       });
       const bodyElement = messageBodyElementsById.get(response.message_id);
       if (bodyElement) {
-        const mergedEnvelope = {
-          ...currentEnvelope,
-          ciphertexts: {
-            ...currentEnvelope.ciphertexts,
-            [response.device_id]: response.ciphertext,
-          },
-        };
-        const recoveredMessage = {
-          ...knownMessage,
-          body: JSON.stringify(mergedEnvelope),
-        };
+        const recoveredMessage = mergeCryptoRecoveryResponse(knownMessage, response);
+        if (!recoveredMessage) return;
         const ok = await displayEncryptedMessage(
           recoveredMessage,
           bodyElement,
