@@ -524,6 +524,29 @@
       </form>
     </dialog>
 
+    <dialog id="create-channel-dialog">
+      <form id="create-channel-form">
+        <h2>Create channel</h2>
+        <p class="settings-help">Channels use the same E2E-protected group transport. Choose who can publish.</p>
+        <label for="channel-name">Channel name</label>
+        <input id="channel-name" type="text" maxlength="32" required />
+        <label for="channel-post-policy">Who can post</label>
+        <select id="channel-post-policy">
+          <option value="admins" selected>Admins only</option>
+          <option value="members">All members</option>
+        </select>
+        <fieldset>
+          <legend>Initial members</legend>
+          <div id="channel-member-list"></div>
+        </fieldset>
+        <p id="channel-create-error" class="error" hidden></p>
+        <div class="profile-actions">
+          <button id="create-channel-cancel" type="button" class="ghost">Cancel</button>
+          <button type="submit">Create channel</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="gate">
       <div class="tabs">
         <button type="button" id="tab-login" class="tab active">Access key</button>
