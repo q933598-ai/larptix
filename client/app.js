@@ -1961,12 +1961,82 @@ function refreshGroupCallParticipants() {
   }
 }
 
-function openGroupMembers() {
-  const group = groups.find((item) => item.user_id === peerId && item.is_group)
-    || groups.find((item) => item.user_id === groupCallGroupId && item.is_group);
-  if (!group) return;
-  renderGroupMembersDialog(group);
-  groupMembersDialog.showModal();
+function renderGroupCallBanner() {
+  const group = groups.find((item) => item.user_id === peerId && item.is_group);
+  const state = group ? activeGroupCalls.get(group.user_id) : null;
+  const active = Boolean(group && state?.active);
+  if (!groupCallBanner) return;
+  groupCallBanner.hidden = !active;
+  if (!active) {
+    if (groupCallStart) groupCallStart.hidden = !group;
+    return;
+  }
+  const joined = state.participant_ids.includes(me?.user_id);
+  groupCallBannerTitle.textContent = state.media === "video" ? "Group video call is active" : "Group call is active";
+  groupCallBannerMeta.textContent =
+    " · " + state.participant_ids.length + "/" + group.group_member_ids.length + " joined";
+  groupCallJoin.textContent = joined ? "Open call" : "Join";
+  groupCallJoin.disabled = joined && groupCallGroupId !== group.user_id;
+  groupCallJoin.hidden = groupCallId === state.call_id && groupCallGroupId === group.user_id;
+  if (groupCallStart) {
+    groupCallStart.hidden = false;
+    groupCallStart.textContent = joined ? "Group call" : "Join group call";
+  }
+}
+
+function handleGroupCallState(message) {
+  if (!message?.group_id || !message?.call_id) return;
+  if (message.active) {
+    activeGroupCalls.set(message.group_id, message);
+  } else {
+    const current = activeGroupCalls.get(message.group_id);
+    if (!current || current.call_id === message.call_id) activeGroupCalls.delete(message.group_id);
+    if (groupCallId === message.call_id && groupCallGroupId === message.group_id) {
+      endCall(false);
+    }
+  }
+  refreshGroupCallParticipants();
+  renderGroupCallBanner();
+  if (peerId === message.group_id) {
+    const group = groups.find((item) => item.user_id === peerId);
+    if (group) renderGroupMembersDialog(group);
+  }
+}
+
+async function joinActiveGroupCall() {
+  const group = groups.find((item) => item.user_id === peerId && item.is_group);
+  const state = group ? activeGroupCalls.get(group.user_id) : null;
+  if (!state?.active) return;
+  if (groupCallId === state.call_id && groupCallGroupId === group.user_id) {
+    callStage.hidden = false;
+    return;
+  }
+  if (peerConnection || groupPeerConnections.size || groupCallId) endCall(true);
+  pendingIncomingCall = {
+    sender_id: state.initiator_id,
+    peer_id: state.group_id,
+    payload: {
+      group_id: state.group_id,
+      call_id: state.call_id,
+      media: state.media,
+    },
+  };
+  await acceptGroupInvite(pendingIncomingCall);
+  pendingIncomingCall = null;
+}
+
+function sendGroupCallControl(kind) {
+  if (!groupCallGroupId || !groupCallId || !socket || socket.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({
+    type: "call_signal",
+    peer_id: groupCallGroupId,
+    kind,
+    payload: {
+      group_id: groupCallGroupId,
+      call_id: groupCallId,
+      media: callMediaKind || "audio",
+    },
+  }));
 }
 
 function openChat(id) {
