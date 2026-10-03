@@ -105,7 +105,7 @@ jobs:
   windows:
     name: Windows release
     needs: validate
-    runs-on: ubuntu-24.04
+    runs-on: windows-latest
     defaults:
       run:
         working-directory: desktop
