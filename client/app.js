@@ -140,7 +140,9 @@ const sentPlaintextByCiphertext = new Map();
 const cryptoRecoveryLastAttempt = new Map();
 const cryptoRecoveryPending = new Map();
 const recoveredBodiesByMessageId = new Map();
+const cryptoRecoveryResponsesByMessageId = new Map();
 const messageBodyElementsById = new Map();
+const messagesById = new Map();
 
 async function sentPlaintextCacheId(ciphertext) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ciphertext));
@@ -1281,7 +1283,6 @@ function connect() {
   });
 
   socket.addEventListener("close", () => {
-    cryptoRecoveryPending.clear();
     setStatus("offline");
     endCall(false);
     if (reconnect) setTimeout(connect, 1500);
@@ -1875,6 +1876,7 @@ function paintAvatar(el, user) {
 }
 
 function appendMessage(message) {
+  messagesById.set(message.id, message);
   const li = document.createElement("li");
   if (me && message.sender_id === me.user_id) li.classList.add("me");
 
@@ -1890,6 +1892,29 @@ function appendMessage(message) {
     if (envelope) {
       body.textContent = "Encrypted message";
       encryptedBodyElement = body;
+
+      const queuedRecovery = cryptoRecoveryResponsesByMessageId.get(message.id);
+      if (queuedRecovery) {
+        const recoveredEnvelope = parseCryptoEnvelope(message.body);
+        if (
+          recoveredEnvelope?.version === 2
+          && recoveredEnvelope.message_type === "message"
+          && recoveredEnvelope.sender_device_id
+        ) {
+          const mergedEnvelope = {
+            ...recoveredEnvelope,
+            ciphertexts: {
+              ...recoveredEnvelope.ciphertexts,
+              [queuedRecovery.device_id]: queuedRecovery.ciphertext,
+            },
+          };
+          message = {
+            ...message,
+            body: JSON.stringify(mergedEnvelope),
+          };
+          cryptoRecoveryResponsesByMessageId.delete(message.id);
+        }
+      }
     } else {
       body.textContent = cryptoEnabled
         ? `⚠️ Legacy message (not end-to-end encrypted): ${message.body}`
@@ -2036,11 +2061,11 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
             `Could not open encrypted attachment: ${err?.message || String(err)}`;
         }
       }
-      return;
+      return true;
     } catch (err) {
       bodyElement.textContent =
         `Could not decrypt Matrix message: ${err?.message || String(err)}`;
-      return;
+      return false;
     }
   }
 
@@ -2058,12 +2083,12 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
         bodyElement.textContent = `Could not open encrypted attachment: ${err?.message || String(err)}`;
       }
     }
-    return;
+    return true;
   }
 
   if (!cryptoEnabled) {
     bodyElement.textContent = "Encrypted. Set up E2E to read messages.";
-    return;
+    return false;
   }
 
   try {
@@ -2276,7 +2301,9 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
     }
   } catch (err) {
     bodyElement.textContent = `Could not decrypt message: ${err?.message || String(err)}`;
+    return false;
   }
+  return true;
 }
 
 async function handleCryptoResyncResponse(response) {
@@ -2300,8 +2327,57 @@ async function handleCryptoResyncResponse(response) {
 
   const pending = cryptoRecoveryPending.get(response.message_id);
   if (!pending) {
-    console.warn("[E2E] recovery response ignored: no pending request", {
+    const knownMessage = messagesById.get(response.message_id);
+    const currentEnvelope = knownMessage ? parseCryptoEnvelope(knownMessage.body) : null;
+
+    if (
+      currentEnvelope?.version === 2
+      && currentEnvelope.message_type === "message"
+      && typeof response.device_id === "string"
+    ) {
+      cryptoRecoveryResponsesByMessageId.set(response.message_id, {
+        sender_id: response.sender_id,
+        device_id: response.device_id,
+        ciphertext: response.ciphertext,
+      });
+      const bodyElement = messageBodyElementsById.get(response.message_id);
+      if (bodyElement) {
+        const mergedEnvelope = {
+          ...currentEnvelope,
+          ciphertexts: {
+            ...currentEnvelope.ciphertexts,
+            [response.device_id]: response.ciphertext,
+          },
+        };
+        const recoveredMessage = {
+          ...knownMessage,
+          body: JSON.stringify(mergedEnvelope),
+        };
+        const ok = await displayEncryptedMessage(
+          recoveredMessage,
+          bodyElement,
+          { allowRecovery: false },
+        );
+        if (ok) {
+          cryptoRecoveryResponsesByMessageId.delete(response.message_id);
+          socket?.send(JSON.stringify({
+            type: "crypto_resync_response_ack",
+            peer_id: response.sender_id,
+            message_id: response.message_id,
+            device_id: response.device_id,
+          }));
+        }
+      }
+      return;
+    }
+
+    console.warn("[E2E] recovery response stored: no matching history message", {
       message: response.message_id,
+    });
+    cryptoRecoveryResponsesByMessageId.set(response.message_id, {
+      sender_id: response.sender_id,
+      device_id: response.device_id,
+      ciphertext: response.ciphertext,
     });
     return;
   }
@@ -2339,10 +2415,10 @@ async function handleCryptoResyncResponse(response) {
     const recoveredCipherEnvelope = JSON.parse(response.ciphertext);
     if (
       recoveredCipherEnvelope?.version !== 1
-      || recoveredCipherEnvelope?.message_type !== "prekey"
+      || !["message", "prekey"].includes(recoveredCipherEnvelope?.message_type)
       || typeof recoveredCipherEnvelope?.ciphertext !== "string"
     ) {
-      throw new Error("Recovery response was not a valid pre-key ciphertext.");
+      throw new Error("Recovery response was not a valid v1 ciphertext.");
     }
   } catch (err) {
     console.warn("[E2E] recovery response ignored: invalid pre-key ciphertext", {
@@ -2375,10 +2451,23 @@ async function handleCryptoResyncResponse(response) {
   }
 
   try {
-    await displayEncryptedMessage(recoveredMessage, bodyElement, { allowRecovery: false });
+    const ok = await displayEncryptedMessage(
+      recoveredMessage,
+      bodyElement,
+      { allowRecovery: false },
+    );
+    if (ok) {
+      socket?.send(JSON.stringify({
+        type: "crypto_resync_response_ack",
+        peer_id: response.sender_id,
+        message_id: response.message_id,
+        device_id: response.device_id,
+      }));
+    }
     console.log("[E2E] recovery response decrypted", {
       message: response.message_id,
       device: response.device_id,
+      ok,
     });
   } catch (err) {
     console.error("[E2E] recovery response decrypt failed", {
@@ -2405,7 +2494,7 @@ async function handleCryptoResyncRequest(request) {
       requester: request?.requester_id,
       ownUser: me?.user_id,
     });
-    return;
+    return false;
   }
 
   try {
