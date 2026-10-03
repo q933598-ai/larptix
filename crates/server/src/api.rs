@@ -284,7 +284,7 @@ async fn rtc_config(
     Ok(Json(serde_json::json!({ "ice_servers": ice_servers })))
 }
 
-fn matrix_server_name(headers: &HeaderMap) -> Result<String, ApiError> {
+pub(crate) fn matrix_server_name(headers: &HeaderMap) -> Result<String, ApiError> {
     if let Ok(domain) = std::env::var("DOMAIN") {
         let domain = domain.trim().trim_end_matches('.').to_string();
         if !domain.is_empty() && !domain.contains('/') && !domain.contains(':') {
