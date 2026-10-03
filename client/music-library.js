@@ -349,13 +349,31 @@
     if (!handle) return;
 
     let dragging = false;
+    let pointerId = null;
     let offsetX = 0;
     let offsetY = 0;
 
+    const stopDragging = (event) => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove("dragging");
+      if (pointerId !== null && handle.hasPointerCapture?.(pointerId)) {
+        handle.releasePointerCapture(pointerId);
+      }
+      pointerId = null;
+      const rect = els.library.getBoundingClientRect();
+      savePosition(rect.left, rect.top);
+      event?.preventDefault?.();
+    };
+
     handle.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0 || event.target.closest("button")) return;
+      if (
+        event.button !== 0 ||
+        event.target.closest("button,input,select,textarea,a,label")
+      ) return;
       const rect = els.library.getBoundingClientRect();
       dragging = true;
+      pointerId = event.pointerId;
       offsetX = event.clientX - rect.left;
       offsetY = event.clientY - rect.top;
       handle.setPointerCapture?.(event.pointerId);
@@ -372,16 +390,9 @@
       els.library.style.bottom = "auto";
     });
 
-    const stop = (event) => {
-      if (!dragging) return;
-      dragging = false;
-      handle.classList.remove("dragging");
-      handle.releasePointerCapture?.(event.pointerId);
-      const rect = els.library.getBoundingClientRect();
-      savePosition(rect.left, rect.top);
-    };
-    handle.addEventListener("pointerup", stop);
-    handle.addEventListener("pointercancel", stop);
+    handle.addEventListener("pointerup", stopDragging);
+    handle.addEventListener("pointercancel", stopDragging);
+    handle.addEventListener("lostpointercapture", () => stopDragging());
   }
 
   function wire() {
