@@ -2578,7 +2578,14 @@ async function handleCryptoResyncRequest(request) {
       console.log("[E2E] recovery: plaintext cache found");
 
       const original = parseCryptoEnvelope(request.body);
-      if (!original || original.version !== 2 || original.message_type !== "message") {
+      if (
+        !original
+        || (
+          original.version === 1
+            ? !["message", "prekey"].includes(original.message_type)
+            : !(original.version === 2 && original.message_type === "message")
+        )
+      ) {
         console.warn("[E2E] recovery: original envelope is invalid or unsupported");
         return;
       }
@@ -2605,50 +2612,46 @@ async function handleCryptoResyncRequest(request) {
         throw new Error("The recovering device is not verified.");
       }
 
-      const original = parseCryptoEnvelope(request.body);
-
       if (
         original?.version === 1
         && ["message", "prekey"].includes(original.message_type)
       ) {
         // Legacy v1 used the peer account id as the Olm session key.
         const legacySessionId = request.requester_id;
-        if (!cryptoDevice.has_session(legacySessionId)) {
-          console.log("[E2E] recovery: establishing legacy v1 session");
-          const devicesResponse = await api(
-            "GET",
-            `/api/users/${encodeURIComponent(request.requester_id)}/crypto-key`
-          );
-          const requesterDevices = Array.isArray(devicesResponse?.devices)
-            ? devicesResponse.devices
-            : [];
+        console.log("[E2E] recovery: establishing fresh legacy v1 session");
+        const devicesResponse = await api(
+          "GET",
+          `/api/users/${encodeURIComponent(request.requester_id)}/crypto-key`
+        );
+        const requesterDevices = Array.isArray(devicesResponse?.devices)
+          ? devicesResponse.devices
+          : [];
 
-          const requesterBundle = requesterDevices.find(
-            (device) => device?.device_id === request.device_id
-          ) || requesterDevices[0];
+        const requesterBundle = requesterDevices.find(
+          (device) => device?.device_id === request.device_id
+        ) || requesterDevices[0];
 
-          if (!requesterBundle) {
-            throw new Error("The recovering device has no E2E bundle.");
-          }
-
-          if (!(await ensurePeerFingerprint(peer, requesterBundle))) {
-            throw new Error(`Device ${request.device_id} could not be verified.`);
-          }
-
-          const claimedBundle = requesterDevices.length
-            ? await claimPeerOneTimeKey(request.requester_id, requesterBundle.device_id)
-            : requesterBundle;
-
-          if (!(await ensurePeerFingerprint(peer, claimedBundle))) {
-            throw new Error(`Device ${request.device_id} could not be verified.`);
-          }
-
-          cryptoDevice.establish_session(
-            legacySessionId,
-            JSON.stringify(claimedBundle),
-            claimedBundle.fingerprint,
-          );
+        if (!requesterBundle) {
+          throw new Error("The recovering device has no E2E bundle.");
         }
+
+        if (!(await ensurePeerFingerprint(peer, requesterBundle))) {
+          throw new Error(`Device ${request.device_id} could not be verified.`);
+        }
+
+        const claimedBundle = requesterDevices.length
+          ? await claimPeerOneTimeKey(request.requester_id, requesterBundle.device_id)
+          : requesterBundle;
+
+        if (!(await ensurePeerFingerprint(peer, claimedBundle))) {
+          throw new Error(`Device ${request.device_id} could not be verified.`);
+        }
+
+        cryptoDevice.establish_session(
+          legacySessionId,
+          JSON.stringify(claimedBundle),
+          claimedBundle.fingerprint,
+        );
 
         const recoveryCipher = cryptoDevice.encrypt(legacySessionId, cached);
         const recoveryCipherEnvelope = JSON.parse(recoveryCipher);
