@@ -2508,7 +2508,12 @@ async function handleCryptoResyncResponse(response) {
   const bodyElement = messageBodyElementsById.get(response.message_id);
 
   if (!bodyElement) {
-    recoveredBodiesByMessageId.set(response.message_id, recoveredMessage.body);
+    cryptoRecoveryResponsesByMessageId.set(response.message_id, {
+      sender_id: response.sender_id,
+      device_id: response.device_id,
+      ciphertext: recoveredMessage.body,
+      legacyBody: originalEnvelope.version === 1,
+    });
     console.log("[E2E] recovery response stored until message is rendered", {
       message: response.message_id,
     });
