@@ -15,6 +15,18 @@ await initAsync();
 
 const MATRIX_ROOM_ALGORITHM = "m.megolm.v1.aes-sha2";
 
+function formatMatrixDecryptionError(err) {
+  const code = err?.code;
+  const description = err?.description;
+  const withheld = err?.withheldCode || err?.maybe_withheld;
+  const parts = [
+    code && "code=" + code,
+    description,
+    withheld && "withheld=" + withheld,
+  ].filter(Boolean);
+  return parts.length ? parts.join(": ") : (err?.message || String(err));
+}
+
 function encodedStoreName(userId, deviceId) {
   return "larptrix-matrix-" + encodeURIComponent(userId) + "-" + encodeURIComponent(deviceId);
 }
@@ -333,7 +345,12 @@ export class LarptrixMatrixCrypto {
       // A missing Megolm room key should enqueue Matrix-style room-key
       // recovery requests. Flush them immediately through our transport.
       await this.processOutgoingRequests().catch(() => {});
-      throw err;
+      const error = new Error(formatMatrixDecryptionError(err));
+      error.code = err?.code;
+      error.description = err?.description;
+      error.withheldCode = err?.withheldCode;
+      error.maybeWithheld = err?.maybe_withheld;
+      throw error;
     }
   }
 
