@@ -1216,6 +1216,15 @@ impl Database {
         conn.execute("UPDATE groups SET post_policy = ?1 WHERE id = ?2 AND is_channel = 1", params![policy, group_id])?;
         Ok(())
     }
+    pub fn remove_channel_admin(&self, group_id: &str, user_id: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "DELETE FROM channel_admins WHERE group_id = ?1 AND user_id = ?2",
+            params![group_id, user_id],
+        )?;
+        Ok(())
+    }
+
 
     pub fn add_group_member(&self, group_id: &str, user_id: &str) -> Result<(), DbError> {
         let conn = self.conn.lock().expect("db lock");
