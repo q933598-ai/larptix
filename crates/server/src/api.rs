@@ -179,7 +179,9 @@ async fn register(
     let display_name = sanitize_display_name(&body.display_name).map_err(ApiError::bad)?;
     let username = sanitize_username(&body.username).map_err(ApiError::bad)?;
     if username.is_empty() {
-        return Err(ApiError::bad("username is required when creating an account"));
+        return Err(ApiError::bad(
+            "username is required when creating an account",
+        ));
     }
     let access_key = new_access_key();
     let access_key_hash = access_key_hash(&access_key).expect("generated key is valid");
@@ -296,7 +298,6 @@ async fn me(
     Ok(Json(info))
 }
 
-
 #[derive(Deserialize)]
 pub struct KlipySearchQuery {
     pub q: String,
@@ -406,17 +407,15 @@ async fn klipy_search(
             ApiError::internal("GIF service client could not start")
         })?;
 
-    let mut request = client
-        .get("https://api.klipy.com/v2/search")
-        .query(&[
-            ("key", api_key.as_str()),
-            ("q", q),
-            ("country", country.as_str()),
-            ("locale", locale.as_str()),
-            ("contentfilter", "high"),
-            ("media_filter", "gif,tinygif"),
-            ("limit", &limit.to_string()),
-        ]);
+    let mut request = client.get("https://api.klipy.com/v2/search").query(&[
+        ("key", api_key.as_str()),
+        ("q", q),
+        ("country", country.as_str()),
+        ("locale", locale.as_str()),
+        ("contentfilter", "high"),
+        ("media_filter", "gif,tinygif"),
+        ("limit", &limit.to_string()),
+    ]);
 
     if let Some(pos) = query.pos.as_deref().filter(|value| !value.is_empty()) {
         if !valid_short_value(pos, 200) {
@@ -435,13 +434,10 @@ async fn klipy_search(
         return Err(ApiError::internal("GIF search service returned an error"));
     }
 
-    let upstream = response
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|err| {
-            tracing::error!("klipy search response parse failed: {err}");
-            ApiError::internal("GIF search response was invalid")
-        })?;
+    let upstream = response.json::<serde_json::Value>().await.map_err(|err| {
+        tracing::error!("klipy search response parse failed: {err}");
+        ApiError::internal("GIF search response was invalid")
+    })?;
 
     let mut results = Vec::new();
     if let Some(items) = upstream
@@ -462,10 +458,7 @@ async fn klipy_search(
             else {
                 continue;
             };
-            let Some(gif_format) = formats
-                .get("gif")
-                .and_then(serde_json::Value::as_object)
-            else {
+            let Some(gif_format) = formats.get("gif").and_then(serde_json::Value::as_object) else {
                 continue;
             };
             let Some(url) = gif_format.get("url").and_then(klipy_media_url) else {
@@ -544,12 +537,7 @@ async fn klipy_register_share(
         return Err(ApiError::bad("invalid GIF share country"));
     }
 
-    let locale = body
-        .locale
-        .as_deref()
-        .unwrap_or("en_US")
-        .trim()
-        .to_string();
+    let locale = body.locale.as_deref().unwrap_or("en_US").trim().to_string();
     if !valid_short_value(&locale, 16) {
         return Err(ApiError::bad("invalid GIF share locale"));
     }
