@@ -695,15 +695,25 @@ composer.addEventListener("submit", async (event) => {
       let encryptedBody;
 
       await withCryptoStateLock(async () => {
-        if (peer.is_group) {
-          await waitForMatrixDevices(peer.group_member_ids);
-        } else {
-          await waitForMatrixDevices([peerId]);
+        await matrixCryptoReady;
+        let matrixReady = Boolean(matrixCrypto);
+
+        if (matrixReady) {
+          try {
+            await waitForMatrixDevices(
+              peer.is_group ? peer.group_member_ids : [peerId],
+            );
+          } catch (err) {
+            console.warn(
+              "[E2E] Matrix device readiness check failed; using legacy E2E fallback",
+              err,
+            );
+            matrixReady = false;
+          }
         }
 
         if (peer.is_group) {
-          await matrixCryptoReady;
-          if (matrixCrypto) {
+          if (matrixReady) {
             try {
               const roomId = matrixCrypto.groupRoomId(peer.user_id);
               await matrixCrypto.prepareRoom(roomId, peer.group_member_ids);
@@ -760,9 +770,7 @@ composer.addEventListener("submit", async (event) => {
             });
           }
         } else {
-          await matrixCryptoReady;
-
-          if (matrixCrypto) {
+          if (matrixReady) {
             const roomId = await matrixCrypto.roomIdForDm(peerId);
             await matrixCrypto.prepareRoom(roomId, [peerId]);
             const ciphertext = await matrixCrypto.encrypt(roomId, payload);
