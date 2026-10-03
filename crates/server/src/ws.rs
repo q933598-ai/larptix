@@ -678,12 +678,7 @@ fn send_dm(
                 attachment_is_ciphertext,
             )?;
         } else {
-            validate_group_e2e_message(
-                &body,
-                &group.member_ids,
-                &user.id,
-                attachment_is_ciphertext,
-            )?;
+            return Err("new group messages must use Matrix E2E".into());
         }
         let message = state
             .db
