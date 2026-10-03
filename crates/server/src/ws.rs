@@ -45,6 +45,16 @@ pub async fn handle_socket(
     state
         .hub
         .join(user_id, user.display_name.clone(), tx.clone());
+    {
+        let mut presence = state.presence.lock().expect("presence lock");
+        presence.entry(user.id.clone()).or_insert_with(|| "online".to_string());
+        for (id, status) in presence.iter() {
+            let _ = tx.send(ServerMessage::Presence {
+                user_id: id.clone(),
+                status: status.clone(),
+            });
+        }
+    }
     let _ = tx.send(ServerMessage::Welcome {
         user: me_info(&state, &user),
         users: directory(&state, &user.id),
@@ -103,6 +113,20 @@ pub async fn handle_socket(
                 Ok(ClientMessage::Ping) => {
                     tracing::debug!(user_id = %user.id, "websocket heartbeat");
                     let _ = tx.send(ServerMessage::Pong);
+                }
+                Ok(ClientMessage::SetPresence { status }) => {
+                    if !matches!(status.as_str(), "online" | "dnd" | "invisible") {
+                        send_error(&tx, "bad_presence", "unsupported presence status");
+                    } else {
+                        {
+                            let mut presence = state.presence.lock().expect("presence lock");
+                            presence.insert(user.id.clone(), status.clone());
+                        }
+                        state.hub.broadcast(ServerMessage::Presence {
+                            user_id: user.id.clone(),
+                            status,
+                        });
+                    }
                 }
                 Ok(ClientMessage::Open { peer_id }) => {
                     if let Err(err) = open_chat(&state, &tx, &user, &peer_id) {
@@ -189,6 +213,14 @@ pub async fn handle_socket(
     }
 
     state.hub.leave(user_id, &tx);
+    let went_offline = !state.hub.online_ids().iter().any(|id| id == &user.id);
+    if went_offline {
+        state.presence.lock().expect("presence lock").remove(&user.id);
+        state.hub.broadcast(ServerMessage::Presence {
+            user_id: user.id.clone(),
+            status: "offline".to_string(),
+        });
+    }
     drop(tx);
     state.hub.broadcast(ServerMessage::Directory {
         users: directory(&state, ""),
