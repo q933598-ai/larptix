@@ -945,7 +945,7 @@ function openCryptoDialog(mode, { required = false } = {}) {
     cryptoDialogDescription.textContent = "E2E is required for messaging. Save this separate recovery key: it unlocks your encrypted chats on other devices.";
     cryptoRecoveryDisplay.textContent = cryptoRecoveryKey;
     cryptoContinue.textContent = "Enable E2E";
-    cryptoContinue.disabled = false;
+    cryptoContinue.disabled = !cryptoConfirm.checked;
   } else {
     cryptoDialogTitle.textContent = "Unlock encrypted chats";
     cryptoDialogDescription.textContent = "Enter the separate recovery key you saved when enabling E2E. It is not your sign-in key.";
