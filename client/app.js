@@ -2083,21 +2083,34 @@ async function startGroupCall(kind) {
   const onlineMembers = group.group_member_ids
     .filter((id) => id !== me.user_id)
     .filter((id) => users.some((user) => user.user_id === id && user.online));
-  if (!onlineMembers.length) {
-    appendSystem("No other group member is online.");
+
+  const existing = activeGroupCalls.get(group.user_id);
+  if (existing?.active) {
+    await joinActiveGroupCall();
     return;
   }
 
-  if (peerConnection || groupPeerConnections.size) endCall(true);
+  if (peerConnection || groupPeerConnections.size || groupCallId) endCall(true);
 
   groupCallId = crypto.randomUUID();
   groupCallGroupId = group.user_id;
   groupCallMemberIds = [...group.group_member_ids];
+  groupCallInitiatorId = me.user_id;
   groupCallJoinedMembers.clear();
   groupCallJoinedMembers.add(me.user_id);
   callPeerId = group.user_id;
-  refreshGroupCallParticipants();
   callMediaKind = kind;
+  activeGroupCalls.set(group.user_id, {
+    group_id: group.user_id,
+    call_id: groupCallId,
+    media: kind,
+    initiator_id: me.user_id,
+    participant_ids: [me.user_id],
+    active: true,
+  });
+  refreshGroupCallParticipants();
+  renderGroupCallBanner();
+  callWindowTitle.textContent = "group call.exe";
 
   try {
     localMediaStream = await acquireCallMedia(kind);
@@ -2211,11 +2224,14 @@ async function acceptGroupInvite(signal) {
   const group = groups.find((item) => item.user_id === groupId && item.is_group);
   if (!group) throw new Error("This group is no longer available.");
 
+  stopCallRingtone();
   groupCallGroupId = groupId;
   groupCallId = callId;
   groupCallMemberIds = [...group.group_member_ids];
+  groupCallInitiatorId = signal.sender_id;
   callPeerId = groupId;
   callMediaKind = payload.media === "video" ? "video" : "audio";
+  callWindowTitle.textContent = "group call.exe";
   groupCallJoinedMembers.clear();
   groupCallJoinedMembers.add(me.user_id);
   groupCallJoinedMembers.add(signal.sender_id);
@@ -2229,7 +2245,6 @@ async function acceptGroupInvite(signal) {
     remoteVideo.hidden = true;
     remoteAudio.hidden = true;
     document.getElementById("group-remotes").hidden = false;
-    document.getElementById("toggle-screen-share").hidden = true;
     await attachLocalMediaPreview();
     callStatus.textContent = "Joining group call…" + callMediaNotice;
     for (const memberId of groupCallMemberIds) {
@@ -2258,6 +2273,11 @@ async function handleGroupCallSignal(signal) {
 
   if (signal.kind === "group_invite") {
     if (groupCallId === callId && groupCallGroupId === groupId) return;
+    if (
+      pendingIncomingCall?.payload?.group_id === groupId
+      && pendingIncomingCall?.payload?.call_id === callId
+      && incomingCallDialog.open
+    ) return;
     pendingIncomingCall = signal;
     callPeerId = groupId;
     callMediaKind = payload.media === "video" ? "video" : "audio";
@@ -2265,6 +2285,7 @@ async function handleGroupCallSignal(signal) {
     incomingCallTitle.textContent = (caller?.display_name || "Larptrix user") + " invited you";
     incomingCallKind.textContent = (callMediaKind === "video" ? "Group video" : "Group") + " call · " + group.display_name;
     document.getElementById("accept-call").textContent = "Join";
+    startCallRingtone();
     incomingCallDialog.showModal();
     return;
   }
@@ -2427,6 +2448,8 @@ async function startCall(kind) {
     await startGroupCall(kind);
     return;
   }
+  if (groupCallId) endCall(true);
+  callWindowTitle.textContent = "call.exe";
   if (typeof globalThis.RTCPeerConnection !== "function") {
     const handoff = await openCallInSystemBrowser(peerId, kind);
     if (handoff.opened) {
@@ -2870,13 +2893,23 @@ async function stopScreenShare() {
 
 
 function endCall(notifyPeer) {
+  stopCallRingtone();
   if (groupCallGroupId && groupCallId) {
     const groupId = groupCallGroupId;
     const callId = groupCallId;
     const remoteIds = [...groupPeerConnections.keys()];
-    if (notifyPeer) {
+    const isInitiator = groupCallInitiatorId === me?.user_id;
+    if (notifyPeer && isInitiator) {
+      sendGroupCallControl("group_end");
+      activeGroupCalls.delete(groupId);
+    } else if (notifyPeer) {
       for (const remoteId of remoteIds) {
         sendGroupCallSignal(remoteId, "hangup", { group_id: groupId, call_id: callId });
+      }
+      const state = activeGroupCalls.get(groupId);
+      if (state) {
+        state.participant_ids = state.participant_ids.filter((id) => id !== me?.user_id);
+        activeGroupCalls.set(groupId, state);
       }
     }
     for (const [remoteId, connection] of groupPeerConnections) {
@@ -2892,6 +2925,8 @@ function endCall(notifyPeer) {
     groupCallId = null;
     groupCallGroupId = null;
     groupCallMemberIds = [];
+    groupCallInitiatorId = null;
+    renderGroupCallBanner();
   } else if (notifyPeer && callPeerId) {
     sendCallSignal("hangup", {});
   }
