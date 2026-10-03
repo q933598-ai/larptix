@@ -310,6 +310,55 @@ async function loadCachedSentPlaintext(ciphertext) {
   }
 }
 
+async function cacheDecryptedMessagePayload(messageId, payload) {
+  try {
+    if (!messageId || !payload) return;
+    const key = await sentPlaintextCacheKey();
+    if (!key) return;
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encrypted = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      key,
+      new TextEncoder().encode(JSON.stringify(payload)),
+    );
+    await writeLocalCryptoRecord({
+      id: `decrypted-message:${messageId}`,
+      iv: Array.from(iv),
+      ciphertext: Array.from(new Uint8Array(encrypted)),
+    });
+  } catch {}
+}
+
+async function loadCachedDecryptedMessagePayload(messageId) {
+  try {
+    if (!messageId) return null;
+    const key = await sentPlaintextCacheKey();
+    if (!key) return null;
+    const record = await readLocalCryptoRecord(`decrypted-message:${messageId}`);
+    if (!record?.iv || !record?.ciphertext) return null;
+    const plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: new Uint8Array(record.iv) },
+      key,
+      new Uint8Array(record.ciphertext),
+    );
+    const payload = JSON.parse(new TextDecoder().decode(plaintext));
+    return payload && typeof payload === "object" ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+function renderCachedDecryptedPayload(message, bodyElement, payload) {
+  if (!message || !bodyElement || !payload) return;
+  if (!messageBodyElementsById.has(message.id)) return;
+  decryptedPayloadByMessageId.set(message.id, payload);
+  message._decryptedPayload = payload;
+  renderMessageDecorations(bodyElement.parentElement, payload);
+  bodyElement.textContent =
+    typeof payload.text === "string" ? payload.text : JSON.stringify(payload);
+  bodyElement.classList.add("decrypted-cached");
+}
+
 let peerConnection = null;
 let localMediaStream = null;
 let screenMediaStream = null;
@@ -2368,6 +2417,7 @@ function connect() {
         logEl.replaceChildren();
         messageBodyElementsById.clear();
         msg.history.forEach(appendMessage);
+        void retryVisibleMatrixMessages({ attempts: 10, delayMs: 300 });
         break;
       case "message":
         if (isForOpenChat(msg.message)) appendMessage(msg.message);
@@ -2390,6 +2440,7 @@ function connect() {
         cryptoRecoveryPending.delete(msg.message_id);
         recoveredBodiesByMessageId.delete(msg.message_id);
         cryptoRecoveryResponsesByMessageId.delete(msg.message_id);
+        void writeLocalCryptoRecord({ id: `decrypted-message:${msg.message_id}`, deleted: true }).catch(() => {});
         logEl.querySelector(`[data-message-id="${CSS.escape(msg.message_id)}"]`)?.remove();
         break;
       case "group_call_state":
@@ -2404,7 +2455,7 @@ function connect() {
       case "matrix_to_device":
         void matrixCryptoReady.then(async () => {
           await matrixCrypto?.handleLiveToDevice(msg);
-          await retryVisibleMatrixMessages();
+          await retryVisibleMatrixMessages({ attempts: 10, delayMs: 300 });
         }).catch((err) => {
           console.error("[E2E] Matrix to-device processing failed", err);
         });
@@ -4086,6 +4137,11 @@ function appendMessage(message) {
   if (encryptedBodyElement) {
     messageBodyElementsById.set(message.id, encryptedBodyElement);
 
+    void loadCachedDecryptedMessagePayload(message.id).then((payload) => {
+      if (!payload) return;
+      renderCachedDecryptedPayload(message, encryptedBodyElement, payload);
+    });
+
     let effectiveMessage = message;
     const queuedResponse = cryptoRecoveryResponsesByMessageId.get(message.id);
     if (queuedResponse) {
@@ -4213,13 +4269,32 @@ function parseCryptoEnvelope(raw) {
 
 console.log("[E2E] displayEncryptedMessage loaded");
 
-async function retryVisibleMatrixMessages() {
-  const entries = [...messageBodyElementsById.entries()];
-  for (const [messageId, bodyElement] of entries) {
+async function retryVisibleMatrixMessages({ attempts = 8, delayMs = 350 } = {}) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    let failed = false;
+    const entries = [...messageBodyElementsById.entries()];
+    for (const [messageId, bodyElement] of entries) {
+      const message = messagesById.get(messageId);
+      if (!message || !parseCryptoEnvelope(message.body)) continue;
+      if (
+        !["Encrypted message", "Decrypting…"].includes(bodyElement.textContent || "")
+        && !(bodyElement.textContent || "").startsWith("Could not decrypt Matrix message:")
+      ) continue;
+      const ok = await displayEncryptedMessage(message, bodyElement, { allowRecovery: false });
+      if (!ok) failed = true;
+    }
+    if (!failed) return;
+    if (attempt + 1 < attempts) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs * Math.min(attempt + 1, 3)));
+    }
+  }
+
+  for (const [messageId, bodyElement] of messageBodyElementsById.entries()) {
     const message = messagesById.get(messageId);
     if (!message || !parseCryptoEnvelope(message.body)) continue;
-    if (!(bodyElement.textContent || "").startsWith("Could not decrypt Matrix message:")) continue;
-    await displayEncryptedMessage(message, bodyElement, { allowRecovery: false });
+    if ((bodyElement.textContent || "") === "Decrypting…") {
+      bodyElement.textContent = "Could not decrypt Matrix message yet. E2E keys are still unavailable.";
+    }
   }
 }
 
@@ -4237,6 +4312,7 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
       });
       const payload = decrypted?.content ?? decrypted;
       decryptedPayloadByMessageId.set(message.id, payload);
+      void cacheDecryptedMessagePayload(message.id, payload);
       message._decryptedPayload = payload;
       renderMessageDecorations(bodyElement.parentElement, payload);
       bodyElement.textContent =
@@ -4260,8 +4336,7 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
       }
       return true;
     } catch (err) {
-      bodyElement.textContent =
-        `Could not decrypt Matrix message: ${err?.message || String(err)}`;
+      bodyElement.textContent = "Decrypting…";
       return false;
     }
   }
