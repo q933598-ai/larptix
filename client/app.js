@@ -1296,6 +1296,12 @@ function refreshPeerVerification(userId) {
 
 function signedIn(user) {
   me = user;
+
+  // Establish the authenticated realtime connection before any UI or E2E
+  // initialization can interfere with startup. Once the server sends
+  // "welcome", connect() will mark the status online.
+  connect();
+
   forgetE2eDeviceButton.hidden = true;
   gate.close();
   logoutBtn.hidden = false;
@@ -1319,7 +1325,6 @@ function signedIn(user) {
       return false;
     }
   });
-  connect();
 }
 
 function setMode(next) {
