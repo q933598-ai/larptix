@@ -85,6 +85,16 @@ export class LarptrixMatrixCrypto {
     this.machine.roomKeyRequestsEnabled = true;
     this.machine.roomKeyForwardingEnabled = true;
 
+    // The first device-key upload is generated when the SDK processes a
+    // regular sync with zero known one-time-key counts. Using only the
+    // MSC4186 helper here treats a missing count as "unchanged", so a brand
+    // new device may never publish itself to the server.
+    await this.machine.receiveSyncChanges(
+      JSON.stringify([]),
+      new DeviceLists(),
+      new Map(),
+      undefined,
+    );
     await this.processOutgoingRequests();
     await this.processPendingToDevice();
     return this;
