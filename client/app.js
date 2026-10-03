@@ -95,7 +95,8 @@ const enableCallAudio = document.getElementById("enable-call-audio");
 const incomingCallDialog = document.getElementById("incoming-call-dialog");
 const incomingCallTitle = document.getElementById("incoming-call-title");
 const incomingCallKind = document.getElementById("incoming-call-kind");
-const screenQuality = document.getElementById("screen-quality");
+const screenResolution = document.getElementById("screen-resolution");
+const screenFrameRate = document.getElementById("screen-framerate");
 const chatBackgroundInput = document.getElementById("chat-background");
 const peerProfileDialog = document.getElementById("peer-profile-dialog");
 const createGroupDialog = document.getElementById("create-group-dialog");
@@ -165,6 +166,15 @@ const callNoiseSuppression = document.getElementById("call-noise-suppression");
 const callParticipantSettings = document.getElementById("call-participant-settings");
 const callWindowPin = document.getElementById("call-window-pin");
 const musicWindowPin = document.getElementById("music-window-pin");
+const menuNewChannel = document.getElementById("menu-new-channel");
+const menuAbout = document.getElementById("menu-about");
+const aboutDialog = document.getElementById("about-dialog");
+const profileBannerFile = document.getElementById("profile-banner-file");
+const settingsBrowserNotifications = document.getElementById("settings-browser-notifications");
+const settingsEnableNotifications = document.getElementById("settings-enable-notifications");
+const settingsNotificationsStatus = document.getElementById("settings-notifications-status");
+const peerProfileBanner = document.getElementById("peer-profile-banner");
+const profileBanner = document.querySelector("#profile-dialog .profile-banner");
 
 
 let socket = null;
@@ -437,6 +447,48 @@ function playIncomingMessageSound() {
     oscillator.start();
     oscillator.stop(context.currentTime + 0.12);
     setTimeout(() => context.close().catch(() => {}), 250);
+  } catch {}
+}
+
+function canUseBrowserNotifications() {
+  return typeof Notification === "function";
+}
+
+function browserNotificationsEnabled() {
+  return localStorage.getItem("larptrix_browser_notifications") === "1";
+}
+
+async function requestBrowserNotifications() {
+  if (!canUseBrowserNotifications()) {
+    throw new Error("This browser does not support notifications.");
+  }
+  const permission = await Notification.requestPermission();
+  const enabled = permission === "granted";
+  localStorage.setItem("larptrix_browser_notifications", enabled ? "1" : "0");
+  renderNotificationSettings();
+  return enabled;
+}
+
+function renderNotificationSettings() {
+  if (!settingsBrowserNotifications || !settingsNotificationsStatus) return;
+  const supported = canUseBrowserNotifications();
+  settingsBrowserNotifications.disabled = !supported;
+  settingsBrowserNotifications.checked = supported && browserNotificationsEnabled();
+  if (!supported) {
+    settingsNotificationsStatus.textContent = "Browser notifications are not supported here.";
+    return;
+  }
+  settingsNotificationsStatus.textContent =
+    Notification.permission === "granted" ? "Notifications are allowed." :
+    Notification.permission === "denied" ? "Notifications are blocked by the browser." :
+    "Permission has not been requested yet.";
+}
+
+function showBrowserNotification(title, body, tag) {
+  if (!canUseBrowserNotifications() || Notification.permission !== "granted" || !browserNotificationsEnabled()) return;
+  if (document.visibilityState === "visible" && document.hasFocus()) return;
+  try {
+    new Notification(title, { body, tag });
   } catch {}
 }
 
@@ -1031,6 +1083,7 @@ function openSettings() {
   settingsPresence.value = localStorage.getItem(PRESENCE_KEY) || "online";
   settingsCallSounds.checked = readStoredBool(CALL_SOUND_KEY, true);
   settingsMessageSounds.checked = readStoredBool(MESSAGE_SOUND_KEY, true);
+  renderNotificationSettings();
 
   settingsLayoutStatus.textContent = "";
   settingsDialog.showModal();
@@ -1067,6 +1120,16 @@ menuNewGroup.addEventListener("click", () => {
   document.getElementById("create-group-open").click();
   closeAppMenu();
 });
+menuNewChannel?.addEventListener("click", () => {
+  appendSystem("Channels are planned for the next protocol milestone.");
+  closeAppMenu();
+});
+menuAbout?.addEventListener("click", () => {
+  aboutDialog?.showModal();
+  closeAppMenu();
+});
+document.getElementById("about-close")?.addEventListener("click", () => aboutDialog?.close());
+
 profileOpen.addEventListener("click", async () => {
   closeAppMenu();
   try {
@@ -1078,6 +1141,8 @@ profileOpen.addEventListener("click", async () => {
     customActivity = profile.activity?.startsWith("Listening to ") ? "" : (profile.activity || "");
     profileActivity.value = customActivity;
     showMusicActivity.checked = musicActivityEnabled;
+    profileBanner.style.backgroundImage = profile.banner_url ? 'url("' + profile.banner_url + '?v=' + Date.now() + '")' : "";
+    renderNotificationSettings();
     profileDialog.showModal();
   } catch (err) {
     profileError.textContent = err.message;
@@ -1086,6 +1151,26 @@ profileOpen.addEventListener("click", async () => {
 });
 menuSettings.addEventListener("click", openSettings);
 document.getElementById("settings-close").addEventListener("click", () => settingsDialog.close());
+settingsEnableNotifications?.addEventListener("click", async () => {
+  try {
+    await requestBrowserNotifications();
+  } catch (err) {
+    settingsNotificationsStatus.textContent = err.message || "Could not enable notifications.";
+  }
+});
+settingsBrowserNotifications?.addEventListener("change", async () => {
+  if (settingsBrowserNotifications.checked) {
+    try {
+      const enabled = await requestBrowserNotifications();
+      settingsBrowserNotifications.checked = enabled;
+    } catch {
+      settingsBrowserNotifications.checked = false;
+    }
+  } else {
+    localStorage.setItem("larptrix_browser_notifications", "0");
+    renderNotificationSettings();
+  }
+});
 document.getElementById("settings-done").addEventListener("click", () => settingsDialog.close());
 document.getElementById("settings-open-profile").addEventListener("click", () => {
   settingsDialog.close();
@@ -1221,6 +1306,17 @@ userSearchInput.addEventListener("input", renderUsers);
 document.getElementById("emoji-picker-toggle").addEventListener("click", () => {
   emojiPicker.hidden = !emojiPicker.hidden;
 });
+bodyInput.addEventListener("paste", (event) => {
+  const items = [...(event.clipboardData?.items || [])];
+  const imageItem = items.find((item) => item.kind === "file" && item.type.startsWith("image/"));
+  if (!imageItem) return;
+  const file = imageItem.getAsFile();
+  if (!file) return;
+  event.preventDefault();
+  queueAttachment(new File([file], "clipboard-image." + (file.type.split("/")[1] || "png"), { type: file.type }));
+  bodyInput.focus();
+});
+
 emojiPicker.addEventListener("click", (event) => {
   const button = event.target.closest("button");
   if (!button) return;
@@ -1241,6 +1337,17 @@ document.getElementById("chat-background-clear").addEventListener("click", () =>
   applyChatWallpaper(peerId);
 });
 document.getElementById("profile-close").addEventListener("click", () => profileDialog.close());
+profileBannerFile?.addEventListener("change", async () => {
+  const file = profileBannerFile.files?.[0];
+  profileBannerFile.value = "";
+  if (!file) return;
+  try {
+    await uploadProfileBanner(file);
+  } catch (err) {
+    profileError.textContent = err.message || "Could not update profile banner.";
+    profileError.hidden = false;
+  }
+});
 issueAccessKeyButton.addEventListener("click", async () => {
   issueAccessKeyButton.disabled = true;
   profileError.hidden = true;
@@ -2221,7 +2328,10 @@ function connect() {
         break;
       case "message":
         if (isForOpenChat(msg.message)) appendMessage(msg.message);
-        if (msg.message?.sender_id !== me?.user_id) playIncomingMessageSound();
+        if (msg.message?.sender_id !== me?.user_id) {
+          playIncomingMessageSound();
+          showBrowserNotification(msg.message.sender_name || "Larptrix", "New message", "message-" + msg.message.sender_id);
+        }
         break;
       case "presence":
         if (msg.user_id) {
@@ -2288,6 +2398,42 @@ function renderGroupMembersDialog(group) {
   groupMembersTitle.textContent = group.display_name;
   groupMembersHelp.textContent = `${memberIds.length} member(s). Members with an active connection can be invited to the current call.`;
   groupMembersList.replaceChildren();
+
+  const addBox = document.createElement("div");
+  addBox.className = "group-add-member";
+  const addSelect = document.createElement("select");
+  addSelect.className = "group-add-member-select";
+  addSelect.innerHTML = '<option value="">Add member…</option>';
+  users
+    .filter((item) => !item.is_group && item.user_id !== me?.user_id && !memberIds.includes(item.user_id))
+    .forEach((item) => {
+      const option = document.createElement("option");
+      option.value = item.user_id;
+      option.textContent = item.display_name + (item.username ? " · @" + item.username : "");
+      option.disabled = !item.e2e_enabled;
+      addSelect.append(option);
+    });
+  const addButton = document.createElement("button");
+  addButton.type = "button";
+  addButton.className = "ghost";
+  addButton.textContent = "Add";
+  addButton.addEventListener("click", async () => {
+    if (!addSelect.value) return;
+    addButton.disabled = true;
+    try {
+      await api("POST", "/api/groups/" + encodeURIComponent(group.user_id) + "/members", { user_id: addSelect.value });
+      await loadGroups();
+      const updated = groups.find((item) => item.user_id === group.user_id);
+      if (updated) renderGroupMembersDialog(updated);
+      addSelect.value = "";
+    } catch (err) {
+      appendSystem(err.message || "Could not add group member.");
+    } finally {
+      addButton.disabled = false;
+    }
+  });
+  addBox.append(addSelect, addButton);
+  groupMembersList.append(addBox);
 
   for (const memberId of memberIds) {
     const user = users.find((item) => item.user_id === memberId);
@@ -2686,6 +2832,7 @@ async function handleGroupCallSignal(signal) {
     incomingCallKind.textContent = (callMediaKind === "video" ? "Group video" : "Group") + " call · " + group.display_name;
     document.getElementById("accept-call").textContent = "Join";
     startCallRingtone();
+    showBrowserNotification(incomingCallTitle.textContent || "Incoming group call", incomingCallKind.textContent || "Group call", "group-call-" + groupId);
     incomingCallDialog.showModal();
     return;
   }
@@ -3200,7 +3347,13 @@ async function toggleScreenShare() {
     return;
   }
   try {
-    const highQuality = screenQuality.value === "high";
+    const resolution = {
+      "720p": { width: 1280, height: 720 },
+      "1080p": { width: 1920, height: 1080 },
+      "1440p": { width: 2560, height: 1440 },
+      "4k": { width: 3840, height: 2160 },
+    }[screenResolution?.value || "1080p"] || { width: 1920, height: 1080 };
+    const frameRate = Number(screenFrameRate?.value || 60);
     const webkitGtk = navigator.platform.toLowerCase().includes("linux")
       && navigator.userAgent.includes("AppleWebKit")
       && !/(Chrome|Chromium)/.test(navigator.userAgent);
@@ -3208,7 +3361,11 @@ async function toggleScreenShare() {
       throw new Error("Screen capture is not supported by this desktop runtime.");
     }
     screenMediaStream = await navigator.mediaDevices.getDisplayMedia({
-      video: true,
+      video: {
+        width: { ideal: resolution.width, max: resolution.width },
+        height: { ideal: resolution.height, max: resolution.height },
+        frameRate: { ideal: frameRate, max: frameRate },
+      },
       audio: !webkitGtk,
     });
     const screenTrack = screenMediaStream.getVideoTracks()[0];
@@ -3241,8 +3398,8 @@ async function toggleScreenShare() {
       try {
         const params = sender.getParameters();
         params.encodings = params.encodings?.length ? params.encodings : [{}];
-        params.encodings[0].maxBitrate = highQuality ? 12_000_000 : 3_000_000;
-        params.encodings[0].maxFramerate = highQuality ? 144 : 30;
+        params.encodings[0].maxBitrate = Math.max(3_000_000, Math.min(24_000_000, Math.round(resolution.width * resolution.height * frameRate * 0.012)));
+        params.encodings[0].maxFramerate = frameRate;
         await sender.setParameters(params);
       } catch {}
       if (renegotiate) {
@@ -4943,6 +5100,7 @@ async function showPeerProfile(id) {
     avatar.hidden = !profile.avatar_url;
     if (profile.avatar_url) avatar.src = profile.avatar_url;
     avatar.alt = `${profile.display_name} profile photo`;
+    peerProfileBanner.style.backgroundImage = profile.banner_url ? 'url("' + profile.banner_url + '?v=' + Date.now() + '")' : "";
     document.getElementById("peer-profile-name").textContent = profile.display_name;
     document.getElementById("peer-profile-username").textContent = profile.username ? `@${profile.username}` : "";
     document.getElementById("peer-profile-about").textContent = profile.about || "No profile description";
@@ -4967,6 +5125,21 @@ async function api(method, path, body) {
     throw error;
   }
   return data;
+}
+
+async function uploadProfileBanner(file) {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await fetch("/api/me/banner", {
+    method: "POST",
+    credentials: "same-origin",
+    body: form,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || response.statusText);
+  const url = data.banner_url + "?v=" + Date.now();
+  if (profileBanner) profileBanner.style.backgroundImage = 'url("' + url + '")';
+  return url;
 }
 
 async function uploadFile(path, file) {

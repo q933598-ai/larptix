@@ -1186,6 +1186,67 @@ impl Database {
         Ok(())
     }
 
+    pub fn group_creator_id(&self, group_id: &str) -> rusqlite::Result<Option<String>> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.query_row(
+            "SELECT created_by FROM groups WHERE id = ?1",
+            [group_id],
+            |row| row.get(0),
+        )
+        .optional()
+    }
+
+    pub fn add_group_member(&self, group_id: &str, user_id: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "INSERT INTO group_members (group_id, user_id) VALUES (?1, ?2)",
+            params![group_id, user_id],
+        )
+        .map_err(|err| {
+            if is_unique(&err) {
+                DbError::BadRequest("user is already a group member")
+            } else {
+                DbError::Sqlite(err)
+            }
+        })?;
+        Ok(())
+    }
+
+    pub fn set_profile_banner(&self, user_id: &str, attachment_id: Option<&str>) -> rusqlite::Result<Option<String>> {
+        let conn = self.conn.lock().expect("db lock");
+        let old = conn
+            .query_row(
+                "SELECT attachment_id FROM profile_banners WHERE user_id = ?1",
+                [user_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        match attachment_id {
+            Some(id) => {
+                conn.execute(
+                    "INSERT INTO profile_banners (user_id, attachment_id)
+                     VALUES (?1, ?2)
+                     ON CONFLICT(user_id) DO UPDATE SET attachment_id = excluded.attachment_id",
+                    params![user_id, id],
+                )?;
+            }
+            None => {
+                conn.execute("DELETE FROM profile_banners WHERE user_id = ?1", [user_id])?;
+            }
+        }
+        Ok(old)
+    }
+
+    pub fn profile_banner(&self, user_id: &str) -> rusqlite::Result<Option<String>> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.query_row(
+            "SELECT attachment_id FROM profile_banners WHERE user_id = ?1",
+            [user_id],
+            |row| row.get(0),
+        )
+        .optional()
+    }
+
     pub fn create_group(
         &self,
         creator_id: &str,
@@ -1897,6 +1958,12 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             user_b TEXT NOT NULL,
             UNIQUE (user_a, user_b),
             CHECK (user_a < user_b)
+        );
+        CREATE TABLE IF NOT EXISTS profile_banners (
+            user_id TEXT PRIMARY KEY,
+            attachment_id TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (attachment_id) REFERENCES attachments(id)
         );
         CREATE TABLE IF NOT EXISTS groups (
             id TEXT PRIMARY KEY,

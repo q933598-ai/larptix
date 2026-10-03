@@ -47,6 +47,7 @@ pub fn router() -> Router<Arc<AppState>> {
                 .layer(DefaultBodyLimit::max(MAX_ATTACHMENT_BYTES + 64 * 1024)),
         )
         .route("/api/groups", get(list_groups).post(create_group))
+        .route("/api/groups/{id}/members", post(add_group_member))
         .route("/api/me/access-key", post(create_access_key))
         .route(
             "/api/me/crypto-device",
@@ -92,6 +93,11 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/me/avatar",
             post(set_avatar).layer(DefaultBodyLimit::max(MAX_IMAGE_BYTES + 64 * 1024)),
         )
+        .route(
+            "/api/me/banner",
+            post(set_profile_banner).layer(DefaultBodyLimit::max(MAX_IMAGE_BYTES + 64 * 1024)),
+        )
+        .route("/api/users/{id}/banner", get(user_banner))
 }
 
 #[derive(Deserialize)]
@@ -1196,6 +1202,7 @@ async fn get_user_profile(
         "about": about,
         "activity": activity,
         "avatar_url": avatar_id.map(|_| avatar_url(&id)),
+        "banner_url": state.db.profile_banner(&id).map_err(ApiError::db)?.map(|_| format!("/api/users/{}/banner", id)),
         "music": music,
     })))
 }
@@ -1335,6 +1342,76 @@ async fn create_group(
     Ok(Json(group_json(group)))
 }
 
+#[derive(Deserialize)]
+pub struct AddGroupMemberBody {
+    pub user_id: String,
+}
+
+async fn add_group_member(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<AddGroupMemberBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    if body.user_id == user.id {
+        return Err(ApiError::bad("you are already in this group"));
+    }
+    let creator = state
+        .db
+        .group_creator_id(&id)
+        .map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::not_found("group not found"))?;
+    if creator != user.id {
+        return Err(ApiError::bad("only the group creator can add members"));
+    }
+    if state
+        .db
+        .user_by_id(&body.user_id)
+        .map_err(ApiError::db)?
+        .is_none()
+    {
+        return Err(ApiError::bad("user not found"));
+    }
+    if state
+        .db
+        .matrix_devices_for_user(&body.user_id)
+        .map_err(ApiError::db)?
+        .is_empty()
+    {
+        return Err(ApiError::bad("the user must finish Matrix E2E device setup first"));
+    }
+    let group = state
+        .db
+        .group(&id)
+        .map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::not_found("group not found"))?;
+    if group.member_ids.len() >= 32 {
+        return Err(ApiError::bad("groups can contain at most 32 members"));
+    }
+    state
+        .db
+        .add_group_member(&id, &body.user_id)
+        .map_err(ApiError::from_db)?;
+    for member_id in group.member_ids.iter().chain(std::iter::once(&body.user_id)) {
+        if let Ok(recipient) = member_id.parse() {
+            let groups = state
+                .db
+                .groups_for_user(member_id)
+                .map_err(ApiError::db)?
+                .into_iter()
+                .map(|item| GroupInfo {
+                    group_id: item.id,
+                    name: item.name,
+                    member_ids: item.member_ids,
+                })
+                .collect();
+            state.hub.send_to(recipient, ServerMessage::Groups { groups });
+        }
+    }
+    Ok(Json(serde_json::json!({ "ok": true, "group_id": id, "user_id": body.user_id })))
+}
+
 fn group_json(group: crate::db::GroupRow) -> serde_json::Value {
     serde_json::json!({
         "group_id": group.id,
@@ -1372,6 +1449,41 @@ async fn upload(
         name: saved.name,
         size_bytes: saved.size_bytes,
     }))
+}
+
+async fn set_profile_banner(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    multipart: Multipart,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let saved = save_image(&state, &user.id, multipart).await?;
+    let old = state
+        .db
+        .set_profile_banner(&user.id, Some(&saved.id))
+        .map_err(ApiError::db)?;
+    if let Some(old_id) = old {
+        if let Ok(Some(old_file)) = state.db.attachment(&old_id) {
+            let _ = std::fs::remove_file(upload_path(&state.upload_dir, &old_file.id, &old_file.ext));
+        }
+    }
+    Ok(Json(serde_json::json!({
+        "banner_url": format!("/api/users/{}/banner", user.id),
+    })))
+}
+
+async fn user_banner(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    require_user(&state, &headers)?;
+    let attachment_id = state
+        .db
+        .profile_banner(&id)
+        .map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::not_found("no profile banner"))?;
+    file_response(&state, &attachment_id)
 }
 
 async fn set_avatar(
