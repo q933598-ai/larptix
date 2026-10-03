@@ -142,7 +142,20 @@
                 <option value="30">30</option>
                 <option value="60" selected>60</option>
                 <option value="120">120</option>
+                <option value="144">144</option>
               </select>
+            </label>
+            <label class="call-select">
+              <span>Share audio</span>
+              <select id="screen-audio-mode" aria-label="Screen sharing audio">
+                <option value="none" selected>Off</option>
+                <option value="system">Whole system</option>
+                <option value="window">Selected window</option>
+              </select>
+            </label>
+            <label class="call-select call-volume-select">
+              <span>Viewer volume</span>
+              <input id="call-audio-volume" type="range" min="0" max="1" value="1" step="0.01" aria-label="Screen and call audio volume" />
             </label>
             <button id="toggle-screen-share" type="button" class="ghost">Share screen</button>
             <button id="group-call-invite" type="button" class="ghost" hidden>＋ Invite</button>
