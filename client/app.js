@@ -2832,6 +2832,7 @@ async function handleGroupCallSignal(signal) {
     incomingCallKind.textContent = (callMediaKind === "video" ? "Group video" : "Group") + " call · " + group.display_name;
     document.getElementById("accept-call").textContent = "Join";
     startCallRingtone();
+    showBrowserNotification(incomingCallTitle.textContent || "Incoming group call", incomingCallKind.textContent || "Group call", "group-call-" + groupId);
     incomingCallDialog.showModal();
     return;
   }
