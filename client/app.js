@@ -123,6 +123,7 @@ const settingsE2eStatus = document.getElementById("settings-e2e-status");
 const settingsE2eFingerprint = document.getElementById("settings-e2e-fingerprint");
 const settingsLayoutStatus = document.getElementById("settings-layout-status");
 const settingsTheme = document.getElementById("settings-theme");
+const settingsWallpaperTint = document.getElementById("settings-wallpaper-tint");
 const customThemeEditor = document.getElementById("custom-theme-editor");
 const themeBg = document.getElementById("theme-bg");
 const themePanel = document.getElementById("theme-panel");
@@ -210,6 +211,9 @@ const cryptoRecoveryResponsesByMessageId = new Map();
 const messageBodyElementsById = new Map();
 const messagesById = new Map();
 const deletedMessageIds = new Set();
+const SAVED_MESSAGES_ID = "__larptrix_saved_messages__";
+let replyingToMessage = null;
+const decryptedPayloadByMessageId = new Map();
 
 function pinnedChatsKey() {
   return me ? `larptrix_pinned_chats_${me.user_id}` : null;
@@ -551,6 +555,256 @@ function openSavedMessages() {
 
 applyTheme();
 
+function savedChatEntry() {
+  return {
+    user_id: SAVED_MESSAGES_ID,
+    display_name: "Saved Messages",
+    username: "saved",
+    online: true,
+    is_saved_chat: true,
+    e2e_enabled: true,
+  };
+}
+
+function getChatEntries() {
+  return [savedChatEntry(), ...users, ...groups];
+}
+
+function clearReplyComposer() {
+  replyingToMessage = null;
+  const preview = document.getElementById("reply-preview");
+  if (preview) {
+    preview.hidden = true;
+    preview.replaceChildren();
+  }
+}
+
+function setReplyComposer(message) {
+  replyingToMessage = {
+    id: message.id,
+    sender_id: message.sender_id,
+    sender_name: message.sender_name || "Unknown",
+    text: message._decryptedPayload?.text || message.text || "Encrypted message",
+  };
+  const preview = document.getElementById("reply-preview");
+  const text = document.getElementById("reply-preview-text");
+  if (!preview || !text) return;
+  text.textContent = replyingToMessage.sender_name + ": " + replyingToMessage.text;
+  preview.hidden = false;
+  document.getElementById("reply-preview-close")?.addEventListener("click", clearReplyComposer, { once: true });
+  bodyInput.focus();
+}
+
+function renderMessageDecorations(parent, payload) {
+  parent.querySelectorAll(".message-context-preview").forEach((item) => item.remove());
+  if (payload?.forwarded_from?.sender_name) {
+    const block = document.createElement("div");
+    block.className = "message-context-preview forwarded-preview";
+    block.textContent = "↪ Forwarded from " + payload.forwarded_from.sender_name;
+    parent.insertBefore(block, parent.firstChild);
+  }
+  if (payload?.reply_to?.sender_name) {
+    const block = document.createElement("div");
+    block.className = "message-context-preview reply-preview";
+    const strong = document.createElement("strong");
+    strong.textContent = "↩ " + payload.reply_to.sender_name;
+    const quote = document.createElement("span");
+    quote.textContent = payload.reply_to.text || "Message";
+    block.append(strong, quote);
+    parent.insertBefore(block, parent.firstChild);
+  }
+}
+
+function renderSavedChatHistory() {
+  if (peerId !== SAVED_MESSAGES_ID) return;
+  logEl.replaceChildren();
+  void getSavedMessages().then((items) => {
+    if (peerId !== SAVED_MESSAGES_ID) return;
+    items.forEach(appendSavedMessage);
+    logEl.scrollTop = logEl.scrollHeight;
+  });
+}
+
+function appendSavedMessage(item) {
+  const li = document.createElement("li");
+  li.dataset.messageId = item.id;
+  li.classList.add("me");
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = (item.sender_name || "Saved") + " · " + new Date(item.created_at).toLocaleTimeString();
+  const body = document.createElement("div");
+  body.textContent = item.text || "";
+  renderMessageDecorations(li, item);
+  li.append(meta, body);
+  const actions = document.createElement("div");
+  actions.className = "message-actions";
+  const reply = document.createElement("button");
+  reply.type = "button";
+  reply.className = "ghost";
+  reply.textContent = "Reply";
+  reply.addEventListener("click", () => setReplyComposer({ ...item, _decryptedPayload: item }));
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "ghost";
+  remove.textContent = "Remove";
+  remove.addEventListener("click", async () => {
+    const next = (await getSavedMessages()).filter((entry) => entry.id !== item.id);
+    await setSavedMessages(next);
+    renderSavedChatHistory();
+  });
+  actions.append(reply, remove);
+  li.append(actions);
+  logEl.append(li);
+}
+
+async function saveManualSavedMessage(text, extras = {}) {
+  const items = await getSavedMessages();
+  items.unshift({
+    id: crypto.randomUUID(),
+    peer_id: SAVED_MESSAGES_ID,
+    sender_id: me.user_id,
+    sender_name: me.display_name,
+    text,
+    created_at: Date.now(),
+    ...extras,
+  });
+  await setSavedMessages(items.slice(0, 500));
+  clearReplyComposer();
+  bodyInput.value = "";
+  renderSavedChatHistory();
+}
+
+function openSavedMessagesChat() {
+  peerId = SAVED_MESSAGES_ID;
+  peerName.textContent = "Saved Messages";
+  chatTitlebar.hidden = false;
+  peerName.hidden = false;
+  composer.hidden = false;
+  emptyEl.hidden = true;
+  document.getElementById("start-audio-call").hidden = true;
+  document.getElementById("start-video-call").hidden = true;
+  groupMembersOpen.hidden = true;
+  groupCallStart.hidden = true;
+  groupCallInvite.hidden = true;
+  renderUsers();
+  renderSavedChatHistory();
+}
+
+async function getMessagePlaintextPayload(message) {
+  if (decryptedPayloadByMessageId.has(message.id)) return decryptedPayloadByMessageId.get(message.id);
+  if (message._decryptedPayload) return message._decryptedPayload;
+  const cached = await loadCachedSentPlaintext(message.body);
+  const parsed = parseEncryptedPayload(cached);
+  return parsed && typeof parsed === "object" ? parsed : null;
+}
+
+async function openForwardDialog(message) {
+  const payload = await getMessagePlaintextPayload(message);
+  const textValue = payload?.text || message.text || "";
+  if (!textValue) {
+    appendSystem("Wait for this message to decrypt before forwarding.");
+    return;
+  }
+  const dialog = document.getElementById("forward-message-dialog");
+  const list = document.getElementById("forward-message-list");
+  if (!dialog || !list) return;
+  list.replaceChildren();
+  document.getElementById("forward-message-close")?.addEventListener("click", () => dialog.close(), { once: true });
+  for (const target of getChatEntries().filter((item) => item.user_id !== me?.user_id)) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "forward-target";
+    button.textContent = target.is_saved_chat
+      ? "★ Saved Messages"
+      : target.display_name + (target.username ? " · @" + target.username : "");
+    button.addEventListener("click", async () => {
+      try {
+        const extras = {
+          forwarded_from: {
+            sender_id: message.sender_id,
+            sender_name: message.sender_name || "Larptrix user",
+            message_id: message.id,
+          },
+        };
+        if (target.is_saved_chat) {
+          await saveManualSavedMessage(textValue, extras);
+        } else {
+          await sendEncryptedPayloadToPeer(target.user_id, { text: textValue, ...extras });
+        }
+        dialog.close();
+      } catch (err) {
+        appendSystem("Forward failed: " + (err.message || err));
+      }
+    });
+    list.append(button);
+  }
+  dialog.showModal();
+}
+
+async function sendEncryptedPayloadToPeer(targetId, payloadObject, file = null) {
+  if (!cryptoEnabled || !cryptoDevice) throw new Error("Unlock E2E before sending messages.");
+  const peer = getChatEntries().find((item) => item.user_id === targetId);
+  if (!peer || peer.is_saved_chat) throw new Error("Invalid message target.");
+  let attachment_id = null;
+  let encryptedFile = null;
+  if (file) {
+    const encrypted = await encryptAttachment(file);
+    const uploaded = await uploadFile("/api/upload", encrypted.file);
+    attachment_id = uploaded.id;
+    encryptedFile = encrypted.metadata;
+  }
+  const rawPayload = JSON.stringify({ file: encryptedFile, ...payloadObject });
+  let encryptedBody;
+  await withCryptoStateLock(async () => {
+    await matrixCryptoReady;
+    let matrixReady = Boolean(matrixCrypto);
+    if (matrixReady) {
+      try {
+        await waitForMatrixDevices(peer.is_group ? peer.group_member_ids : [targetId]);
+      } catch {
+        matrixReady = false;
+      }
+    }
+    if (peer.is_group) {
+      if (!matrixReady) throw new Error("Group E2E requires Matrix crypto.");
+      const roomId = matrixCrypto.groupRoomId(peer.user_id);
+      await matrixCrypto.prepareRoom(roomId, peer.group_member_ids);
+      encryptedBody = JSON.stringify({
+        version: 3, message_type: "matrix", sender_device_id: matrixCrypto.deviceId,
+        room_id: roomId, ciphertext: await matrixCrypto.encrypt(roomId, rawPayload),
+      });
+    } else if (matrixReady) {
+      const roomId = await matrixCrypto.roomIdForDm(targetId);
+      await matrixCrypto.prepareRoom(roomId, [targetId]);
+      encryptedBody = JSON.stringify({
+        version: 3, message_type: "matrix", sender_device_id: matrixCrypto.deviceId,
+        room_id: roomId, ciphertext: await matrixCrypto.encrypt(roomId, rawPayload),
+      });
+    } else {
+      const result = await api("GET", "/api/users/" + encodeURIComponent(targetId) + "/crypto-devices");
+      const devices = Array.isArray(result?.devices) ? result.devices : [];
+      if (!devices.length) throw new Error("Peer has no E2E devices.");
+      const ciphertexts = {};
+      for (const bundle of devices) {
+        if (!(await ensurePeerFingerprint(peer, bundle))) throw new Error("Device could not be verified.");
+        const deviceId = bundle.device_id;
+        if (!cryptoDevice.has_session(deviceId)) {
+          const claimed = await claimPeerOneTimeKey(targetId, deviceId);
+          if (!(await ensurePeerFingerprint(peer, claimed))) throw new Error("Device could not be verified.");
+          cryptoDevice.establish_session(deviceId, JSON.stringify(claimed), claimed.fingerprint);
+        }
+        ciphertexts[deviceId] = cryptoDevice.encrypt(deviceId, rawPayload);
+      }
+      encryptedBody = JSON.stringify({ version: 2, message_type: "message", sender_device_id: cryptoDevice.device_id(), ciphertexts });
+    }
+    await persistCryptoState();
+  });
+  sentPlaintextByCiphertext.set(encryptedBody, rawPayload);
+  void cacheSentPlaintext(encryptedBody, rawPayload);
+  if (!socket || socket.readyState !== WebSocket.OPEN) throw new Error("Not connected to server.");
+  socket.send(JSON.stringify({ type: "send", peer_id: targetId, body: encryptedBody, attachment_id }));
+}
+
 function closeAppMenu() {
   appMenu.hidden = true;
   menuBackdrop.hidden = true;
@@ -678,7 +932,7 @@ settingsPresence.addEventListener("change", () => setPresence(settingsPresence.v
 settingsCallSounds.addEventListener("change", () => localStorage.setItem(CALL_SOUND_KEY, settingsCallSounds.checked ? "1" : "0"));
 settingsMessageSounds.addEventListener("change", () => localStorage.setItem(MESSAGE_SOUND_KEY, settingsMessageSounds.checked ? "1" : "0"));
 settingsNoiseSuppression.addEventListener("change", () => localStorage.setItem(NOISE_SUPPRESSION_KEY, settingsNoiseSuppression.checked ? "1" : "0"));
-menuSaved?.addEventListener("click", openSavedMessages);
+menuSaved?.addEventListener("click", openSavedMessagesChat);
 savedMessagesClose?.addEventListener("click", () => savedMessagesDialog.close());
 mobileChats?.addEventListener("click", () => {
   document.getElementById("chat-view-open").click();
@@ -1009,144 +1263,37 @@ logoutBtn.addEventListener("click", async () => {
 
 composer.addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!peerId || !socket || socket.readyState !== WebSocket.OPEN) return;
+  if (!peerId) return;
   const body = bodyInput.value.trim();
   const file = pendingAttachment;
-  if (cryptoEnabled) {
-    try {
-      await cryptoReady;
-      if (!cryptoDevice) throw new Error("Unlock E2E with your separate recovery key before sending messages.");
-      if (!body && !file) return;
-      const peer = [...users, ...groups].find((item) => item.user_id === peerId);
-      if (!peer) throw new Error("Chat peer is not in the current list.");
-      let attachment_id = null;
-      let encryptedFile = null;
-      if (file) {
-        const encrypted = await encryptAttachment(file);
-        const uploaded = await uploadFile("/api/upload", encrypted.file);
-        attachment_id = uploaded.id;
-        encryptedFile = encrypted.metadata;
-      }
-      const payload = JSON.stringify({ text: body, file: encryptedFile });
-      let encryptedBody;
-
-      await withCryptoStateLock(async () => {
-        await matrixCryptoReady;
-        let matrixReady = Boolean(matrixCrypto);
-
-        if (matrixReady) {
-          try {
-            await waitForMatrixDevices(
-              peer.is_group ? peer.group_member_ids : [peerId],
-            );
-          } catch (err) {
-            console.warn(
-              "[E2E] Matrix device readiness check failed; using legacy E2E fallback",
-              err,
-            );
-            matrixReady = false;
-          }
-        }
-
-        if (peer.is_group) {
-          if (!matrixReady) {
-            throw new Error("Group E2E requires Matrix crypto. Keep E2E unlocked and try again.");
-          }
-
-          const roomId = matrixCrypto.groupRoomId(peer.user_id);
-          await matrixCrypto.prepareRoom(roomId, peer.group_member_ids);
-          const ciphertext = await matrixCrypto.encrypt(roomId, payload);
-
-          encryptedBody = JSON.stringify({
-            version: 3,
-            message_type: "matrix",
-            sender_device_id: matrixCrypto.deviceId,
-            room_id: roomId,
-            ciphertext,
-          });
-        } else {
-          if (matrixReady) {
-            const roomId = await matrixCrypto.roomIdForDm(peerId);
-            await matrixCrypto.prepareRoom(roomId, [peerId]);
-            const ciphertext = await matrixCrypto.encrypt(roomId, payload);
-
-            encryptedBody = JSON.stringify({
-              version: 3,
-              message_type: "matrix",
-              sender_device_id: matrixCrypto.deviceId,
-              room_id: roomId,
-              ciphertext,
-            });
-          } else {
-            const result = await api(
-              "GET",
-              `/api/users/${encodeURIComponent(peerId)}/crypto-devices`
-            );
-
-            const devices = Array.isArray(result?.devices) ? result.devices : [];
-
-            if (devices.length === 0) {
-              throw new Error("Peer has no E2E devices.");
-            }
-
-            const ciphertexts = {};
-
-            for (const bundle of devices) {
-              if (!bundle || typeof bundle.device_id !== "string" || !bundle.device_id) {
-                throw new Error("Peer has an invalid E2E device bundle.");
-              }
-
-              if (!(await ensurePeerFingerprint(peer, bundle))) {
-                throw new Error(`Device ${bundle.device_id} could not be verified.`);
-              }
-
-              const deviceId = bundle.device_id;
-
-              if (!cryptoDevice.has_session(deviceId)) {
-                const claimedBundle = await claimPeerOneTimeKey(peerId, deviceId);
-                if (!(await ensurePeerFingerprint(peer, claimedBundle))) {
-                  throw new Error(`Device ${deviceId} could not be verified.`);
-                }
-                cryptoDevice.establish_session(
-                  deviceId,
-                  JSON.stringify(claimedBundle),
-                  claimedBundle.fingerprint
-                );
-              }
-
-              ciphertexts[deviceId] = cryptoDevice.encrypt(
-                deviceId,
-                payload
-              );
-            }
-
-            encryptedBody = JSON.stringify({
-              version: 2,
-              message_type: "message",
-              sender_device_id: cryptoDevice.device_id(),
-              ciphertexts,
-            });
-          }
-        }
-
-        await persistCryptoState();
-      });
-      sentPlaintextByCiphertext.set(encryptedBody, payload);
-      void cacheSentPlaintext(encryptedBody, payload);
-      socket.send(JSON.stringify({
-        type: "send",
-        peer_id: peerId,
-        body: encryptedBody,
-        attachment_id,
-      }));
-      bodyInput.value = "";
-      clearAttachment();
-    } catch (err) {
-      appendSystem(err.message || "Could not encrypt the message.");
+  if (peerId === SAVED_MESSAGES_ID) {
+    if (!body && !file) return;
+    if (file) {
+      appendSystem("Attachments in Saved Messages are not supported yet.");
+      return;
     }
+    await saveManualSavedMessage(body, replyingToMessage ? { reply_to: replyingToMessage } : {});
     return;
   }
-  appendSystem("Set up E2E before sending messages.");
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  if (!cryptoEnabled) {
+    appendSystem("Set up E2E before sending messages.");
+    return;
+  }
+  try {
+    await cryptoReady;
+    if (!cryptoDevice) throw new Error("Unlock E2E before sending messages.");
+    if (!body && !file) return;
+    await sendEncryptedPayloadToPeer(peerId, {
+      text: body,
+      ...(replyingToMessage ? { reply_to: replyingToMessage } : {}),
+    }, file);
+    bodyInput.value = "";
+    clearAttachment();
+    clearReplyComposer();
+  } catch (err) {
+    appendSystem(err.message || "Could not encrypt the message.");
+  }
 });
 
 photoInput.addEventListener("change", () => queueAttachment(photoInput.files[0]));
@@ -2097,6 +2244,10 @@ function sendGroupCallControl(kind) {
 }
 
 function openChat(id) {
+  if (id === SAVED_MESSAGES_ID) {
+    openSavedMessagesChat();
+    return;
+  }
   // Switching chats must not terminate an active call.
   // Calls live independently from the currently opened chat.
   peerId = id;
@@ -3030,6 +3181,7 @@ function endCall(notifyPeer) {
 }
 
 function isForOpenChat(message) {
+  if (peerId === SAVED_MESSAGES_ID) return false;
   if (!peerId || !me) return false;
   const group = groups.find((item) => item.user_id === peerId);
   if (group?.is_group) return message.recipient_id === peerId;
@@ -3064,19 +3216,16 @@ function renderMe() {
 function renderUsers() {
   usersEl.replaceChildren();
   const query = userSearchInput.value.trim().replace(/^@/, "").toLocaleLowerCase();
-  const matches = [...users, ...groups].filter((user) => {
-    if (!query) return true;
-    return user.display_name.toLocaleLowerCase().includes(query)
-      || (user.username || "").toLocaleLowerCase().includes(query);
-  });
+  const matches = getChatEntries().filter((user) =>
+    !query || user.display_name.toLocaleLowerCase().includes(query) ||
+    (user.username || "").toLocaleLowerCase().includes(query)
+  );
   const pinned = getPinnedChats();
-  matches.sort((a, b) => {
-    const ap = pinned.has(a.user_id) ? 1 : 0;
-    const bp = pinned.has(b.user_id) ? 1 : 0;
-    return bp - ap || a.display_name.localeCompare(b.display_name);
-  });
+  matches.sort((a, b) => (a.is_saved_chat ? -2 : 0) - (b.is_saved_chat ? -2 : 0)
+    || (pinned.has(b.user_id) ? 1 : 0) - (pinned.has(a.user_id) ? 1 : 0)
+    || a.display_name.localeCompare(b.display_name));
   for (const user of matches) {
-    if (me && user.user_id === me.user_id) continue;
+    if (user.user_id === me?.user_id) continue;
     const li = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
@@ -3085,41 +3234,37 @@ function renderUsers() {
     avatar.className = "avatar";
     paintAvatar(avatar, user);
     const dot = document.createElement("span");
-    const presence = getPresence(user);
-    dot.className = presence === "online" ? "dot on" : presence === "dnd" ? "dot dnd" : "dot";
-    dot.title = presence === "dnd" ? "Do Not Disturb" : presence === "invisible" ? "Invisible" : presence;
+    const presence = user.is_saved_chat ? "saved" : getPresence(user);
+    dot.className = user.is_saved_chat ? "dot saved-dot" : presence === "online" ? "dot on" : presence === "dnd" ? "dot dnd" : "dot";
+    dot.title = user.is_saved_chat ? "Saved Messages" : presence;
     const name = document.createElement("span");
     name.className = "person-name";
-    const displayName = document.createElement("span");
-    displayName.textContent = user.is_group ? `👥 ${user.display_name}` : user.display_name;
-    name.append(displayName);
-    if (user.activity && !user.is_group) {
+    const label = document.createElement("span");
+    label.textContent = user.is_saved_chat ? "Saved Messages" : user.is_group ? "👥 " + user.display_name : user.display_name;
+    name.append(label);
+    if (!user.is_saved_chat && user.activity && !user.is_group) {
       const activity = document.createElement("small");
       activity.className = "person-activity";
       activity.textContent = user.activity;
       name.append(activity);
     }
-    if (user.username && !user.is_group) {
+    if (!user.is_saved_chat && user.username && !user.is_group) {
       const handle = document.createElement("small");
-      handle.textContent = `@${user.username}`;
+      handle.textContent = "@" + user.username;
       name.append(handle);
     }
     button.append(avatar, name, dot);
     button.addEventListener("click", () => openChat(user.user_id));
-
     const pin = document.createElement("button");
     pin.type = "button";
     pin.className = "chat-pin ghost";
     pin.title = pinned.has(user.user_id) ? "Unpin chat" : "Pin chat";
-    pin.setAttribute("aria-label", pin.title);
     pin.textContent = pinned.has(user.user_id) ? "★" : "☆";
-    pin.classList.toggle("is-pinned", pinned.has(user.user_id));
     pin.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
       togglePinnedChat(user.user_id);
     });
-
     li.append(button, pin);
     usersEl.append(li);
   }
@@ -3188,17 +3333,22 @@ async function createGroup(event) {
 
 function paintAvatar(el, user) {
   el.replaceChildren();
+  if (user?.is_saved_chat) {
+    el.classList.add("saved-avatar");
+    el.classList.remove("emoji-avatar");
+    el.textContent = "★";
+    return;
+  }
   el.classList.toggle("emoji-avatar", !user.avatar_url);
   if (user.avatar_url) {
     const img = document.createElement("img");
     const cacheKey = user.avatar_id || user.updated_at || user.avatar_version || Date.now();
-    img.src = `${user.avatar_url}${user.avatar_url.includes("?") ? "&" : "?"}v=${encodeURIComponent(cacheKey)}`;
+    img.src = user.avatar_url + (user.avatar_url.includes("?") ? "&" : "?") + "v=" + encodeURIComponent(cacheKey);
     img.alt = "";
     el.append(img);
   } else {
     const faces = ["🐸", "🦊", "🐙", "🐟", "🦉", "🐧", "🐢", "🦋"];
-    const seed = [...(user.user_id || user.display_name || "")]
-      .reduce((value, character) => value + character.charCodeAt(0), 0);
+    const seed = [...(user.user_id || user.display_name || "")].reduce((v, ch) => v + ch.charCodeAt(0), 0);
     el.classList.add("emoji-avatar");
     el.textContent = faces[seed % faces.length];
   }
@@ -3210,75 +3360,65 @@ function appendMessage(message) {
   const li = document.createElement("li");
   li.dataset.messageId = message.id;
   if (me && message.sender_id === me.user_id) li.classList.add("me");
-
   const meta = document.createElement("div");
   meta.className = "meta";
-  meta.textContent = `${message.sender_name} · ${new Date(message.created_at).toLocaleTimeString()}`;
+  meta.textContent = (message.sender_name || "Larptrix user") + " · " + new Date(message.created_at).toLocaleTimeString();
   li.append(meta);
 
-  if (me && message.sender_id === me.user_id) {
-    const deleteButton = document.createElement("button");
-    deleteButton.type = "button";
-    deleteButton.className = "message-delete-button ghost";
-    deleteButton.textContent = "Delete";
-    deleteButton.title = "Delete this message for everyone";
-    deleteButton.addEventListener("click", () => {
-      if (!window.confirm("Delete this message for everyone?")) return;
-      deleteButton.disabled = true;
-      socket?.send(JSON.stringify({
-        type: "delete",
-        peer_id: message.recipient_id,
-        message_id: message.id,
-      }));
-    });
-    li.append(deleteButton);
-  }
-
+  const body = document.createElement("div");
   let encryptedBodyElement = null;
-  let messageBodyForSave = null;
   if (message.body) {
-    const body = document.createElement("div");
     const envelope = parseCryptoEnvelope(message.body);
     if (envelope) {
       body.textContent = "Encrypted message";
       encryptedBodyElement = body;
-
     } else {
-      body.textContent = cryptoEnabled
-        ? `⚠️ Legacy message (not end-to-end encrypted): ${message.body}`
-        : message.body;
+      body.textContent = cryptoEnabled ? "⚠️ Legacy message (not end-to-end encrypted): " + message.body : message.body;
     }
     li.append(body);
-    messageBodyForSave = body;
   }
 
-  if (messageBodyForSave) {
-    const saveButton = document.createElement("button");
-    saveButton.type = "button";
-    saveButton.className = "message-save-button ghost";
-    saveButton.textContent = "☆ Save";
-    saveButton.title = "Save this message";
-    saveButton.addEventListener("click", () => {
-      void toggleSavedMessage(message, messageBodyForSave.textContent || "");
+  const actions = document.createElement("div");
+  actions.className = "message-actions";
+  const reply = document.createElement("button");
+  reply.type = "button";
+  reply.className = "ghost";
+  reply.textContent = "Reply";
+  reply.addEventListener("click", () => setReplyComposer(message));
+  const forward = document.createElement("button");
+  forward.type = "button";
+  forward.className = "ghost";
+  forward.textContent = "Forward";
+  forward.addEventListener("click", () => void openForwardDialog(message));
+  actions.append(reply, forward);
+
+  if (me && message.sender_id === me.user_id) {
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "ghost message-delete-button";
+    del.textContent = "Delete";
+    del.addEventListener("click", () => {
+      if (!window.confirm("Delete this message for everyone?")) return;
+      del.disabled = true;
+      socket?.send(JSON.stringify({ type: "delete", peer_id: message.recipient_id, message_id: message.id }));
     });
-    li.append(saveButton);
+    actions.append(del);
   }
+
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "ghost";
+  save.textContent = "☆ Save";
+  save.addEventListener("click", () => void toggleSavedMessage(message, body.textContent || ""));
+  actions.append(save);
+
   if (message.attachment && !parseCryptoEnvelope(message.body)) {
     if (message.attachment.mime.startsWith("image/")) {
       const img = document.createElement("img");
       img.className = "photo";
       img.src = message.attachment.url;
       img.alt = message.attachment.name;
-      img.tabIndex = 0;
-      img.setAttribute("role", "button");
-      img.title = "Open image";
       img.addEventListener("click", () => openImageViewer(img.src, img.alt));
-      img.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          openImageViewer(img.src, img.alt);
-        }
-      });
       li.append(img);
     } else if (message.attachment.mime.startsWith("audio/")) {
       const audio = document.createElement("audio");
@@ -3290,46 +3430,17 @@ function appendMessage(message) {
       const link = document.createElement("a");
       link.href = message.attachment.url;
       link.download = message.attachment.name;
-      link.textContent = `${message.attachment.name} (${formatSize(message.attachment.size_bytes)})`;
+      link.textContent = message.attachment.name + " (" + formatSize(message.attachment.size_bytes) + ")";
       li.append(link);
     }
   }
 
+  li.append(actions);
   logEl.append(li);
+
   if (encryptedBodyElement) {
     messageBodyElementsById.set(message.id, encryptedBodyElement);
-
-    let effectiveMessage = message;
-    const queuedResponse = cryptoRecoveryResponsesByMessageId.get(message.id);
-    if (queuedResponse) {
-      effectiveMessage =
-        mergeCryptoRecoveryResponse(message, queuedResponse)
-        || (
-          parseCryptoEnvelope(message.body)?.version === 1
-            ? { ...message, body: queuedResponse.ciphertext }
-            : message
-        );
-      if (effectiveMessage !== message) {
-        cryptoRecoveryResponsesByMessageId.delete(message.id);
-      }
-    }
-
-    const recoveredBody = recoveredBodiesByMessageId.get(message.id);
-    if (recoveredBody) {
-      effectiveMessage = { ...effectiveMessage, body: recoveredBody };
-      recoveredBodiesByMessageId.delete(message.id);
-    }
-
-    void displayEncryptedMessage(effectiveMessage, encryptedBodyElement).then((ok) => {
-      if (ok && queuedResponse) {
-        socket?.send(JSON.stringify({
-          type: "crypto_resync_response_ack",
-          peer_id: queuedResponse.sender_id,
-          message_id: message.id,
-          device_id: queuedResponse.device_id,
-        }));
-      }
-    });
+    void displayEncryptedMessage(message, encryptedBodyElement);
   }
   logEl.scrollTop = logEl.scrollHeight;
 }
@@ -3451,6 +3562,9 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
         body: matrixEnvelope,
       });
       const payload = decrypted?.content ?? decrypted;
+      decryptedPayloadByMessageId.set(message.id, payload);
+      message._decryptedPayload = payload;
+      renderMessageDecorations(bodyElement.parentElement, payload);
       bodyElement.textContent =
         typeof payload?.text === "string" ? payload.text : JSON.stringify(payload);
 
@@ -3484,6 +3598,9 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
       || await loadCachedSentPlaintext(message.body);
     if (cached) sentPlaintextByCiphertext.set(message.body, cached);
     const payload = parseEncryptedPayload(cached);
+    decryptedPayloadByMessageId.set(message.id, payload);
+    message._decryptedPayload = payload;
+    renderMessageDecorations(bodyElement.parentElement, payload);
     bodyElement.textContent = payload?.text || "Encrypted message sent from this device";
     if (payload?.file && message.attachment) {
       try {
@@ -3721,6 +3838,9 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
     });
 
     const payload = parseEncryptedPayload(result);
+    decryptedPayloadByMessageId.set(message.id, payload);
+    message._decryptedPayload = payload;
+    renderMessageDecorations(bodyElement.parentElement, payload);
     bodyElement.textContent = payload?.text ?? result;
 
     if (payload?.file && message.attachment) {
