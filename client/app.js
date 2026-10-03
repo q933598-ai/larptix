@@ -639,6 +639,18 @@ function wireCallWindowDragging() {
   handle.addEventListener("pointercancel", stop);
 }
 
+function wireCallResponsiveSizing() {
+  if (!callStage || typeof ResizeObserver !== "function") return;
+  const update = () => {
+    const width = callStage.getBoundingClientRect().width;
+    callStage.classList.toggle("call-compact", width <= 620);
+    callStage.classList.toggle("call-ultra-compact", width <= 460);
+  };
+  const observer = new ResizeObserver(update);
+  observer.observe(callStage);
+  update();
+}
+
 function setCallPinned(pinned) {
   callStage.classList.toggle("window-pinned", pinned);
   callWindowPin?.setAttribute("aria-pressed", String(pinned));
@@ -1758,6 +1770,7 @@ avatarFile.addEventListener("change", async () => {
 });
 
 wireCallWindowDragging();
+wireCallResponsiveSizing();
 setCallPinned(localStorage.getItem("larptrix_call_window_pinned") === "1");
 setMusicWindowPinned(localStorage.getItem("larptrix_music_window_pinned") === "1");
 bootstrap();
