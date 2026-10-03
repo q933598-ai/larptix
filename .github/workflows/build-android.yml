@@ -29,14 +29,20 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
       - name: Install dependencies
         run: npm ci
 
       - name: Initialize Android project
-        run: npm run tauri android init -- --ci
+        run: npx tauri android init --ci
 
       - name: Build APK
-        run: npm run build:android
+        run: npx tauri android build --apk --ci
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -44,3 +50,4 @@ jobs:
           name: larptrix-android-apk
           path: desktop/src-tauri/gen/android/app/build/outputs/**/*.apk
           if-no-files-found: error
+          retention-days: 14
