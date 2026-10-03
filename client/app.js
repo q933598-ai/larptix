@@ -1498,6 +1498,8 @@ async function startGroupCall(kind) {
   groupCallId = crypto.randomUUID();
   groupCallGroupId = group.user_id;
   groupCallMemberIds = [...group.group_member_ids];
+  groupCallJoinedMembers.clear();
+  groupCallJoinedMembers.add(me.user_id);
   callPeerId = group.user_id;
   callMediaKind = kind;
 
@@ -1519,9 +1521,8 @@ async function startGroupCall(kind) {
         media: kind,
       });
     }
-    await establishGroupOffers();
   } catch (err) {
-    appendSystem("Group call setup failed: " + (err.message || "Check camera and microphone permissions."));
+    appendSystem("Group call setup failed: " (err.message || "Check camera and microphone permissions."));
     endCall(false);
   }
 }
