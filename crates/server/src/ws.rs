@@ -636,7 +636,7 @@ fn relay_call_signal(
         }
 
         let object = payload
-            .as_object_mut()
+            .as_object()
             .ok_or_else(|| "group call signal payload must be an object".to_string())?;
         let target_id = object
             .get("target_id")
