@@ -2086,6 +2086,7 @@ mod tests {
             State(state.clone()),
             Json(PasswordRegisterBody {
                 display_name: "Password User".into(),
+                username: "password_user".into(),
                 email: "Password@Example.test".into(),
                 password: "a-strong-test-password".into(),
             }),
