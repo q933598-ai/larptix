@@ -1994,6 +1994,14 @@ function renderGroupMembersDialog(group) {
   }
 }
 
+function openGroupMembers() {
+  const group = groups.find((item) => item.user_id === peerId && item.is_group)
+    || groups.find((item) => item.user_id === groupCallGroupId && item.is_group);
+  if (!group) return;
+  renderGroupMembersDialog(group);
+  groupMembersDialog.showModal();
+}
+
 function refreshGroupCallParticipants() {
   const group = groups.find((item) => item.user_id === groupCallGroupId && item.is_group);
   const active = Boolean(groupCallId && groupCallGroupId && group);
