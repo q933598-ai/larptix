@@ -1676,6 +1676,10 @@ impl ApiError {
                 status: StatusCode::CONFLICT,
                 message: "email already registered".into(),
             },
+            DbError::UsernameTaken => Self {
+                status: StatusCode::CONFLICT,
+                message: "username is already taken".into(),
+            },
             DbError::BadRequest(msg) => Self::bad(msg),
             DbError::Sqlite(err) => Self::db(err),
         }
@@ -1745,6 +1749,7 @@ mod tests {
             State(state.clone()),
             Json(RegisterBody {
                 display_name: "Key User".into(),
+                username: "key_user".into(),
             }),
         )
         .await
@@ -1824,7 +1829,7 @@ mod tests {
         });
         let user = state
             .db
-            .create_key_user("E2E User", "hash", crate::now_ms())
+            .create_key_user("E2E User", "e2e_user", "hash", crate::now_ms())
             .unwrap();
         state
             .db
