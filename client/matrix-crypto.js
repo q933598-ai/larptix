@@ -151,8 +151,19 @@ export class LarptrixMatrixCrypto {
       const ackIds = [];
 
       for (const event of events) {
-        const processed = await this.processToDeviceEvent(event);
-        if (processed) ackIds.push(event.id);
+        try {
+          const processed = await this.processToDeviceEvent(event);
+          if (processed) ackIds.push(event.id);
+        } catch (err) {
+          // Keep a failed event queued. Other pending room keys must still
+          // be processed, especially when several messages were sent while
+          // this device was offline.
+          console.error("[E2E] pending Matrix to-device event failed", {
+            eventId: event?.id,
+            eventType: event?.event_type,
+            error: err?.message || String(err),
+          });
+        }
       }
 
       if (ackIds.length) {
@@ -223,19 +234,21 @@ export class LarptrixMatrixCrypto {
   async prepareRoom(roomId, participantInternalUserIds) {
     if (!this.machine) throw new Error("Matrix E2E is not initialized.");
 
+    // The WASM SDK takes ownership of UserId objects passed to several
+    // methods and invalidates those instances afterwards. Keep a reusable
+    // set of UserId objects here and pass clones to every consuming call.
     const externalUsers = participantInternalUserIds
       .filter((id) => id && id !== this.internalUserId)
       .map((id) => new UserId("@" + id + ":" + this.serverName));
 
-    const roomUsers = [
-      ...externalUsers,
-      new UserId(this.matrixUserId),
-    ];
-
-    await this.machine.updateTrackedUsers(externalUsers);
+    await this.machine.updateTrackedUsers(
+      externalUsers.map((user) => user.clone()),
+    );
 
     if (externalUsers.length) {
-      const keyQuery = this.machine.queryKeysForUsers(externalUsers);
+      const keyQuery = this.machine.queryKeysForUsers(
+        externalUsers.map((user) => user.clone()),
+      );
       const keyQueryResponse = await this.sendOutgoingRequest(keyQuery);
       await this.machine.markRequestAsSent(
         keyQuery.id,
@@ -246,7 +259,13 @@ export class LarptrixMatrixCrypto {
 
     await this.processOutgoingRequests();
 
-    const missingSessions = await this.machine.getMissingSessions(roomUsers);
+    const roomUsersForMissingSessions = [
+      ...externalUsers.map((user) => user.clone()),
+      new UserId(this.matrixUserId),
+    ];
+    const missingSessions = await this.machine.getMissingSessions(
+      roomUsersForMissingSessions,
+    );
     if (missingSessions) {
       const response = await this.sendOutgoingRequest(missingSessions);
       await this.machine.markRequestAsSent(
@@ -257,9 +276,13 @@ export class LarptrixMatrixCrypto {
     }
 
     const room = new RoomId(roomId);
+    const roomUsersForShare = [
+      ...externalUsers.map((user) => user.clone()),
+      new UserId(this.matrixUserId),
+    ];
     const requests = await this.machine.shareRoomKey(
       room,
-      roomUsers,
+      roomUsersForShare,
       this.encryptionSettings,
     );
 
