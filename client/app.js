@@ -593,6 +593,13 @@ function openSettings() {
       : "E2E is enabled, but this device is locked.";
   settingsE2eFingerprint.hidden = !cryptoDeviceBundle?.fingerprint;
   settingsE2eFingerprint.textContent = cryptoDeviceBundle?.fingerprint || "";
+  settingsTheme.value = localStorage.getItem(THEME_KEY) || "larptrix";
+  loadThemeEditor();
+  customThemeEditor.hidden = settingsTheme.value !== "custom";
+  settingsPresence.value = localStorage.getItem(PRESENCE_KEY) || "online";
+  settingsCallSounds.checked = readStoredBool(CALL_SOUND_KEY, true);
+  settingsMessageSounds.checked = readStoredBool(MESSAGE_SOUND_KEY, true);
+  settingsNoiseSuppression.checked = readStoredBool(NOISE_SUPPRESSION_KEY, true);
   settingsLayoutStatus.textContent = "";
   settingsDialog.showModal();
   closeAppMenu();
@@ -658,6 +665,22 @@ document.getElementById("settings-open-profile-e2e").addEventListener("click", (
   setTimeout(() => enableE2eButton.click(), 0);
 });
 document.getElementById("settings-reset-layout").addEventListener("click", resetChatListWidth);
+settingsTheme.addEventListener("change", () => {
+  customThemeEditor.hidden = settingsTheme.value !== "custom";
+  if (settingsTheme.value === "custom") loadThemeEditor();
+  applyTheme(settingsTheme.value);
+});
+themeSaveCustom.addEventListener("click", saveCustomTheme);
+settingsPresence.addEventListener("change", () => setPresence(settingsPresence.value));
+settingsCallSounds.addEventListener("change", () => localStorage.setItem(CALL_SOUND_KEY, settingsCallSounds.checked ? "1" : "0"));
+settingsMessageSounds.addEventListener("change", () => localStorage.setItem(MESSAGE_SOUND_KEY, settingsMessageSounds.checked ? "1" : "0"));
+settingsNoiseSuppression.addEventListener("change", () => localStorage.setItem(NOISE_SUPPRESSION_KEY, settingsNoiseSuppression.checked ? "1" : "0"));
+menuSaved?.addEventListener("click", openSavedMessages);
+savedMessagesClose?.addEventListener("click", () => savedMessagesDialog.close());
+mobileChats?.addEventListener("click", () => { document.getElementById("chat-view-open").click(); });
+mobileSaved?.addEventListener("click", openSavedMessages);
+mobileMusic?.addEventListener("click", () => window.larptixMusicLibrary?.toggle?.());
+mobileSettings?.addEventListener("click", openSettings);
 
 tabLogin.addEventListener("click", () => setMode("login"));
 tabRegister.addEventListener("click", () => setMode("register"));
