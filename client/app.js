@@ -2551,10 +2551,8 @@ async function handleCryptoResyncRequest(request) {
     bodyLength: typeof request?.body === "string" ? request.body.length : 0,
   });
 
-  if (!cryptoEnabled || !cryptoDevice || !me || !request?.requester_id || request.requester_id === me.user_id) {
+  if (!me || !request?.requester_id || request.requester_id === me.user_id) {
     console.warn("[E2E] recovery request ignored", {
-      cryptoEnabled,
-      hasCryptoDevice: Boolean(cryptoDevice),
       hasUser: Boolean(me),
       requester: request?.requester_id,
       ownUser: me?.user_id,
@@ -2563,7 +2561,18 @@ async function handleCryptoResyncRequest(request) {
   }
 
   try {
+    // Queued recovery requests can arrive immediately after reconnect,
+    // before the local E2E device has finished unlocking. Wait instead of
+    // dropping the request.
     await cryptoReady;
+    if (!cryptoEnabled || !cryptoDevice) {
+      console.warn("[E2E] recovery request ignored: E2E device is unavailable", {
+        cryptoEnabled,
+        hasCryptoDevice: Boolean(cryptoDevice),
+      });
+      return false;
+    }
+
     await withCryptoStateLock(async () => {
       console.log("[E2E] recovery: looking up cached plaintext");
 
