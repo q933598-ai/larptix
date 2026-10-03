@@ -209,7 +209,9 @@ async fn register_password(
     let display_name = sanitize_display_name(&body.display_name).map_err(ApiError::bad)?;
     let username = sanitize_username(&body.username).map_err(ApiError::bad)?;
     if username.is_empty() {
-        return Err(ApiError::bad("username is required when creating an account"));
+        return Err(ApiError::bad(
+            "username is required when creating an account",
+        ));
     }
     let email = sanitize_email(&body.email).map_err(ApiError::bad)?;
     let password = sanitize_password(&body.password)
