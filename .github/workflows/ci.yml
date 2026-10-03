@@ -18,3 +18,7 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run Rust tests
         run: cargo test --workspace
+      - name: Check browser JavaScript syntax
+        run: |
+          node --check client/app.js
+          node --check client/matrix-crypto.js
