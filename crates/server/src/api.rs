@@ -1962,6 +1962,9 @@ fn public_me(user: &UserRow) -> UserInfo {
         avatar_url: user.avatar_id.as_ref().map(|_| avatar_url(&user.id)),
         activity: None,
         is_group: false,
+        is_channel: false,
+        admin_ids: Vec::new(),
+        post_policy: String::new(),
         e2e_enabled: false,
         group_member_ids: Vec::new(),
     }
@@ -2088,6 +2091,8 @@ mod tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("data/uploads").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         });
         let response = register(
             State(state.clone()),
@@ -2135,6 +2140,8 @@ mod tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("data/uploads").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         });
         let response = register_password(
             State(state.clone()),
@@ -2171,6 +2178,8 @@ mod tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("data/uploads").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         });
         let user = state
             .db
@@ -2208,6 +2217,8 @@ mod tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("data/uploads").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         });
         let old_user = state
             .db
