@@ -119,6 +119,7 @@ const settingsLayoutStatus = document.getElementById("settings-layout-status");
 
 
 let socket = null;
+let socketHeartbeatTimer = null;
 let me = null;
 let peerId = null;
 let users = [];
@@ -1359,11 +1360,25 @@ function connect() {
   setStatus("connecting");
   reconnect = true;
 
-  socket.addEventListener("open", () => setStatus("online"));
+  socket.addEventListener("open", () => {
+    setStatus("online");
+    if (socketHeartbeatTimer) clearInterval(socketHeartbeatTimer);
+    socketHeartbeatTimer = setInterval(() => {
+      if (socket?.readyState !== WebSocket.OPEN) return;
+      try {
+        socket.send(JSON.stringify({ type: "ping" }));
+      } catch {}
+    }, 20_000);
+  });
 
   socket.addEventListener("message", (event) => {
     const msg = JSON.parse(event.data);
     switch (msg.type) {
+      case "pong":
+        // Receiving a server response confirms that the WebSocket path is
+        // still alive even when there are no chat events.
+        if (socket?.readyState === WebSocket.OPEN) setStatus("online");
+        break;
       case "welcome":
         me = msg.user;
         users = msg.users;
@@ -1450,6 +1465,10 @@ function connect() {
   });
 
   socket.addEventListener("close", () => {
+    if (socketHeartbeatTimer) {
+      clearInterval(socketHeartbeatTimer);
+      socketHeartbeatTimer = null;
+    }
     setStatus("offline");
     endCall(false);
     if (reconnect) setTimeout(connect, 1500);

@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
+    /// Keep a browser WebSocket connection active through idle network timeouts.
+    Ping,
     /// Load history with one person.
     Open { peer_id: String },
     /// Send text and/or a previously uploaded attachment.
@@ -50,6 +52,8 @@ pub enum ClientMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
+    /// Response to a client WebSocket heartbeat.
+    Pong,
     Welcome {
         user: UserInfo,
         users: Vec<UserInfo>,

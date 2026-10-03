@@ -99,6 +99,9 @@ pub async fn handle_socket(
         };
         match frame {
             Message::Text(text) => match serde_json::from_str::<ClientMessage>(&text) {
+                Ok(ClientMessage::Ping) => {
+                    let _ = tx.send(ServerMessage::Pong);
+                }
                 Ok(ClientMessage::Open { peer_id }) => {
                     if let Err(err) = open_chat(&state, &tx, &user, &peer_id) {
                         send_error(&tx, "bad_open", err);
