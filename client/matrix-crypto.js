@@ -140,7 +140,7 @@ export class LarptrixMatrixCrypto {
   }
 
   async syncRoomKeyBackup() {
-    if (!this.machine) return;
+    if (!this.machine || this.keyBackupRestoreFailed) return;
     this.keyBackupDirty = true;
     if (this.processingKeyBackup) return this.processingKeyBackup;
 
