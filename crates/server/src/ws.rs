@@ -119,6 +119,11 @@ pub async fn handle_socket(
                         send_error(&tx, "bad_send", err);
                     }
                 }
+                Ok(ClientMessage::Delete { peer_id, message_id }) => {
+                    if let Err(err) = delete_message(&state, &user, &peer_id, &message_id) {
+                        send_error(&tx, "bad_delete", err);
+                    }
+                }
                 Ok(ClientMessage::CallSignal {
                     peer_id,
                     kind,
