@@ -75,11 +75,8 @@ const photoInput = document.getElementById("photo");
 const gifOpenButton = document.getElementById("gif-open");
 const gifDialog = document.getElementById("gif-dialog");
 const gifCloseButton = document.getElementById("gif-close");
-const gifSearchForm = document.getElementById("gif-search-form");
-const gifSearchInput = document.getElementById("gif-search");
-const gifSearchStatus = document.getElementById("gif-search-status");
 const gifResults = document.getElementById("gif-results");
-const gifLoadMore = document.getElementById("gif-load-more");
+const gifEmpty = document.getElementById("gif-empty");
 const fileInput = document.getElementById("file");
 const audioFileInput = document.getElementById("audio-file");
 const attachmentPreview = document.getElementById("attachment-preview");
@@ -139,9 +136,6 @@ let registerWithPassword = false;
 let pendingKeyUser = null;
 let pendingAttachment = null;
 let pendingGif = null;
-let gifSearchNext = null;
-let gifSearchTerm = "";
-let gifSearchRequest = 0;
 let previewUrl = null;
 let recorder = null;
 let recordingStream = null;
@@ -407,18 +401,11 @@ keyContinue.addEventListener("click", async () => {
   }
 });
 gifOpenButton.addEventListener("click", () => {
-  gifSearchStatus.textContent = "";
+  gifEmpty.textContent = "No saved GIFs yet. Save a GIF from any chat message.";
+  void renderGifFavorites();
   gifDialog.showModal();
-  gifSearchInput.focus();
 });
 gifCloseButton.addEventListener("click", () => gifDialog.close());
-gifSearchForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  void searchKlipyGifs(true);
-});
-gifLoadMore.addEventListener("click", () => {
-  void searchKlipyGifs(false);
-});
 document.getElementById("image-viewer-close").addEventListener("click", () => imageViewer.close());
 imageViewer.addEventListener("click", (event) => {
   if (event.target === imageViewer) imageViewer.close();
@@ -675,12 +662,11 @@ composer.addEventListener("submit", async (event) => {
   if (!peerId || !socket || socket.readyState !== WebSocket.OPEN) return;
   const body = bodyInput.value.trim();
   const file = pendingAttachment;
-  const gif = pendingGif;
   if (cryptoEnabled) {
     try {
       await cryptoReady;
       if (!cryptoDevice) throw new Error("Unlock E2E with your separate recovery key before sending messages.");
-      if (!body && !file && !gif) return;
+      if (!body && !file) return;
       const peer = [...users, ...groups].find((item) => item.user_id === peerId);
       if (!peer) throw new Error("Chat peer is not in the current list.");
       let attachment_id = null;
@@ -691,7 +677,7 @@ composer.addEventListener("submit", async (event) => {
         attachment_id = uploaded.id;
         encryptedFile = encrypted.metadata;
       }
-      const payload = JSON.stringify({ text: body, file: encryptedFile, gif });
+      const payload = JSON.stringify({ text: body, file: encryptedFile });
       let encryptedBody;
 
       await withCryptoStateLock(async () => {
@@ -3513,7 +3499,121 @@ async function encryptAttachment(file) {
   };
 }
 
-async function renderEncryptedAttachment(attachment, metadata, container) {
+const GIF_FAVORITES_DB = "larptrix-local-media";
+const GIF_FAVORITES_STORE = "gifs";
+
+function openGifFavoritesDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(GIF_FAVORITES_DB, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(GIF_FAVORITES_STORE)) {
+        db.createObjectStore(GIF_FAVORITES_STORE, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Could not open GIF favorites."));
+  });
+}
+
+async function saveGifFavorite(blob, name) {
+  const db = await openGifFavoritesDb();
+  const item = { id: crypto.randomUUID(), name: name || "saved.gif", mime: blob.type || "image/gif", blob, createdAt: Date.now() };
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(GIF_FAVORITES_STORE, "readwrite");
+    tx.objectStore(GIF_FAVORITES_STORE).put(item);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error || new Error("Could not save GIF."));
+  });
+  db.close();
+}
+
+async function listGifFavorites() {
+  const db = await openGifFavoritesDb();
+  const items = await new Promise((resolve, reject) => {
+    const tx = db.transaction(GIF_FAVORITES_STORE, "readonly");
+    const request = tx.objectStore(GIF_FAVORITES_STORE).getAll();
+    request.onsuccess = () => resolve(request.result || []);
+    request.onerror = () => reject(request.error || new Error("Could not load saved GIFs."));
+  });
+  db.close();
+  return items.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+async function deleteGifFavorite(id) {
+  const db = await openGifFavoritesDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(GIF_FAVORITES_STORE, "readwrite");
+    tx.objectStore(GIF_FAVORITES_STORE).delete(id);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error || new Error("Could not remove GIF."));
+  });
+  db.close();
+}
+
+async function addGifToFavorites(blob, name, container) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "ghost gif-save-button";
+  button.textContent = "♡ Save GIF";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await saveGifFavorite(blob, name);
+      button.textContent = "♥ Saved";
+    } catch (err) {
+      button.disabled = false;
+      button.textContent = err?.message || "Save failed";
+    }
+  });
+  container.append(button);
+}
+
+async function renderGifFavorites() {
+  if (!gifResults || !gifEmpty) return;
+  gifResults.replaceChildren();
+  try {
+    const favorites = await listGifFavorites();
+    gifEmpty.hidden = favorites.length > 0;
+    for (const favorite of favorites) {
+      const item = document.createElement("article");
+      item.className = "gif-favorite";
+      const image = document.createElement("img");
+      image.src = URL.createObjectURL(favorite.blob);
+      image.alt = favorite.name;
+      image.loading = "lazy";
+      image.className = "gif-favorite-image";
+
+      const actions = document.createElement("div");
+      actions.className = "gif-favorite-actions";
+      const send = document.createElement("button");
+      send.type = "button";
+      send.textContent = "Send";
+      send.addEventListener("click", () => {
+        queueAttachment(new File([favorite.blob], favorite.name || "saved.gif", {
+          type: favorite.mime || favorite.blob.type || "image/gif",
+        }));
+        gifDialog.close();
+      });
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "ghost";
+      remove.textContent = "Remove";
+      remove.addEventListener("click", async () => {
+        await deleteGifFavorite(favorite.id);
+        void renderGifFavorites();
+      });
+      actions.append(send, remove);
+      item.append(image, actions);
+      gifResults.append(item);
+    }
+  } catch (err) {
+    gifEmpty.hidden = false;
+    gifEmpty.textContent = err?.message || "Could not load saved GIFs.";
+  }
+}
+
+function renderEncryptedAttachment(attachment, metadata, container) {
   const response = await fetch(attachment.url, { credentials: "same-origin" });
   if (!response.ok) throw new Error("Encrypted attachment could not be loaded.");
   const ciphertext = await response.arrayBuffer();
@@ -3525,7 +3625,17 @@ async function renderEncryptedAttachment(attachment, metadata, container) {
   );
   const blob = new Blob([plaintext], { type: metadata.mime });
   const url = URL.createObjectURL(blob);
-  if (metadata.mime.startsWith("image/")) {
+  if (metadata.mime === "image/gif") {
+    const image = document.createElement("img");
+    image.className = "photo";
+    image.src = url;
+    image.alt = metadata.name;
+    image.tabIndex = 0;
+    image.setAttribute("role", "button");
+    image.addEventListener("click", () => openImageViewer(url, metadata.name));
+    container.append(image);
+    void addGifToFavorites(blob, metadata.name, container);
+  } else if (metadata.mime.startsWith("image/")) {
     const image = document.createElement("img");
     image.className = "photo";
     image.src = url;
@@ -3597,112 +3707,6 @@ function browserCountry() {
   const parts = browserLocale().split("_");
   const country = parts[1] || "US";
   return /^[A-Za-z]{2}$/.test(country) ? country.toUpperCase() : "US";
-}
-
-function queueKlipyGif(gif) {
-  pendingAttachment = null;
-  pendingGif = {
-    id: gif.id,
-    title: gif.title || "GIF",
-    url: gif.url,
-    preview_url: gif.preview_url || gif.url,
-    item_url: gif.item_url || "https://klipy.com/",
-    search_term: gif.search_term || gifSearchTerm,
-  };
-  if (previewUrl) URL.revokeObjectURL(previewUrl);
-  previewUrl = null;
-  photoInput.value = "";
-  fileInput.value = "";
-  audioFileInput.value = "";
-  attachmentPreview.replaceChildren();
-
-  const image = document.createElement("img");
-  image.src = pendingGif.preview_url;
-  image.alt = pendingGif.title;
-  image.className = "gif-preview";
-  image.loading = "lazy";
-
-  const details = document.createElement("span");
-  details.textContent = pendingGif.title;
-
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.className = "ghost";
-  remove.textContent = "Remove";
-  remove.addEventListener("click", clearAttachment);
-
-  attachmentPreview.append(image, details, remove);
-  attachmentPreview.hidden = false;
-  gifDialog.close();
-
-  void api("POST", "/api/gifs/share", {
-    id: pendingGif.id,
-    q: pendingGif.search_term,
-    country: browserCountry(),
-    locale: browserLocale(),
-  }).catch((err) => {
-    console.warn("[GIF] share registration failed", err?.message || err);
-  });
-}
-
-async function searchKlipyGifs(reset = true) {
-  const requestId = ++gifSearchRequest;
-  const query = gifSearchInput.value.trim();
-  if (!query) {
-    gifSearchStatus.textContent = "Enter something to search.";
-    gifResults.replaceChildren();
-    gifLoadMore.hidden = true;
-    return;
-  }
-
-  if (reset) {
-    gifSearchTerm = query;
-    gifSearchNext = null;
-    gifResults.replaceChildren();
-  }
-
-  gifSearchStatus.textContent = reset ? "Searching…" : "Loading more…";
-
-  const params = new URLSearchParams({
-    q: gifSearchTerm,
-    limit: "24",
-    country: browserCountry(),
-    locale: browserLocale(),
-  });
-  if (gifSearchNext) params.set("pos", gifSearchNext);
-
-  try {
-    const response = await api("GET", "/api/gifs/search?" + params.toString());
-    if (requestId !== gifSearchRequest) return;
-    renderKlipyGifResults(response.results || []);
-    gifSearchNext = response.next || null;
-    gifLoadMore.hidden = !gifSearchNext;
-    gifSearchStatus.textContent =
-      response.results?.length ? "Select a GIF to add it to your message." : "No GIFs found.";
-  } catch (err) {
-    if (requestId !== gifSearchRequest) return;
-    gifSearchStatus.textContent = err.message || "GIF search failed.";
-    gifLoadMore.hidden = true;
-  }
-}
-
-function renderKlipyGifResults(results) {
-  for (const gif of results) {
-    if (!gif?.id || !gif?.url) continue;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "gif-result";
-    button.title = gif.title || "GIF";
-
-    const image = document.createElement("img");
-    image.src = gif.preview_url || gif.url;
-    image.alt = gif.title || "KLIPY GIF";
-    image.loading = "lazy";
-
-    button.append(image);
-    button.addEventListener("click", () => queueKlipyGif(gif));
-    gifResults.append(button);
-  }
 }
 
 function renderSelectedGif(gif, container) {

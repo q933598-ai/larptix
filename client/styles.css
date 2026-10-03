@@ -2168,6 +2168,35 @@ body.menu-open {
   object-fit: cover;
 }
 
+
+.gif-save-button {
+  margin-top: 6px;
+}
+
+.gif-favorite {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  border-radius: 8px;
+}
+
+.gif-favorite-image {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1.25;
+  object-fit: cover;
+}
+
+.gif-favorite-actions {
+  display: flex;
+  gap: 6px;
+  padding: 7px;
+}
+
+.gif-favorite-actions button {
+  flex: 1;
+}
+
 .gif-load-more {
   display: block;
   margin: 12px auto 0;

@@ -107,7 +107,7 @@ cd /opt/larptrix && sudo docker compose logs -f
 
 To deploy a newer source version, copy it to the VPS again and run
 `sudo systemctl restart larptrix`; the unit rebuilds the image before starting.
-GIF search uses `LARPTRIX_KLIPY_API_KEY` on the server. The key stays server-side; selected GIF metadata is carried inside the existing E2E-encrypted message payload.\n\nThe named Docker volume `larptrix_larptrix-data` keeps SQLite and uploaded files
+GIFs are sent as regular E2E-encrypted attachments; the built-in client does not require an external GIF API.\n\nThe named Docker volume `larptrix_larptrix-data` keeps SQLite and uploaded files
 across restarts/rebuilds. Back it up regularly and store backups off the VPS.
 
 For calls between users behind different NATs, configure reachable STUN/TURN in
