@@ -1978,7 +1978,7 @@ mod tests {
     #[test]
     fn key_account_is_found_by_hash_only() {
         let db = Database::open(Path::new(":memory:")).unwrap();
-        let user = db.create_key_user("Key User", "sha256-hash", 123).unwrap();
+        let user = db.create_key_user("Key User", "key_user", "sha256-hash", 123).unwrap();
         let found = db.user_by_access_key_hash("sha256-hash").unwrap().unwrap();
         assert_eq!(found.id, user.id);
         assert!(found.email.ends_with("@key.larptrix.invalid"));
@@ -2003,8 +2003,8 @@ mod tests {
     #[test]
     fn profile_fields_persist_and_usernames_are_unique_without_case_sensitivity() {
         let db = Database::open(Path::new(":memory:")).unwrap();
-        let alice = db.create_key_user("Alice", "hash-a", 1).unwrap();
-        let bob = db.create_key_user("Bob", "hash-b", 1).unwrap();
+        let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
+        let bob = db.create_key_user("Bob", "bob", "hash-b", 1).unwrap();
         db.update_profile(&alice.id, "Alice A", "alice_a", "Hello there")
             .unwrap();
         let (name, username, about, _) = db.profile_fields(&alice.id).unwrap().unwrap();
@@ -2027,7 +2027,7 @@ mod tests {
     #[test]
     fn profile_music_can_be_replaced_and_removed() {
         let db = Database::open(Path::new(":memory:")).unwrap();
-        let alice = db.create_key_user("Alice", "hash-a", 1).unwrap();
+        let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
         let first = db
             .insert_attachment(&alice.id, "audio/mpeg", "mp3", "first.mp3", 4, 1)
             .unwrap();
@@ -2056,7 +2056,7 @@ mod tests {
     #[test]
     fn activity_is_only_published_for_online_users() {
         let db = Database::open(Path::new(":memory:")).unwrap();
-        let alice = db.create_key_user("Alice", "hash-a", 1).unwrap();
+        let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
         db.set_activity(&alice.id, "Listening to song.mp3").unwrap();
 
         let online = db.list_users(std::slice::from_ref(&alice.id)).unwrap();
@@ -2069,9 +2069,9 @@ mod tests {
     #[test]
     fn group_members_can_share_history_but_nonmembers_cannot_read_or_send() {
         let db = Database::open(Path::new(":memory:")).unwrap();
-        let alice = db.create_key_user("Alice", "hash-a", 1).unwrap();
-        let bob = db.create_key_user("Bob", "hash-b", 1).unwrap();
-        let carol = db.create_key_user("Carol", "hash-c", 1).unwrap();
+        let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
+        let bob = db.create_key_user("Bob", "bob", "hash-b", 1).unwrap();
+        let carol = db.create_key_user("Carol", "carol", "hash-c", 1).unwrap();
         let group = db
             .create_group(&alice.id, "Test group", std::slice::from_ref(&bob.id))
             .unwrap();
@@ -2089,7 +2089,7 @@ mod tests {
     #[test]
     fn fallback_key_can_be_claimed_repeatedly_when_otks_are_exhausted() {
         let db = Database::open(Path::new(":memory:")).unwrap();
-        let alice = db.create_key_user("Alice", "hash-a", 1).unwrap();
+        let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
 
         let device_id = Uuid::new_v4().to_string();
         let bundle = format!(
@@ -2109,9 +2109,9 @@ mod tests {
     #[test]
     fn e2e_recovery_only_matches_the_original_dm_participants() {
         let db = Database::open(Path::new(":memory:")).unwrap();
-        let alice = db.create_key_user("Alice", "hash-a", 1).unwrap();
-        let bob = db.create_key_user("Bob", "hash-b", 1).unwrap();
-        let carol = db.create_key_user("Carol", "hash-c", 1).unwrap();
+        let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
+        let bob = db.create_key_user("Bob", "bob", "hash-b", 1).unwrap();
+        let carol = db.create_key_user("Carol", "carol", "hash-c", 1).unwrap();
 
         let message = db
             .insert_dm(&alice.id, &bob.id, "encrypted", None, 1)
@@ -2134,8 +2134,8 @@ mod tests {
     #[test]
     fn matrix_one_time_keys_are_merged_and_claimed_once() {
         let db = Database::open(Path::new(":memory:")).unwrap();
-        let alice = db.create_key_user("Alice", "hash-a", 1).unwrap();
-        let bob = db.create_key_user("Bob", "hash-b", 1).unwrap();
+        let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
+        let bob = db.create_key_user("Bob", "bob", "hash-b", 1).unwrap();
         let device_id = Uuid::new_v4().to_string();
 
         db.upsert_matrix_crypto_device(
