@@ -2777,12 +2777,12 @@ html[data-theme="catppuccin-latte"] .saved-messages-dialog {
     padding-bottom: 8px;
   }
   .music-library {
-    left: 8px !important;
-    top: 64px !important;
-    right: 8px !important;
-    bottom: 66px !important;
-    width: auto !important;
-    height: auto !important;
+    left: 8px;
+    top: 64px;
+    right: auto;
+    bottom: auto;
+    width: auto;
+    height: auto;
     max-height: none;
   }
   .music-library-drag-area {
