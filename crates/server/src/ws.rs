@@ -587,7 +587,7 @@ fn relay_call_signal(
     user: &UserRow,
     peer_id: &str,
     kind: &str,
-    mut payload: serde_json::Value,
+    payload: serde_json::Value,
 ) -> Result<(), String> {
     if !matches!(
         kind,
