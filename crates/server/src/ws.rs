@@ -1079,6 +1079,7 @@ mod call_signal_tests {
             "group-1",
             &[alice.id.clone(), bob.id.clone()],
             &alice.id,
+            "localhost",
             &body,
             true,
         ).is_ok());
@@ -1092,6 +1093,7 @@ mod call_signal_tests {
             "group-1",
             &[alice.id, bob.id],
             &alice.id,
+            "localhost",
             &fake,
             true,
         ).is_err());
@@ -1141,7 +1143,7 @@ mod call_signal_tests {
         .to_string();
 
         assert!(validate_e2e_message_with_state(
-            &state, &alice.id, &bob.id, true, true, &envelope, None, true,
+            &state, &alice.id, &bob.id, true, true, &envelope, None, true, "localhost",
         )
         .is_ok());
     }
