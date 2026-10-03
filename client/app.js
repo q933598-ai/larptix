@@ -704,18 +704,25 @@ composer.addEventListener("submit", async (event) => {
         if (peer.is_group) {
           await matrixCryptoReady;
           if (matrixCrypto) {
-            const roomId = matrixCrypto.groupRoomId(peer.user_id);
-            await matrixCrypto.prepareRoom(roomId, peer.group_member_ids);
-            const ciphertext = await matrixCrypto.encrypt(roomId, payload);
+            try {
+              const roomId = matrixCrypto.groupRoomId(peer.user_id);
+              await matrixCrypto.prepareRoom(roomId, peer.group_member_ids);
+              const ciphertext = await matrixCrypto.encrypt(roomId, payload);
 
-            encryptedBody = JSON.stringify({
-              version: 3,
-              message_type: "matrix",
-              sender_device_id: matrixCrypto.deviceId,
-              room_id: roomId,
-              ciphertext,
-            });
-          } else {
+              encryptedBody = JSON.stringify({
+                version: 3,
+                message_type: "matrix",
+                sender_device_id: matrixCrypto.deviceId,
+                room_id: roomId,
+                ciphertext,
+              });
+            } catch (err) {
+              console.warn("[E2E] Matrix group encryption failed; using legacy group E2E fallback", err);
+              encryptedBody = null;
+            }
+          }
+
+          if (!encryptedBody) {
             const ciphertexts = {};
             for (const memberId of peer.group_member_ids.filter((id) => id !== me.user_id)) {
               const bundleResponse = await api(
@@ -1031,7 +1038,8 @@ async function loadCryptoStatus({ forceSetup = false } = {}) {
       cryptoRecoveryKey = createRecoveryKey();
       cryptoDevice = new CryptoDevice(cryptoRecoveryKey);
       cryptoDeviceBundle = JSON.parse(cryptoDevice.public_bundle_json());
-      openCryptoDialog("enable", { required: forceSetup });
+      // A new E2E identity is mandatory: there is no "skip" path.
+      openCryptoDialog("enable", { required: true });
       return new Promise((resolve) => {
         cryptoLoadResolve = resolve;
       });
