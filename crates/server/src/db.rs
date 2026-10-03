@@ -120,14 +120,13 @@ impl Database {
     ) -> Result<UserRow, DbError> {
         let id = Uuid::new_v4().to_string();
         let conn = self.conn.lock().expect("db lock");
-        let username_taken: bool = conn
-            .query_row(
+        let username_taken: bool = conn.query_row(
                 "SELECT EXISTS(
                     SELECT 1 FROM users WHERE username = ?1 COLLATE NOCASE AND username <> ''
                 )",
                 [username],
-                |row| row.get(0),
-            )?;
+            |row| row.get(0),
+        )?;
         if username_taken {
             return Err(DbError::UsernameTaken);
         }
@@ -1978,7 +1977,9 @@ mod tests {
     #[test]
     fn key_account_is_found_by_hash_only() {
         let db = Database::open(Path::new(":memory:")).unwrap();
-        let user = db.create_key_user("Key User", "key_user", "sha256-hash", 123).unwrap();
+        let user = db
+            .create_key_user("Key User", "key_user", "sha256-hash", 123)
+            .unwrap();
         let found = db.user_by_access_key_hash("sha256-hash").unwrap().unwrap();
         assert_eq!(found.id, user.id);
         assert!(found.email.ends_with("@key.larptrix.invalid"));
@@ -1992,7 +1993,13 @@ mod tests {
     fn legacy_account_can_be_assigned_an_access_key() {
         let db = Database::open(Path::new(":memory:")).unwrap();
         let user = db
-            .create_user("legacy@example.test", "password-hash", "Legacy", "legacy", 123)
+            .create_user(
+                "legacy@example.test",
+                "password-hash",
+                "Legacy",
+                "legacy",
+                123,
+            )
             .unwrap();
         db.set_access_key_hash(&user.id, "new-key-hash").unwrap();
         let found = db.user_by_access_key_hash("new-key-hash").unwrap().unwrap();
