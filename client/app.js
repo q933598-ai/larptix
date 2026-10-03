@@ -1356,28 +1356,31 @@ function showAuthError(text, success = false) {
 
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  socket = new WebSocket(`${proto}://${location.host}/ws`);
+  const nextSocket = new WebSocket(`${proto}://${location.host}/ws`);
+  socket = nextSocket;
   setStatus("connecting");
   reconnect = true;
 
-  socket.addEventListener("open", () => {
+  nextSocket.addEventListener("open", () => {
+    if (socket !== nextSocket) return;
     setStatus("online");
     if (socketHeartbeatTimer) clearInterval(socketHeartbeatTimer);
     socketHeartbeatTimer = setInterval(() => {
-      if (socket?.readyState !== WebSocket.OPEN) return;
+      if (socket !== nextSocket || nextSocket.readyState !== WebSocket.OPEN) return;
       try {
-        socket.send(JSON.stringify({ type: "ping" }));
+        nextSocket.send(JSON.stringify({ type: "ping" }));
       } catch {}
     }, 20_000);
   });
 
-  socket.addEventListener("message", (event) => {
+  nextSocket.addEventListener("message", (event) => {
+    if (socket !== nextSocket) return;
     const msg = JSON.parse(event.data);
     switch (msg.type) {
       case "pong":
         // Receiving a server response confirms that the WebSocket path is
         // still alive even when there are no chat events.
-        if (socket?.readyState === WebSocket.OPEN) setStatus("online");
+        if (socket === nextSocket && nextSocket.readyState === WebSocket.OPEN) setStatus("online");
         break;
       case "welcome":
         me = msg.user;
@@ -1464,7 +1467,8 @@ function connect() {
     }
   });
 
-  socket.addEventListener("close", () => {
+  nextSocket.addEventListener("close", () => {
+    if (socket !== nextSocket) return;
     if (socketHeartbeatTimer) {
       clearInterval(socketHeartbeatTimer);
       socketHeartbeatTimer = null;
