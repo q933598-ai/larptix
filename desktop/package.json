@@ -1,5 +1,5 @@
 {
-  "name": "larptrix-linux",
+  "name": "larptrix",
   "private": true,
   "version": "0.4.0",
   "description": "End-to-end encrypted Larptrix desktop messenger",
@@ -8,7 +8,7 @@
   "scripts": {
     "tauri": "tauri",
     "dev": "electron .",
-    "build": "electron-builder --linux AppImage && electron-builder --win zip --x64",
+    "build": "electron-builder --linux AppImage pacman && electron-builder --win nsis",
     "build:linux": "electron-builder --linux AppImage pacman",
     "build:windows": "electron-builder --win nsis",
     "dev:tauri": "tauri dev",
