@@ -5,9 +5,10 @@ mod hub;
 mod media;
 mod ws;
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{State, WebSocketUpgrade};
@@ -23,10 +24,19 @@ use crate::api::require_user;
 use crate::db::Database;
 use crate::hub::Hub;
 
+#[derive(Clone, Debug)]
+pub struct ActiveGroupCall {
+    pub call_id: String,
+    pub media: String,
+    pub initiator_id: String,
+    pub participant_ids: Vec<String>,
+}
+
 pub struct AppState {
     pub db: Database,
     pub hub: Hub,
     pub upload_dir: PathBuf,
+    pub group_calls: Mutex<HashMap<String, ActiveGroupCall>>,
 }
 
 #[tokio::main]
@@ -55,6 +65,7 @@ async fn main() {
         db,
         hub: Hub::new(),
         upload_dir,
+        group_calls: Mutex::new(HashMap::new()),
     });
 
     let app = Router::new()
