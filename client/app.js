@@ -541,9 +541,20 @@ function showBrowserNotification(title, body, tag) {
   if (!canUseBrowserNotifications() || Notification.permission !== "granted" || !browserNotificationsEnabled()) return;
   if (document.visibilityState === "visible" && document.hasFocus()) return;
   try {
-    new Notification(title, { body, tag });
+    const notification = new Notification(title, { body, tag });
+    notification.onclick = () => {
+      try {
+        window.focus();
+        const peerFromTag = typeof tag === "string" && tag.startsWith("message-")
+          ? tag.slice("message-".length)
+          : null;
+        if (peerFromTag && getChatEntries().some((item) => item.user_id === peerFromTag)) {
+          openChat(peerFromTag);
+        }
+      } catch {}
+      notification.close?.();
+    };
   } catch {}
-}
 
 function startCallRingtone() {
   if (!readStoredBool(CALL_SOUND_KEY, true) || localStorage.getItem(PRESENCE_KEY) === "dnd") return;
@@ -2464,6 +2475,15 @@ function connect() {
         });
         break;
       case "call_signal":
+        if (
+          msg.kind === "offer"
+          && msg.sender_id
+          && msg.sender_id !== me?.user_id
+          && localStorage.getItem(PRESENCE_KEY) !== "dnd"
+        ) {
+          const caller = users.find((item) => item.user_id === msg.sender_id)?.display_name || "Larptrix user";
+          showBrowserNotification(caller, "Incoming call", "call-" + msg.sender_id);
+        }
         handleCallSignal(msg).catch((err) => {
           appendSystem(`Call error: ${err.message}`);
           endCall(false);
