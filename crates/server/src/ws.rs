@@ -119,6 +119,11 @@ pub async fn handle_socket(
                         send_error(&tx, "bad_send", err);
                     }
                 }
+                Ok(ClientMessage::Delete { peer_id, message_id }) => {
+                    if let Err(err) = delete_message(&state, &user, &peer_id, &message_id) {
+                        send_error(&tx, "bad_delete", err);
+                    }
+                }
                 Ok(ClientMessage::CallSignal {
                     peer_id,
                     kind,
@@ -589,6 +594,37 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
     Ok(())
 }
 
+fn delete_message(state: &AppState, user: &UserRow, peer_id: &str, message_id: &str) -> Result<(), String> {
+    if message_id.is_empty() { return Err("message id is empty".into()); }
+    let conversation_id = if let Some(group) = state.db.group(peer_id).map_err(db_err)? {
+        if !group.member_ids.iter().any(|member| member == &user.id) {
+            return Err("not a member of this group".into());
+        }
+        format!("group_{peer_id}")
+    } else {
+        let peer = state.db.user_by_id(peer_id).map_err(|err| err.to_string())?.ok_or_else(|| "unknown user".to_string())?;
+        if peer.id == user.id { return Err("cannot delete a message from yourself".into()); }
+        let (a, b) = if user.id < peer.id { (user.id.as_str(), peer.id.as_str()) } else { (peer.id.as_str(), user.id.as_str()) };
+        format!("{a}_{b}")
+    };
+    let deleted = state.db.delete_message(&user.id, &conversation_id, message_id).map_err(db_err)?;
+    if !deleted { return Err("message not found or you are not its author".into()); }
+    fanout_deleted(state, &user.id, peer_id, message_id);
+    Ok(())
+}
+
+fn fanout_deleted(state: &AppState, requester_id: &str, peer_id: &str, message_id: &str) {
+    let payload = ServerMessage::MessageDeleted { peer_id: peer_id.to_string(), message_id: message_id.to_string() };
+    if let Ok(requester) = Uuid::parse_str(requester_id) { state.hub.send_to(requester, payload.clone()); }
+    if let Ok(Some(group)) = state.db.group(peer_id) {
+        for member_id in group.member_ids {
+            if member_id == requester_id { continue; }
+            if let Ok(member) = Uuid::parse_str(&member_id) { state.hub.send_to(member, payload.clone()); }
+        }
+    } else if peer_id != requester_id {
+        if let Ok(recipient) = Uuid::parse_str(peer_id) { state.hub.send_to(recipient, payload); }
+    }
+}
 fn send_dm(
     state: &AppState,
     user: &UserRow,
@@ -642,12 +678,7 @@ fn send_dm(
                 attachment_is_ciphertext,
             )?;
         } else {
-            validate_group_e2e_message(
-                &body,
-                &group.member_ids,
-                &user.id,
-                attachment_is_ciphertext,
-            )?;
+            return Err("new group messages must use Matrix E2E".into());
         }
         let message = state
             .db
