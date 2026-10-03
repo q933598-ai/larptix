@@ -1446,6 +1446,8 @@ function setMode(next) {
   passwordInput.required = false;
   nameInput.hidden = next !== "register";
   nameInput.required = next === "register";
+  usernameInput.hidden = next !== "register";
+  usernameInput.required = next === "register";
   authSubmit.textContent = next === "register" ? "Create account" : "Log in with key";
   registerPasswordToggle.textContent = "Create account with email and password";
 }
