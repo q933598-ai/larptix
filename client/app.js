@@ -315,6 +315,9 @@ const CALL_SOUND_KEY = "larptrix_call_sounds";
 const MESSAGE_SOUND_KEY = "larptrix_message_sounds";
 const NOISE_SUPPRESSION_KEY = "larptrix_noise_suppression";
 const SAVED_MESSAGES_KEY = "larptrix_saved_messages_v1";
+function savedMessagesKey() {
+  return me ? SAVED_MESSAGES_KEY + "_" + me.user_id : SAVED_MESSAGES_KEY;
+}
 
 function readStoredBool(key, fallback = true) {
   const value = localStorage.getItem(key);
@@ -441,7 +444,7 @@ function stopCallRingtone() {
 async function getSavedMessages() {
   if (!cryptoRecoveryKey) return [];
   try {
-    const raw = localStorage.getItem(SAVED_MESSAGES_KEY);
+    const raw = localStorage.getItem(savedMessagesKey());
     if (!raw) return [];
     const record = JSON.parse(raw);
     const key = await sentPlaintextCacheKey();
@@ -468,7 +471,7 @@ async function setSavedMessages(items) {
     key,
     new TextEncoder().encode(JSON.stringify(items)),
   );
-  localStorage.setItem(SAVED_MESSAGES_KEY, JSON.stringify({
+  localStorage.setItem(savedMessagesKey(), JSON.stringify({
     iv: Array.from(iv),
     ciphertext: Array.from(new Uint8Array(encrypted)),
   }));
