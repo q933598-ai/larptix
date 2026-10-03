@@ -24,6 +24,7 @@ pub enum ClientMessage {
         peer_id: String,
         message_id: String,
     },
+    SetPresence { status: String },
     /// Relay ephemeral WebRTC signaling data to one chat peer.
     CallSignal {
         peer_id: String,
@@ -79,6 +80,10 @@ pub enum ServerMessage {
     MessageDeleted {
         peer_id: String,
         message_id: String,
+    },
+    Presence {
+        user_id: String,
+        status: String,
     },
     GroupCallState {
         group_id: String,
