@@ -14,7 +14,7 @@ use crate::hub::Outbound;
 use crate::now_ms;
 use crate::AppState;
 
-pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: UserRow) {
+pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: UserRow, server_name: String) {
     let user_id = match Uuid::parse_str(&user.id) {
         Ok(id) => id,
         Err(_) => return,
@@ -92,7 +92,7 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: UserRo
                     body,
                     attachment_id,
                 }) => {
-                    if let Err(err) = send_dm(&state, &user, &peer_id, body, attachment_id) {
+                    if let Err(err) = send_dm(&state, &user, &peer_id, body, attachment_id, &server_name) {
                         send_error(&tx, "bad_send", err);
                     }
                 }
@@ -411,6 +411,7 @@ fn send_dm(
     peer_id: &str,
     body: String,
     attachment_id: Option<String>,
+    server_name: &str,
 ) -> Result<(), String> {
     let body = sanitize_body(&body).map_err(|err| err.to_string())?;
     if body.is_empty() && attachment_id.is_none() {
@@ -450,6 +451,7 @@ fn send_dm(
                 peer_id,
                 &group.member_ids,
                 &user.id,
+                server_name,
                 &body,
                 attachment_is_ciphertext,
             )?;
@@ -507,6 +509,7 @@ fn validate_matrix_group_e2e_message(
     group_id: &str,
     member_ids: &[String],
     sender_id: &str,
+    server_name: &str,
     body: &str,
     attachment_is_ciphertext: bool,
 ) -> Result<(), String> {
@@ -629,15 +632,6 @@ fn validate_group_e2e_message(
     Ok(())
 }
 
-fn matrix_room_server_name() -> String {
-    let domain = std::env::var("DOMAIN").unwrap_or_default();
-    let domain = domain.trim().trim_end_matches('.');
-    if !domain.is_empty() && !domain.contains('/') && !domain.contains(':') {
-        return domain.to_string();
-    }
-    "localhost".into()
-}
-
 fn matrix_dm_room_id(server_name: &str, sender_user_id: &str, recipient_user_id: &str) -> String {
     use sha2::{Digest, Sha256};
 
@@ -663,6 +657,7 @@ fn validate_e2e_message_with_state(
     body: &str,
     _attachment_id: Option<&str>,
     attachment_is_ciphertext: bool,
+    server_name: &str,
 ) -> Result<(), String> {
     if !sender_e2e || !recipient_e2e {
         return Err("both participants must enable E2E before messaging".into());
@@ -695,9 +690,8 @@ fn validate_e2e_message_with_state(
             .filter(|value| !value.is_empty())
             .ok_or_else(|| "Matrix encrypted message is missing room id".to_string())?;
 
-        let server_name = matrix_room_server_name();
         let expected_room_id = matrix_dm_room_id(
-            &server_name,
+            server_name,
             sender_user_id,
             recipient_user_id,
         );
