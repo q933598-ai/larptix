@@ -45,7 +45,8 @@
       "target": [
         "nsis"
       ],
-      "artifactName": "Larptrix-${version}-win-x64.${ext}"
+      "artifactName": "Larptrix-${version}-win-x64.${ext}",
+      "icon": "src-tauri/icons/icon.png"
     },
     "pacman": {
       "depends": [
