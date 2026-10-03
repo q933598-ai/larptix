@@ -596,7 +596,7 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
 
 fn delete_message(state: &AppState, user: &UserRow, peer_id: &str, message_id: &str) -> Result<(), String> {
     if message_id.is_empty() { return Err("message id is empty".into()); }
-    let conversation_id = if let Some(group) = state.db.group(peer_id).map_err(db_err)? {
+    let conversation_id = if let Some(group) = state.db.group(peer_id).map_err(|err| err.to_string())? {
         if !group.member_ids.iter().any(|member| member == &user.id) {
             return Err("not a member of this group".into());
         }
