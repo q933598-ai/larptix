@@ -1054,6 +1054,9 @@ impl Database {
                 avatar_url: avatar_id.map(|_| avatar_url(&id)),
                 activity: (online && !activity.is_empty()).then_some(activity),
                 is_group: false,
+                is_channel: false,
+                admin_ids: Vec::new(),
+                post_policy: String::new(),
                 e2e_enabled,
                 group_member_ids: Vec::new(),
             })
