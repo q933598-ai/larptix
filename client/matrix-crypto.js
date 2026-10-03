@@ -233,6 +233,17 @@ export class LarptrixMatrixCrypto {
     ];
 
     await this.machine.updateTrackedUsers(externalUsers);
+
+    if (externalUsers.length) {
+      const keyQuery = this.machine.queryKeysForUsers(externalUsers);
+      const keyQueryResponse = await this.sendOutgoingRequest(keyQuery);
+      await this.machine.markRequestAsSent(
+        keyQuery.id,
+        keyQuery.type,
+        keyQueryResponse,
+      );
+    }
+
     await this.processOutgoingRequests();
 
     const missingSessions = await this.machine.getMissingSessions(roomUsers);
