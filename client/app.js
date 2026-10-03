@@ -14,6 +14,7 @@ const bodyInput = document.getElementById("body");
 const gate = document.getElementById("gate");
 const authForm = document.getElementById("auth");
 const authError = document.getElementById("auth-error");
+const authServer = document.getElementById("auth-server");
 const accessKeyInput = document.getElementById("access-key");
 const emailInput = document.getElementById("email");
 const passwordInput = document.getElementById("password");
@@ -21,11 +22,13 @@ const legacyCredentials = document.getElementById("legacy-credentials");
 const legacyLoginButton = document.getElementById("legacy-login");
 const registerPasswordToggle = document.getElementById("register-password-toggle");
 const nameInput = document.getElementById("display-name");
+const registerUsernameInput = document.getElementById("register-username");
 const authSubmit = document.getElementById("auth-submit");
 const tabLogin = document.getElementById("tab-login");
 const tabRegister = document.getElementById("tab-register");
 const keyDialog = document.getElementById("key-dialog");
 const generatedKey = document.getElementById("generated-key");
+const generatedUsername = document.getElementById("generated-username");
 const keySaved = document.getElementById("key-saved");
 const keyContinue = document.getElementById("key-continue");
 const imageViewer = document.getElementById("image-viewer");
@@ -43,6 +46,7 @@ const profileUsername = document.getElementById("profile-username");
 const profileAbout = document.getElementById("profile-about");
 const profileEmail = document.getElementById("profile-email");
 const profileEmailLabel = document.getElementById("profile-email-label");
+const profileServer = document.getElementById("profile-server");
 const profileActivity = document.getElementById("profile-activity");
 const showMusicActivity = document.getElementById("show-music-activity");
 const forgetE2eDeviceButton = document.getElementById("forget-e2e-device");
@@ -125,6 +129,7 @@ let customActivity = "";
 let musicActivityEnabled = localStorage.getItem("larptrix_show_music_activity") !== "0";
 let matrixCrypto = null;
 let matrixServerName = null;
+let serverIdentity = location.host;
 let matrixCryptoReady = Promise.resolve(false);
 
 let cryptoStateQueue = Promise.resolve();
@@ -448,6 +453,7 @@ authForm.addEventListener("submit", async (event) => {
       if (registerWithPassword) {
         const user = await api("POST", "/api/register/password", {
           display_name: nameInput.value.trim(),
+          username: registerUsernameInput.value.trim(),
           email: emailInput.value.trim(),
           password: passwordInput.value,
         });
@@ -456,6 +462,7 @@ authForm.addEventListener("submit", async (event) => {
       }
       const result = await api("POST", "/api/register", {
         display_name: nameInput.value.trim(),
+        username: registerUsernameInput.value.trim(),
       });
       gate.close();
       showKeyDialog(result.access_key, result.user);
@@ -683,6 +690,7 @@ avatarFile.addEventListener("change", async () => {
 bootstrap();
 
 async function bootstrap() {
+  await loadServerIdentity();
   try {
     const user = await api("GET", "/api/me");
     signedIn(user);
@@ -691,9 +699,25 @@ async function bootstrap() {
   }
 }
 
+async function loadServerIdentity() {
+  try {
+    const info = await api("GET", "/api/server-info");
+    serverIdentity = info.server_name || location.host;
+  } catch {
+    serverIdentity = location.host;
+  }
+  renderServerIdentity();
+}
+
+function renderServerIdentity() {
+  authServer.textContent = "Server: " + serverIdentity;
+  profileServer.textContent = "Server: " + serverIdentity;
+}
+
 function showKeyDialog(accessKey, user) {
   pendingKeyUser = user;
   generatedKey.textContent = accessKey;
+  generatedUsername.textContent = user?.username ? "Username: @" + user.username : "";
   document.getElementById("key-error").hidden = true;
   keySaved.checked = false;
   keyContinue.disabled = true;
@@ -1160,6 +1184,8 @@ function setMode(next) {
   legacyLoginButton.textContent = "Use an older email/password account";
   accessKeyInput.hidden = next !== "login";
   accessKeyInput.required = next === "login";
+  registerUsernameInput.hidden = next !== "register";
+  registerUsernameInput.required = false;
   legacyLoginButton.hidden = next !== "login";
   registerPasswordToggle.hidden = next !== "register";
   legacyCredentials.hidden = true;
@@ -1750,6 +1776,7 @@ function renderMe() {
   profileEmail.value = me.email || "";
   profileEmail.hidden = !me.email;
   profileEmailLabel.hidden = !me.email;
+  profileServer.textContent = "Server: " + serverIdentity;
   paintAvatar(meAvatar, me);
   updateOwnProfileCard(me);
 }

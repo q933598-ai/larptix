@@ -78,6 +78,7 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/api/matrix/to-device/ack", post(matrix_ack_to_device))
         .route("/api/rtc-config", get(rtc_config))
+        .route("/api/server-info", get(server_info))
         .route("/api/users/{id}/avatar", get(user_avatar))
         .route("/api/attachments/{id}", get(get_attachment))
         .route(
@@ -93,11 +94,15 @@ pub fn router() -> Router<Arc<AppState>> {
 #[derive(Deserialize)]
 pub struct RegisterBody {
     pub display_name: String,
+    #[serde(default)]
+    pub username: String,
 }
 
 #[derive(Deserialize)]
 pub struct PasswordRegisterBody {
     pub display_name: String,
+    #[serde(default)]
+    pub username: String,
     pub email: String,
     pub password: String,
 }
@@ -169,17 +174,20 @@ async fn register(
     Json(body): Json<RegisterBody>,
 ) -> Result<Response, ApiError> {
     let display_name = sanitize_display_name(&body.display_name).map_err(ApiError::bad)?;
+    let username = registration_username(&state, &body.username, &display_name)?;
     let access_key = new_access_key();
     let access_key_hash = access_key_hash(&access_key).expect("generated key is valid");
     let user = state
         .db
-        .create_key_user(&display_name, &access_key_hash, now_ms())
+        .create_key_user_with_username(&display_name, &username, &access_key_hash, now_ms())
         .map_err(ApiError::from_db)?;
     let online = state.hub.online_ids();
     let users = state.db.list_users(&online).map_err(ApiError::db)?;
     state.hub.broadcast(ServerMessage::Directory { users });
+    let mut info = public_me(&user);
+    info.username = username;
     Ok(Json(serde_json::json!({
-        "user": public_me(&user),
+        "user": info,
         "access_key": access_key
     }))
     .into_response())
@@ -190,6 +198,7 @@ async fn register_password(
     Json(body): Json<PasswordRegisterBody>,
 ) -> Result<Response, ApiError> {
     let display_name = sanitize_display_name(&body.display_name).map_err(ApiError::bad)?;
+    let username = registration_username(&state, &body.username, &display_name)?;
     let email = sanitize_email(&body.email).map_err(ApiError::bad)?;
     let password = sanitize_password(&body.password)
         .map_err(ApiError::bad)?
@@ -200,7 +209,7 @@ async fn register_password(
         .map_err(ApiError::internal)?;
     let user = state
         .db
-        .create_user(&email, &password_hash, &display_name, now_ms())
+        .create_user_with_username(&email, &password_hash, &display_name, &username, now_ms())
         .map_err(ApiError::from_db)?;
     let online = state.hub.online_ids();
     let users = state.db.list_users(&online).map_err(ApiError::db)?;
@@ -1067,6 +1076,12 @@ async fn create_access_key(
     Ok(Json(serde_json::json!({ "access_key": access_key })))
 }
 
+async fn server_info(headers: HeaderMap) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(serde_json::json!({
+        "server_name": matrix_server_name(&headers)?,
+    })))
+}
+
 async fn update_profile(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1305,7 +1320,92 @@ fn sanitize_username(raw: &str) -> Result<String, &'static str> {
     {
         return Err("username must be 3-24 characters: letters, numbers, and underscores");
     }
+    if is_reserved_username(&username) {
+        return Err("that username is reserved");
+    }
     Ok(username)
+}
+
+fn is_reserved_username(username: &str) -> bool {
+    matches!(
+        username,
+        "admin"
+            | "administrator"
+            | "api"
+            | "everyone"
+            | "help"
+            | "larptrix"
+            | "me"
+            | "mod"
+            | "moderator"
+            | "null"
+            | "root"
+            | "server"
+            | "staff"
+            | "support"
+            | "system"
+            | "user"
+            | "users"
+    )
+}
+
+fn registration_username(
+    state: &AppState,
+    requested: &str,
+    display_name: &str,
+) -> Result<String, ApiError> {
+    let requested = sanitize_username(requested).map_err(ApiError::bad)?;
+    if !requested.is_empty() {
+        if state
+            .db
+            .user_by_username(&requested)
+            .map_err(ApiError::db)?
+            .is_some()
+        {
+            return Err(ApiError::conflict("username is already taken"));
+        }
+        return Ok(requested);
+    }
+
+    let base: String = display_name
+        .chars()
+        .filter_map(|char| {
+            if char.is_ascii_alphanumeric() {
+                Some(char.to_ascii_lowercase())
+            } else if char == '_' {
+                Some('_')
+            } else {
+                None
+            }
+        })
+        .take(20)
+        .collect();
+
+    if !base.is_empty()
+        && sanitize_username(&base).is_ok()
+        && state
+            .db
+            .user_by_username(&base)
+            .map_err(ApiError::db)?
+            .is_none()
+    {
+        return Ok(base);
+    }
+
+    for _ in 0..8 {
+        let suffix = &Uuid::new_v4().simple().to_string()[..8];
+        let candidate = format!("user_{suffix}");
+        if state
+            .db
+            .user_by_username(&candidate)
+            .map_err(ApiError::db)?
+            .is_none()
+        {
+            return Ok(candidate);
+        }
+    }
+
+    Err(ApiError::internal("could not generate a unique username"))
 }
 
 async fn upload(
@@ -1598,6 +1698,13 @@ impl ApiError {
         }
     }
 
+    fn conflict(message: impl ToString) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            message: message.to_string(),
+        }
+    }
+
     fn unauthorized(message: impl ToString) -> Self {
         Self {
             status: StatusCode::UNAUTHORIZED,
@@ -1674,6 +1781,7 @@ mod tests {
         assert_eq!(sanitize_username("").unwrap(), "");
         assert!(sanitize_username("ab").is_err());
         assert!(sanitize_username("alice.name").is_err());
+        assert!(sanitize_username("@admin").is_err());
     }
 
     #[test]
@@ -1699,6 +1807,7 @@ mod tests {
             State(state.clone()),
             Json(RegisterBody {
                 display_name: "Key User".into(),
+                username: "key_user".into(),
             }),
         )
         .await
@@ -1745,6 +1854,7 @@ mod tests {
             State(state.clone()),
             Json(PasswordRegisterBody {
                 display_name: "Password User".into(),
+                username: "password_user".into(),
                 email: "Password@Example.test".into(),
                 password: "a-strong-test-password".into(),
             }),

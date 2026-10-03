@@ -117,12 +117,23 @@ impl Database {
         display_name: &str,
         created_at: i64,
     ) -> Result<UserRow, DbError> {
+        self.create_user_with_username(email, password_hash, display_name, "", created_at)
+    }
+
+    pub fn create_user_with_username(
+        &self,
+        email: &str,
+        password_hash: &str,
+        display_name: &str,
+        username: &str,
+        created_at: i64,
+    ) -> Result<UserRow, DbError> {
         let id = Uuid::new_v4().to_string();
         let conn = self.conn.lock().expect("db lock");
         match conn.execute(
-            "INSERT INTO users (id, email, password_hash, display_name, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, email, password_hash, display_name, created_at],
+            "INSERT INTO users (id, email, password_hash, display_name, username, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, email, password_hash, display_name, username, created_at],
         ) {
             Ok(_) => Ok(UserRow {
                 id,
@@ -131,6 +142,9 @@ impl Database {
                 display_name: display_name.to_string(),
                 avatar_id: None,
             }),
+            Err(err) if is_unique(&err) && err.to_string().contains("username") => {
+                Err(DbError::BadRequest("username is already taken"))
+            }
             Err(err) if is_unique(&err) => Err(DbError::EmailTaken),
             Err(err) => Err(DbError::Sqlite(err)),
         }
@@ -142,22 +156,36 @@ impl Database {
         access_key_hash: &str,
         created_at: i64,
     ) -> Result<UserRow, DbError> {
+        self.create_key_user_with_username(display_name, "", access_key_hash, created_at)
+    }
+
+    pub fn create_key_user_with_username(
+        &self,
+        display_name: &str,
+        username: &str,
+        access_key_hash: &str,
+        created_at: i64,
+    ) -> Result<UserRow, DbError> {
         let id = Uuid::new_v4().to_string();
         let internal_email = format!("{id}@key.larptrix.invalid");
         let conn = self.conn.lock().expect("db lock");
-        conn.execute(
-            "INSERT INTO users (id, email, password_hash, display_name, created_at, access_key_hash)
-             VALUES (?1, ?2, '', ?3, ?4, ?5)",
-            params![id, internal_email, display_name, created_at, access_key_hash],
-        )
-        .map_err(DbError::Sqlite)?;
-        Ok(UserRow {
-            id,
-            email: internal_email,
-            password_hash: String::new(),
-            display_name: display_name.to_string(),
-            avatar_id: None,
-        })
+        match conn.execute(
+            "INSERT INTO users (id, email, password_hash, display_name, username, created_at, access_key_hash)
+             VALUES (?1, ?2, '', ?3, ?4, ?5, ?6)",
+            params![id, internal_email, display_name, username, created_at, access_key_hash],
+        ) {
+            Ok(_) => Ok(UserRow {
+                id,
+                email: internal_email,
+                password_hash: String::new(),
+                display_name: display_name.to_string(),
+                avatar_id: None,
+            }),
+            Err(err) if is_unique(&err) && err.to_string().contains("username") => {
+                Err(DbError::BadRequest("username is already taken"))
+            }
+            Err(err) => Err(DbError::Sqlite(err)),
+        }
     }
 
     pub fn user_by_access_key_hash(&self, key_hash: &str) -> rusqlite::Result<Option<UserRow>> {
@@ -1961,6 +1989,20 @@ mod tests {
             .user_by_access_key_hash("not-a-valid-key")
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn username_is_rejected_at_creation_when_already_taken() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        db.create_key_user_with_username("Alice", "alice", "hash-a", 1)
+            .unwrap();
+        let err = db
+            .create_key_user_with_username("Bob", "ALICE", "hash-b", 1)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            DbError::BadRequest("username is already taken")
+        ));
     }
 
     #[test]
