@@ -397,7 +397,8 @@ keyContinue.addEventListener("click", async () => {
   } catch (err) {
     keyError.textContent = err.message;
     keyError.hidden = false;
-    keyContinue.disabled = false;  }
+    keyContinue.disabled = false;
+  }
 });
 gifOpenButton.addEventListener("click", () => {
   gifEmpty.textContent = "No saved GIFs yet. Save a GIF from any chat message.";
@@ -796,7 +797,8 @@ composer.addEventListener("submit", async (event) => {
                 const claimedBundle = await claimPeerOneTimeKey(peerId, deviceId);
                 if (!(await ensurePeerFingerprint(peer, claimedBundle))) {
                   throw new Error(`Device ${deviceId} could not be verified.`);
-                }                cryptoDevice.establish_session(
+                }
+                cryptoDevice.establish_session(
                   deviceId,
                   JSON.stringify(claimedBundle),
                   claimedBundle.fingerprint
@@ -1195,7 +1197,8 @@ async function writeLocalCryptoRecord(record) {
       const transaction = db.transaction("items", "readwrite");
       transaction.objectStore("items").put(record);
       transaction.addEventListener("complete", resolve, { once: true });
-      transaction.addEventListener("error", () => reject(transaction.error), { once: true });      transaction.addEventListener("abort", () => reject(transaction.error), { once: true });
+      transaction.addEventListener("error", () => reject(transaction.error), { once: true });
+      transaction.addEventListener("abort", () => reject(transaction.error), { once: true });
     });
   } finally {
     db.close();
@@ -1594,7 +1597,8 @@ function openChat(id) {
   peerVerified.hidden = true;
   if (!selected?.is_group) void refreshPeerVerification(id);
   document.getElementById("start-audio-call").hidden = false;
-  document.getElementById("start-video-call").hidden = false;  document.getElementById("start-audio-call").textContent = selected?.is_group ? "Group call" : "Call";
+  document.getElementById("start-video-call").hidden = false;
+  document.getElementById("start-audio-call").textContent = selected?.is_group ? "Group call" : "Call";
   document.getElementById("start-video-call").textContent = selected?.is_group ? "Group video" : "Video";
   applyChatWallpaper(id);
   chatTitlebar.hidden = false;
@@ -1993,7 +1997,8 @@ async function createPeerConnection() {
   const connection = new globalThis.RTCPeerConnection({ iceServers: config.ice_servers });
   connection.addEventListener("icecandidate", (event) => {
     if (event.candidate) sendCallSignal("ice_candidate", event.candidate.toJSON());
-  });  connection.addEventListener("icecandidateerror", (event) => {
+  });
+  connection.addEventListener("icecandidateerror", (event) => {
     if (connection !== peerConnection) return;
     const server = event.url || "configured ICE server";
     const code = event.errorCode ? ` (${event.errorCode})` : "";
@@ -2392,7 +2397,8 @@ function endCall(notifyPeer) {
   remoteAudio.srcObject = null;
   remoteAudio.hidden = false;
   document.getElementById("group-remotes").replaceChildren();
-  document.getElementById("group-remotes").hidden = true;  document.getElementById("toggle-screen-share").hidden = false;
+  document.getElementById("group-remotes").hidden = true;
+  document.getElementById("toggle-screen-share").hidden = false;
   enableCallAudio.hidden = true;
   callStage.hidden = true;
   callStage.classList.remove("call-collapsed");
@@ -2791,7 +2797,8 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
     } catch (err) {
       bodyElement.textContent =
         `Could not decrypt Matrix message: ${err?.message || String(err)}`;
-      return false;    }
+      return false;
+    }
   }
 
   if (message.sender_id === me?.user_id) {
@@ -3190,7 +3197,8 @@ async function handleCryptoResyncResponse(response) {
     console.warn("[E2E] recovery response ignored: invalid v1 ciphertext", {
       message: response.message_id,
       error: err?.message || String(err),
-    });    return;
+    });
+    return;
   }
 
   let recoveredMessage;
@@ -3589,7 +3597,8 @@ async function renderGifFavorites() {
       });
       const remove = document.createElement("button");
       remove.type = "button";
-      remove.className = "ghost";      remove.textContent = "Remove";
+      remove.className = "ghost";
+      remove.textContent = "Remove";
       remove.addEventListener("click", async () => {
         await deleteGifFavorite(favorite.id);
         void renderGifFavorites();
