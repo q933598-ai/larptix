@@ -1871,6 +1871,7 @@ async function acceptGroupInvite(signal) {
   groupCallJoinedMembers.clear();
   groupCallJoinedMembers.add(me.user_id);
   groupCallJoinedMembers.add(signal.sender_id);
+  refreshGroupCallParticipants();
 
 
   try {
