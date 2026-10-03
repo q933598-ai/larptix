@@ -80,6 +80,14 @@ pub enum ServerMessage {
         peer_id: String,
         message_id: String,
     },
+    GroupCallState {
+        group_id: String,
+        call_id: String,
+        media: String,
+        initiator_id: String,
+        participant_ids: Vec<String>,
+        active: bool,
+    },
     CallSignal {
         sender_id: String,
         kind: String,
