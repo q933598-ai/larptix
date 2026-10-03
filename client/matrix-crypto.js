@@ -222,8 +222,12 @@ export class LarptrixMatrixCrypto {
       new Set(),
     );
 
-    this.processedToDeviceIds.add(event.id);
+    // Do not acknowledge/mark the event as processed until every
+    // crypto response generated from it has been successfully uploaded.
+    // Otherwise a transient network failure can make a room key event look
+    // consumed while its forwarding request was never delivered.
     await this.processOutgoingRequests();
+    this.processedToDeviceIds.add(event.id);
     return true;
   }
 
