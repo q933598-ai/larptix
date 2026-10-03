@@ -115,14 +115,25 @@ impl Database {
         email: &str,
         password_hash: &str,
         display_name: &str,
+        username: &str,
         created_at: i64,
     ) -> Result<UserRow, DbError> {
         let id = Uuid::new_v4().to_string();
         let conn = self.conn.lock().expect("db lock");
+        let username_taken: bool = conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM users WHERE username = ?1 COLLATE NOCASE AND username <> ''
+            )",
+            [username],
+            |row| row.get(0),
+        )?;
+        if username_taken {
+            return Err(DbError::UsernameTaken);
+        }
         match conn.execute(
-            "INSERT INTO users (id, email, password_hash, display_name, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, email, password_hash, display_name, created_at],
+            "INSERT INTO users (id, email, password_hash, display_name, username, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, email, password_hash, display_name, username, created_at],
         ) {
             Ok(_) => Ok(UserRow {
                 id,
@@ -139,16 +150,27 @@ impl Database {
     pub fn create_key_user(
         &self,
         display_name: &str,
+        username: &str,
         access_key_hash: &str,
         created_at: i64,
     ) -> Result<UserRow, DbError> {
         let id = Uuid::new_v4().to_string();
         let internal_email = format!("{id}@key.larptrix.invalid");
         let conn = self.conn.lock().expect("db lock");
+        let username_taken: bool = conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM users WHERE username = ?1 COLLATE NOCASE AND username <> ''
+            )",
+            [username],
+            |row| row.get(0),
+        )?;
+        if username_taken {
+            return Err(DbError::UsernameTaken);
+        }
         conn.execute(
-            "INSERT INTO users (id, email, password_hash, display_name, created_at, access_key_hash)
-             VALUES (?1, ?2, '', ?3, ?4, ?5)",
-            params![id, internal_email, display_name, created_at, access_key_hash],
+            "INSERT INTO users (id, email, password_hash, display_name, username, created_at, access_key_hash)
+             VALUES (?1, ?2, '', ?3, ?4, ?5, ?6)",
+            params![id, internal_email, display_name, username, created_at, access_key_hash],
         )
         .map_err(DbError::Sqlite)?;
         Ok(UserRow {
@@ -1660,6 +1682,7 @@ pub struct AttachmentRow {
 #[derive(Debug)]
 pub enum DbError {
     EmailTaken,
+    UsernameTaken,
     BadRequest(&'static str),
     Sqlite(rusqlite::Error),
 }
@@ -1953,7 +1976,9 @@ mod tests {
     #[test]
     fn key_account_is_found_by_hash_only() {
         let db = Database::open(Path::new(":memory:")).unwrap();
-        let user = db.create_key_user("Key User", "sha256-hash", 123).unwrap();
+        let user = db
+            .create_key_user("Key User", "key_user", "sha256-hash", 123)
+            .unwrap();
         let found = db.user_by_access_key_hash("sha256-hash").unwrap().unwrap();
         assert_eq!(found.id, user.id);
         assert!(found.email.ends_with("@key.larptrix.invalid"));
@@ -1967,7 +1992,13 @@ mod tests {
     fn legacy_account_can_be_assigned_an_access_key() {
         let db = Database::open(Path::new(":memory:")).unwrap();
         let user = db
-            .create_user("legacy@example.test", "password-hash", "Legacy", 123)
+            .create_user(
+                "legacy@example.test",
+                "password-hash",
+                "Legacy",
+                "legacy",
+                123,
+            )
             .unwrap();
         db.set_access_key_hash(&user.id, "new-key-hash").unwrap();
         let found = db.user_by_access_key_hash("new-key-hash").unwrap().unwrap();
@@ -1978,8 +2009,8 @@ mod tests {
     #[test]
     fn profile_fields_persist_and_usernames_are_unique_without_case_sensitivity() {
         let db = Database::open(Path::new(":memory:")).unwrap();
-        let alice = db.create_key_user("Alice", "hash-a", 1).unwrap();
-        let bob = db.create_key_user("Bob", "hash-b", 1).unwrap();
+        let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
+        let bob = db.create_key_user("Bob", "bob", "hash-b", 1).unwrap();
         db.update_profile(&alice.id, "Alice A", "alice_a", "Hello there")
             .unwrap();
         let (name, username, about, _) = db.profile_fields(&alice.id).unwrap().unwrap();
@@ -2002,7 +2033,7 @@ mod tests {
     #[test]
     fn profile_music_can_be_replaced_and_removed() {
         let db = Database::open(Path::new(":memory:")).unwrap();
-        let alice = db.create_key_user("Alice", "hash-a", 1).unwrap();
+        let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
         let first = db
             .insert_attachment(&alice.id, "audio/mpeg", "mp3", "first.mp3", 4, 1)
             .unwrap();
@@ -2031,7 +2062,7 @@ mod tests {
     #[test]
     fn activity_is_only_published_for_online_users() {
         let db = Database::open(Path::new(":memory:")).unwrap();
-        let alice = db.create_key_user("Alice", "hash-a", 1).unwrap();
+        let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
         db.set_activity(&alice.id, "Listening to song.mp3").unwrap();
 
         let online = db.list_users(std::slice::from_ref(&alice.id)).unwrap();
@@ -2044,9 +2075,9 @@ mod tests {
     #[test]
     fn group_members_can_share_history_but_nonmembers_cannot_read_or_send() {
         let db = Database::open(Path::new(":memory:")).unwrap();
-        let alice = db.create_key_user("Alice", "hash-a", 1).unwrap();
-        let bob = db.create_key_user("Bob", "hash-b", 1).unwrap();
-        let carol = db.create_key_user("Carol", "hash-c", 1).unwrap();
+        let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
+        let bob = db.create_key_user("Bob", "bob", "hash-b", 1).unwrap();
+        let carol = db.create_key_user("Carol", "carol", "hash-c", 1).unwrap();
         let group = db
             .create_group(&alice.id, "Test group", std::slice::from_ref(&bob.id))
             .unwrap();
@@ -2064,7 +2095,7 @@ mod tests {
     #[test]
     fn fallback_key_can_be_claimed_repeatedly_when_otks_are_exhausted() {
         let db = Database::open(Path::new(":memory:")).unwrap();
-        let alice = db.create_key_user("Alice", "hash-a", 1).unwrap();
+        let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
 
         let device_id = Uuid::new_v4().to_string();
         let bundle = format!(
@@ -2084,9 +2115,9 @@ mod tests {
     #[test]
     fn e2e_recovery_only_matches_the_original_dm_participants() {
         let db = Database::open(Path::new(":memory:")).unwrap();
-        let alice = db.create_key_user("Alice", "hash-a", 1).unwrap();
-        let bob = db.create_key_user("Bob", "hash-b", 1).unwrap();
-        let carol = db.create_key_user("Carol", "hash-c", 1).unwrap();
+        let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
+        let bob = db.create_key_user("Bob", "bob", "hash-b", 1).unwrap();
+        let carol = db.create_key_user("Carol", "carol", "hash-c", 1).unwrap();
 
         let message = db
             .insert_dm(&alice.id, &bob.id, "encrypted", None, 1)
@@ -2109,8 +2140,8 @@ mod tests {
     #[test]
     fn matrix_one_time_keys_are_merged_and_claimed_once() {
         let db = Database::open(Path::new(":memory:")).unwrap();
-        let alice = db.create_key_user("Alice", "hash-a", 1).unwrap();
-        let bob = db.create_key_user("Bob", "hash-b", 1).unwrap();
+        let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
+        let bob = db.create_key_user("Bob", "bob", "hash-b", 1).unwrap();
         let device_id = Uuid::new_v4().to_string();
 
         db.upsert_matrix_crypto_device(
@@ -2197,10 +2228,10 @@ mod tests {
     fn first_e2e_activation_preserves_existing_history_and_attachments() {
         let db = Database::open(Path::new(":memory:")).unwrap();
         let alice = db
-            .create_user("alice@example.test", "hash-a", "Alice", 1)
+            .create_user("alice@example.test", "hash-a", "Alice", "alice", 1)
             .unwrap();
         let bob = db
-            .create_user("bob@example.test", "hash-b", "Bob", 1)
+            .create_user("bob@example.test", "hash-b", "Bob", "bob", 1)
             .unwrap();
         let avatar_id = db
             .insert_attachment(&alice.id, "image/png", "png", "avatar.png", 3, 1)
@@ -2221,7 +2252,7 @@ mod tests {
         db.insert_dm(&bob.id, &alice.id, "another old message", None, 2)
             .unwrap();
         let carol = db
-            .create_user("carol@example.test", "hash-c", "Carol", 1)
+            .create_user("carol@example.test", "hash-c", "Carol", "carol", 1)
             .unwrap();
         db.insert_dm(&bob.id, &carol.id, "preserved history", None, 3)
             .unwrap();

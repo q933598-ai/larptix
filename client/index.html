@@ -64,7 +64,6 @@
         <input id="user-search" class="user-search" type="search" placeholder="Find by name or @username" autocomplete="off" />
         <nav class="side-nav" aria-label="Larptix sections">
           <button id="chat-view-open" type="button" class="side-nav-button active">▣ <span>Chats</span></button>
-          <button id="music-library-open" type="button" class="side-nav-button">♫ <span>Music Library</span></button>
         </nav>
         <ul id="users"></ul>
       </aside>
@@ -121,10 +120,7 @@
               <input id="photo" type="file" accept="image/jpeg,image/png,image/gif,image/webp" hidden />
               Image
             </label>
-            <label class="photo-btn" title="Send an animated GIF">
-              <input id="gif" type="file" accept="image/gif" hidden />
-              GIF
-            </label>
+            <button id="gif-open" type="button" class="ghost" title="Search KLIPY GIFs">GIF</button>
             <label class="photo-btn" title="Attach a file">
               <input id="file" type="file" hidden />
               File
@@ -149,17 +145,21 @@
 
         <section id="music-library" class="music-library" hidden aria-label="Music Library">
           <header class="music-library-header">
-            <div>
-              <p class="eyebrow">LOCAL MEDIA</p>
-              <h2>Music Library</h2>
-              <p class="music-library-subtitle">Your tracks stay in this browser. Nothing is uploaded to the server.</p>
+            <div class="music-library-drag-area" title="Drag to move the music library">
+              <span class="music-library-drag-handle" aria-hidden="true">☷</span>
+              <div>
+                <p class="eyebrow">LOCAL MEDIA</p>
+                <h2>Music Library</h2>
+                <p class="music-library-subtitle">Your tracks stay in this browser. Nothing is uploaded to the server.</p>
+              </div>
             </div>
             <div class="music-library-actions">
+              <button id="music-library-close" type="button" class="ghost music-window-close" title="Close music library" aria-label="Close music library">×</button>
               <label class="music-upload-button">
                 <span>＋ Add music</span>
                 <input id="music-library-file" type="file" accept="audio/*" multiple hidden />
               </label>
-              <button id="music-library-refresh" type="button" class="ghost">Refresh</button>
+                <button id="music-library-refresh" type="button" class="ghost">Refresh</button>
             </div>
           </header>
 
@@ -315,6 +315,24 @@
       </div>
     </dialog>
 
+    <dialog id="gif-dialog" class="gif-dialog">
+      <header class="gif-dialog-header">
+        <div>
+          <p class="eyebrow">LARPTRIX</p>
+          <h2>GIFs</h2>
+          <p class="gif-attribution">Powered by <a href="https://klipy.com" target="_blank" rel="noopener noreferrer">KLIPY</a></p>
+        </div>
+        <button id="gif-close" type="button" class="ghost" aria-label="Close GIF search">×</button>
+      </header>
+      <form id="gif-search-form" class="gif-search-form">
+        <input id="gif-search" type="search" placeholder="Search KLIPY" autocomplete="off" maxlength="200" />
+        <button type="submit">Search</button>
+      </form>
+      <p id="gif-search-status" class="settings-help" aria-live="polite"></p>
+      <div id="gif-results" class="gif-results"></div>
+      <button id="gif-load-more" type="button" class="ghost gif-load-more" hidden>Load more</button>
+    </dialog>
+
     <dialog id="peer-profile-dialog" class="profile-view-dialog">
       <div class="profile-banner"></div>
       <button id="peer-profile-close" type="button" class="ghost profile-dismiss" aria-label="Close profile">×</button>
@@ -376,6 +394,15 @@
           maxlength="32"
           placeholder="display name"
           autocomplete="nickname"
+          hidden
+        />
+        <input
+          id="username"
+          type="text"
+          maxlength="24"
+          placeholder="@username"
+          autocomplete="username"
+          pattern="^@?[A-Za-z0-9_]{3,24}$"
           hidden
         />
         <button type="submit" id="auth-submit">Log in with key</button>

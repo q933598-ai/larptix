@@ -15,6 +15,7 @@ const gate = document.getElementById("gate");
 const authForm = document.getElementById("auth");
 const authError = document.getElementById("auth-error");
 const accessKeyInput = document.getElementById("access-key");
+const usernameInput = document.getElementById("username");
 const emailInput = document.getElementById("email");
 const passwordInput = document.getElementById("password");
 const legacyCredentials = document.getElementById("legacy-credentials");
@@ -71,7 +72,14 @@ const verifyDeviceFingerprint = document.getElementById("verify-device-fingerpri
 const verifyDeviceConfirm = document.getElementById("verify-device-confirm");
 const verifyDeviceContinue = document.getElementById("verify-device-continue");
 const photoInput = document.getElementById("photo");
-const gifInput = document.getElementById("gif");
+const gifOpenButton = document.getElementById("gif-open");
+const gifDialog = document.getElementById("gif-dialog");
+const gifCloseButton = document.getElementById("gif-close");
+const gifSearchForm = document.getElementById("gif-search-form");
+const gifSearchInput = document.getElementById("gif-search");
+const gifSearchStatus = document.getElementById("gif-search-status");
+const gifResults = document.getElementById("gif-results");
+const gifLoadMore = document.getElementById("gif-load-more");
 const fileInput = document.getElementById("file");
 const audioFileInput = document.getElementById("audio-file");
 const attachmentPreview = document.getElementById("attachment-preview");
@@ -130,6 +138,10 @@ let legacyLogin = false;
 let registerWithPassword = false;
 let pendingKeyUser = null;
 let pendingAttachment = null;
+let pendingGif = null;
+let gifSearchNext = null;
+let gifSearchTerm = "";
+let gifSearchRequest = 0;
 let previewUrl = null;
 let recorder = null;
 let recordingStream = null;
@@ -147,6 +159,8 @@ let musicActivityEnabled = localStorage.getItem("larptrix_show_music_activity") 
 let matrixCrypto = null;
 let matrixServerName = null;
 let matrixCryptoReady = Promise.resolve(false);
+let registrationE2eRequired = false;
+let cryptoDialogRequired = false;
 
 let cryptoStateQueue = Promise.resolve();
 
@@ -301,7 +315,7 @@ menuChats.addEventListener("click", () => {
   closeAppMenu();
 });
 menuMusic.addEventListener("click", () => {
-  document.getElementById("music-library-open").click();
+  window.larptixMusicLibrary?.toggle?.();
   closeAppMenu();
 });
 menuNewGroup.addEventListener("click", () => {
@@ -382,14 +396,28 @@ keyContinue.addEventListener("click", async () => {
     if (alreadyConnected) {
       me = user;
       renderMe();
+      signedIn(user, { registrationE2eRequired: true });
     } else {
-      signedIn(user);
+      signedIn(user, { registrationE2eRequired: true });
     }
   } catch (err) {
     keyError.textContent = err.message;
     keyError.hidden = false;
     keyContinue.disabled = false;
   }
+});
+gifOpenButton.addEventListener("click", () => {
+  gifSearchStatus.textContent = "";
+  gifDialog.showModal();
+  gifSearchInput.focus();
+});
+gifCloseButton.addEventListener("click", () => gifDialog.close());
+gifSearchForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void searchKlipyGifs(true);
+});
+gifLoadMore.addEventListener("click", () => {
+  void searchKlipyGifs(false);
 });
 document.getElementById("image-viewer-close").addEventListener("click", () => imageViewer.close());
 imageViewer.addEventListener("click", (event) => {
@@ -489,6 +517,11 @@ cryptoRecoveryInput.addEventListener("input", () => {
   cryptoContinue.disabled = cryptoRecoveryInput.value.trim().length < 40;
 });
 document.getElementById("crypto-cancel").addEventListener("click", () => {
+  if (cryptoDialogRequired) {
+    cryptoError.textContent = "E2E setup is mandatory when creating a new account.";
+    cryptoError.hidden = false;
+    return;
+  }
   cryptoDialog.close();
   if (cryptoDialogMode === "unlock") {
     cryptoLoadResolve?.(false);
@@ -578,15 +611,19 @@ authForm.addEventListener("submit", async (event) => {
       if (registerWithPassword) {
         const user = await api("POST", "/api/register/password", {
           display_name: nameInput.value.trim(),
+          username: usernameInput.value.trim(),
           email: emailInput.value.trim(),
           password: passwordInput.value,
         });
-        signedIn(user);
+        localStorage.setItem(registrationE2eKey(user.user_id), "1");
+        signedIn(user, { registrationE2eRequired: true });
         return;
       }
       const result = await api("POST", "/api/register", {
         display_name: nameInput.value.trim(),
+        username: usernameInput.value.trim(),
       });
+      localStorage.setItem(registrationE2eKey(result.user.user_id), "1");
       gate.close();
       showKeyDialog(result.access_key, result.user);
       return;
@@ -638,11 +675,12 @@ composer.addEventListener("submit", async (event) => {
   if (!peerId || !socket || socket.readyState !== WebSocket.OPEN) return;
   const body = bodyInput.value.trim();
   const file = pendingAttachment;
+  const gif = pendingGif;
   if (cryptoEnabled) {
     try {
       await cryptoReady;
       if (!cryptoDevice) throw new Error("Unlock E2E with your separate recovery key before sending messages.");
-      if (!body && !file) return;
+      if (!body && !file && !gif) return;
       const peer = [...users, ...groups].find((item) => item.user_id === peerId);
       if (!peer) throw new Error("Chat peer is not in the current list.");
       let attachment_id = null;
@@ -653,37 +691,86 @@ composer.addEventListener("submit", async (event) => {
         attachment_id = uploaded.id;
         encryptedFile = encrypted.metadata;
       }
-      const payload = JSON.stringify({ text: body, file: encryptedFile });
+      const payload = JSON.stringify({ text: body, file: encryptedFile, gif });
       let encryptedBody;
 
       await withCryptoStateLock(async () => {
-        if (peer.is_group) {
-          await waitForMatrixDevices(peer.group_member_ids);
-        } else {
-          await waitForMatrixDevices([peerId]);
+        await matrixCryptoReady;
+        let matrixReady = Boolean(matrixCrypto);
+
+        if (matrixReady) {
+          try {
+            await waitForMatrixDevices(
+              peer.is_group ? peer.group_member_ids : [peerId],
+            );
+          } catch (err) {
+            console.warn(
+              "[E2E] Matrix device readiness check failed; using legacy E2E fallback",
+              err,
+            );
+            matrixReady = false;
+          }
         }
 
         if (peer.is_group) {
-          await matrixCryptoReady;
-          if (!matrixCrypto) {
-            throw new Error("Matrix E2E is not initialized for this device.");
+          if (matrixReady) {
+            try {
+              const roomId = matrixCrypto.groupRoomId(peer.user_id);
+              await matrixCrypto.prepareRoom(roomId, peer.group_member_ids);
+              const ciphertext = await matrixCrypto.encrypt(roomId, payload);
+
+              encryptedBody = JSON.stringify({
+                version: 3,
+                message_type: "matrix",
+                sender_device_id: matrixCrypto.deviceId,
+                room_id: roomId,
+                ciphertext,
+              });
+            } catch (err) {
+              console.warn("[E2E] Matrix group encryption failed; using legacy group E2E fallback", err);
+              encryptedBody = null;
+            }
           }
 
-          const roomId = matrixCrypto.groupRoomId(peer.user_id);
-          await matrixCrypto.prepareRoom(roomId, peer.group_member_ids);
-          const ciphertext = await matrixCrypto.encrypt(roomId, payload);
+          if (!encryptedBody) {
+            const ciphertexts = {};
+            for (const memberId of peer.group_member_ids.filter((id) => id !== me.user_id)) {
+              const bundleResponse = await api(
+                "GET",
+                `/api/users/${encodeURIComponent(memberId)}/crypto-key`
+              );
+              const bundle = Array.isArray(bundleResponse?.devices)
+                ? bundleResponse.devices[0]
+                : bundleResponse;
+              const member = users.find((item) => item.user_id === memberId);
 
-          encryptedBody = JSON.stringify({
-            version: 3,
-            message_type: "matrix",
-            sender_device_id: matrixCrypto.deviceId,
-            room_id: roomId,
-            ciphertext,
-          });
+              if (!member || !(await ensurePeerFingerprint(member, bundle))) {
+                throw new Error("Group member device could not be verified.");
+              }
+
+              if (!cryptoDevice.has_session(memberId)) {
+                const claimedBundle = await claimPeerOneTimeKey(memberId, bundle.device_id);
+                if (!(await ensurePeerFingerprint(member, claimedBundle))) {
+                  throw new Error(`Device ${bundle.device_id} could not be verified.`);
+                }
+                cryptoDevice.establish_session(
+                  memberId,
+                  JSON.stringify(claimedBundle),
+                  claimedBundle.fingerprint
+                );
+              }
+
+              ciphertexts[memberId] = cryptoDevice.encrypt(memberId, payload);
+            }
+
+            encryptedBody = JSON.stringify({
+              version: 1,
+              message_type: "group",
+              ciphertexts,
+            });
+          }
         } else {
-          await matrixCryptoReady;
-
-          if (matrixCrypto) {
+          if (matrixReady) {
             const roomId = await matrixCrypto.roomIdForDm(peerId);
             await matrixCrypto.prepareRoom(roomId, [peerId]);
             const ciphertext = await matrixCrypto.encrypt(roomId, payload);
@@ -768,7 +855,6 @@ composer.addEventListener("submit", async (event) => {
 });
 
 photoInput.addEventListener("change", () => queueAttachment(photoInput.files[0]));
-gifInput.addEventListener("change", () => queueAttachment(gifInput.files[0]));
 fileInput.addEventListener("change", () => queueAttachment(fileInput.files[0]));
 audioFileInput.addEventListener("change", () => queueAttachment(audioFileInput.files[0]));
 recordAudioButton.addEventListener("click", toggleRecording);
@@ -823,7 +909,10 @@ bootstrap();
 async function bootstrap() {
   try {
     const user = await api("GET", "/api/me");
-    signedIn(user);
+    signedIn(user, {
+      registrationE2eRequired:
+        localStorage.getItem(registrationE2eKey(user.user_id)) === "1",
+    });
   } catch {
     gate.showModal();
   }
@@ -845,8 +934,9 @@ function createRecoveryKey() {
   return btoa(String.fromCharCode(...bytes)).replace(/=+$/, "");
 }
 
-function openCryptoDialog(mode) {
+function openCryptoDialog(mode, { required = false } = {}) {
   cryptoDialogMode = mode;
+  cryptoDialogRequired = required;
   cryptoError.hidden = true;
   cryptoConfirm.checked = false;
   cryptoRecoveryInput.value = "";
@@ -863,13 +953,14 @@ function openCryptoDialog(mode) {
     cryptoDialogDescription.textContent = "E2E is required for messaging. Save this separate recovery key: it unlocks your encrypted chats on other devices.";
     cryptoRecoveryDisplay.textContent = cryptoRecoveryKey;
     cryptoContinue.textContent = "Enable E2E";
-    cryptoContinue.disabled = false;
+    cryptoContinue.disabled = !cryptoConfirm.checked;
   } else {
     cryptoDialogTitle.textContent = "Unlock encrypted chats";
     cryptoDialogDescription.textContent = "Enter the separate recovery key you saved when enabling E2E. It is not your sign-in key.";
     cryptoContinue.textContent = "Unlock chats";
     cryptoContinue.disabled = true;
   }
+  document.getElementById("crypto-cancel").hidden = cryptoDialogRequired;
   cryptoDialog.showModal();
 }
 
@@ -886,6 +977,9 @@ async function completeCryptoDialog() {
       cryptoOwnFingerprint.hidden = false;
       cryptoDialog.close();
       cryptoDialogMode = null;
+      cryptoDialogRequired = false;
+      registrationE2eRequired = false;
+      if (me) localStorage.removeItem(registrationE2eKey(me.user_id));
       try {
         await rememberRecoveryKey(me.user_id, cryptoRecoveryKey);
         forgetE2eDeviceButton.hidden = false;
@@ -940,7 +1034,7 @@ async function completeCryptoDialog() {
   }
 }
 
-async function loadCryptoStatus() {
+async function loadCryptoStatus({ forceSetup = false } = {}) {
   await cryptoWasmReady;
   try {
     cryptoStoredState = await api("GET", "/api/me/crypto-device");
@@ -952,7 +1046,8 @@ async function loadCryptoStatus() {
       cryptoRecoveryKey = createRecoveryKey();
       cryptoDevice = new CryptoDevice(cryptoRecoveryKey);
       cryptoDeviceBundle = JSON.parse(cryptoDevice.public_bundle_json());
-      openCryptoDialog("enable");
+      // A new E2E identity is mandatory: there is no "skip" path.
+      openCryptoDialog("enable", { required: true });
       return new Promise((resolve) => {
         cryptoLoadResolve = resolve;
       });
@@ -1294,8 +1389,16 @@ async function refreshPeerVerification(userId) {
   }
 }
 
-function signedIn(user) {
+function registrationE2eKey(userId) {
+  return `larptrix_registration_e2e_required_${userId}`;
+}
+
+function signedIn(user, options = {}) {
   me = user;
+  registrationE2eRequired = Boolean(
+    options.registrationE2eRequired
+      || localStorage.getItem(registrationE2eKey(user.user_id)) === "1",
+  );
 
   // Establish the authenticated realtime connection before any UI or E2E
   // initialization can interfere with startup. Once the server sends
@@ -1306,7 +1409,7 @@ function signedIn(user) {
   gate.close();
   logoutBtn.hidden = false;
   renderMe();
-  cryptoReady = loadCryptoStatus().catch((err) => {
+  cryptoReady = loadCryptoStatus({ forceSetup: registrationE2eRequired }).catch((err) => {
     cryptoProfileStatus.textContent = `E2E setup error: ${err.message}`;
     return false;
   });
@@ -1343,6 +1446,8 @@ function setMode(next) {
   passwordInput.required = false;
   nameInput.hidden = next !== "register";
   nameInput.required = next === "register";
+  usernameInput.hidden = next !== "register";
+  usernameInput.required = next === "register";
   authSubmit.textContent = next === "register" ? "Create account" : "Log in with key";
   registerPasswordToggle.textContent = "Create account with email and password";
 }
@@ -2694,6 +2799,14 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
             `Could not open encrypted attachment: ${err?.message || String(err)}`;
         }
       }
+      if (payload?.gif) {
+        try {
+          renderSelectedGif(payload.gif, bodyElement.parentElement);
+        } catch (err) {
+          bodyElement.textContent =
+            `Could not open GIF: ${err?.message || String(err)}`;
+        }
+      }
       return true;
     } catch (err) {
       bodyElement.textContent =
@@ -2716,6 +2829,14 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
         bodyElement.textContent = `Could not open encrypted attachment: ${err?.message || String(err)}`;
       }
     }
+      if (payload?.gif) {
+        try {
+          renderSelectedGif(payload.gif, bodyElement.parentElement);
+        } catch (err) {
+          bodyElement.textContent =
+            `Could not open GIF: ${err?.message || String(err)}`;
+        }
+      }
     return true;
   }
 
@@ -2946,7 +3067,15 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
           payload.file,
           bodyElement.parentElement
         );
-      } catch (err) {
+          if (payload?.gif) {
+        try {
+          renderSelectedGif(payload.gif, bodyElement.parentElement);
+        } catch (err) {
+          bodyElement.textContent =
+            `Could not open GIF: ${err?.message || String(err)}`;
+        }
+      }
+  } catch (err) {
         bodyElement.textContent =
           `Could not open encrypted attachment: ${err?.message || String(err)}`;
       }
@@ -3459,14 +3588,176 @@ function queueAttachment(file) {
   attachmentPreview.hidden = false;
 }
 
+function browserLocale() {
+  const locale = (navigator.language || "en-US").replace("-", "_").trim();
+  return locale.length <= 16 ? locale : "en_US";
+}
+
+function browserCountry() {
+  const parts = browserLocale().split("_");
+  const country = parts[1] || "US";
+  return /^[A-Za-z]{2}$/.test(country) ? country.toUpperCase() : "US";
+}
+
+function queueKlipyGif(gif) {
+  pendingAttachment = null;
+  pendingGif = {
+    id: gif.id,
+    title: gif.title || "GIF",
+    url: gif.url,
+    preview_url: gif.preview_url || gif.url,
+    item_url: gif.item_url || "https://klipy.com/",
+    search_term: gif.search_term || gifSearchTerm,
+  };
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
+  previewUrl = null;
+  photoInput.value = "";
+  fileInput.value = "";
+  audioFileInput.value = "";
+  attachmentPreview.replaceChildren();
+
+  const image = document.createElement("img");
+  image.src = pendingGif.preview_url;
+  image.alt = pendingGif.title;
+  image.className = "gif-preview";
+  image.loading = "lazy";
+
+  const details = document.createElement("span");
+  details.textContent = pendingGif.title;
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "ghost";
+  remove.textContent = "Remove";
+  remove.addEventListener("click", clearAttachment);
+
+  attachmentPreview.append(image, details, remove);
+  attachmentPreview.hidden = false;
+  gifDialog.close();
+
+  void api("POST", "/api/gifs/share", {
+    id: pendingGif.id,
+    q: pendingGif.search_term,
+    country: browserCountry(),
+    locale: browserLocale(),
+  }).catch((err) => {
+    console.warn("[GIF] share registration failed", err?.message || err);
+  });
+}
+
+async function searchKlipyGifs(reset = true) {
+  const requestId = ++gifSearchRequest;
+  const query = gifSearchInput.value.trim();
+  if (!query) {
+    gifSearchStatus.textContent = "Enter something to search.";
+    gifResults.replaceChildren();
+    gifLoadMore.hidden = true;
+    return;
+  }
+
+  if (reset) {
+    gifSearchTerm = query;
+    gifSearchNext = null;
+    gifResults.replaceChildren();
+  }
+
+  gifSearchStatus.textContent = reset ? "Searching…" : "Loading more…";
+
+  const params = new URLSearchParams({
+    q: gifSearchTerm,
+    limit: "24",
+    country: browserCountry(),
+    locale: browserLocale(),
+  });
+  if (gifSearchNext) params.set("pos", gifSearchNext);
+
+  try {
+    const response = await api("GET", "/api/gifs/search?" + params.toString());
+    if (requestId !== gifSearchRequest) return;
+    renderKlipyGifResults(response.results || []);
+    gifSearchNext = response.next || null;
+    gifLoadMore.hidden = !gifSearchNext;
+    gifSearchStatus.textContent =
+      response.results?.length ? "Select a GIF to add it to your message." : "No GIFs found.";
+  } catch (err) {
+    if (requestId !== gifSearchRequest) return;
+    gifSearchStatus.textContent = err.message || "GIF search failed.";
+    gifLoadMore.hidden = true;
+  }
+}
+
+function renderKlipyGifResults(results) {
+  for (const gif of results) {
+    if (!gif?.id || !gif?.url) continue;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "gif-result";
+    button.title = gif.title || "GIF";
+
+    const image = document.createElement("img");
+    image.src = gif.preview_url || gif.url;
+    image.alt = gif.title || "KLIPY GIF";
+    image.loading = "lazy";
+
+    button.append(image);
+    button.addEventListener("click", () => queueKlipyGif(gif));
+    gifResults.append(button);
+  }
+}
+
+function renderSelectedGif(gif, container) {
+  if (!gif || typeof gif.url !== "string") {
+    throw new Error("This GIF has an invalid media URL.");
+  }
+
+  const mediaUrl = new URL(gif.url);
+  if (
+    mediaUrl.protocol !== "https:"
+    || mediaUrl.hostname.toLowerCase() !== "static.klipy.com"
+  ) {
+    throw new Error("This GIF did not come from KLIPY.");
+  }
+
+  const figure = document.createElement("figure");
+  figure.className = "gif-attachment";
+
+  const image = document.createElement("img");
+  image.src = gif.url;
+  image.alt = typeof gif.title === "string" && gif.title ? gif.title : "KLIPY GIF";
+  image.loading = "lazy";
+  image.decoding = "async";
+  image.referrerPolicy = "no-referrer";
+  figure.append(image);
+
+  if (typeof gif.item_url === "string") {
+    try {
+      const itemUrl = new URL(gif.item_url);
+      if (
+        itemUrl.protocol === "https:"
+        && (itemUrl.hostname.toLowerCase() === "klipy.com"
+          || itemUrl.hostname.toLowerCase().endsWith(".klipy.com"))
+      ) {
+        const link = document.createElement("a");
+        link.href = gif.item_url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = "View on KLIPY";
+        figure.append(link);
+      }
+    } catch {}
+  }
+
+  container.append(figure);
+}
+
 function clearAttachment() {
   pendingAttachment = null;
+  pendingGif = null;
   if (previewUrl) URL.revokeObjectURL(previewUrl);
   previewUrl = null;
   attachmentPreview.replaceChildren();
   attachmentPreview.hidden = true;
   photoInput.value = "";
-  gifInput.value = "";
   fileInput.value = "";
   audioFileInput.value = "";
 }

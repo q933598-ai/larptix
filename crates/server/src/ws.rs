@@ -1114,6 +1114,7 @@ fn user_info(user: &UserRow, online: bool) -> UserInfo {
 fn db_err(err: DbError) -> String {
     match err {
         DbError::EmailTaken => "email already registered".into(),
+        DbError::UsernameTaken => "username is already taken".into(),
         DbError::BadRequest(msg) => msg.into(),
         DbError::Sqlite(err) => {
             tracing::error!("db: {err}");
@@ -1152,11 +1153,11 @@ mod call_signal_tests {
         };
         let caller = state
             .db
-            .create_key_user("Caller", "caller-hash", 1)
+            .create_key_user("Caller", "caller", "caller-hash", 1)
             .unwrap();
         let recipient = state
             .db
-            .create_key_user("Recipient", "recipient-hash", 1)
+            .create_key_user("Recipient", "recipient", "recipient-hash", 1)
             .unwrap();
         let recipient_id = Uuid::parse_str(&recipient.id).unwrap();
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -1228,8 +1229,14 @@ mod call_signal_tests {
             upload_dir: Path::new("/tmp").to_path_buf(),
         };
 
-        let alice = state.db.create_key_user("Alice", "alice", 1).unwrap();
-        let bob = state.db.create_key_user("Bob", "bob", 1).unwrap();
+        let alice = state
+            .db
+            .create_key_user("Alice", "alice_user", "alice", 1)
+            .unwrap();
+        let bob = state
+            .db
+            .create_key_user("Bob", "bob_user", "bob", 1)
+            .unwrap();
 
         for (user_id, device_id) in [
             (&alice.id, "alice-matrix-device"),
@@ -1298,8 +1305,14 @@ mod call_signal_tests {
             upload_dir: Path::new("/tmp").to_path_buf(),
         };
 
-        let alice = state.db.create_key_user("Alice", "alice", 1).unwrap();
-        let bob = state.db.create_key_user("Bob", "bob", 1).unwrap();
+        let alice = state
+            .db
+            .create_key_user("Alice", "alice_user", "alice", 1)
+            .unwrap();
+        let bob = state
+            .db
+            .create_key_user("Bob", "bob_user", "bob", 1)
+            .unwrap();
 
         state
             .db
@@ -1355,8 +1368,14 @@ mod call_signal_tests {
             upload_dir: Path::new("/tmp").to_path_buf(),
         };
 
-        let alice = state.db.create_key_user("Alice", "alice", 1).unwrap();
-        let bob = state.db.create_key_user("Bob", "bob", 1).unwrap();
+        let alice = state
+            .db
+            .create_key_user("Alice", "alice_user", "alice", 1)
+            .unwrap();
+        let bob = state
+            .db
+            .create_key_user("Bob", "bob_user", "bob", 1)
+            .unwrap();
 
         state
             .db
@@ -1415,8 +1434,14 @@ mod call_signal_tests {
             upload_dir: Path::new("/tmp").to_path_buf(),
         };
 
-        let alice = state.db.create_key_user("Alice", "alice", 1).unwrap();
-        let bob = state.db.create_key_user("Bob", "bob", 1).unwrap();
+        let alice = state
+            .db
+            .create_key_user("Alice", "alice_user", "alice", 1)
+            .unwrap();
+        let bob = state
+            .db
+            .create_key_user("Bob", "bob_user", "bob", 1)
+            .unwrap();
 
         state
             .db
@@ -1472,9 +1497,18 @@ mod call_signal_tests {
             upload_dir: Path::new("/tmp").to_path_buf(),
         };
 
-        let alice = state.db.create_key_user("Alice", "alice", 1).unwrap();
-        let bob = state.db.create_key_user("Bob", "bob", 1).unwrap();
-        let carol = state.db.create_key_user("Carol", "carol", 1).unwrap();
+        let alice = state
+            .db
+            .create_key_user("Alice", "alice_user", "alice", 1)
+            .unwrap();
+        let bob = state
+            .db
+            .create_key_user("Bob", "bob_user", "bob", 1)
+            .unwrap();
+        let carol = state
+            .db
+            .create_key_user("Carol", "carol", "carol", 1)
+            .unwrap();
 
         state
             .db
@@ -1540,8 +1574,14 @@ mod call_signal_tests {
             upload_dir: Path::new("/tmp").to_path_buf(),
         };
 
-        let alice = state.db.create_key_user("Alice", "alice", 1).unwrap();
-        let bob = state.db.create_key_user("Bob", "bob", 1).unwrap();
+        let alice = state
+            .db
+            .create_key_user("Alice", "alice_user", "alice", 1)
+            .unwrap();
+        let bob = state
+            .db
+            .create_key_user("Bob", "bob_user", "bob", 1)
+            .unwrap();
 
         state
             .db
@@ -1593,8 +1633,14 @@ mod call_signal_tests {
             upload_dir: Path::new("/tmp").to_path_buf(),
         };
 
-        let alice = state.db.create_key_user("Alice", "alice", 1).unwrap();
-        let bob = state.db.create_key_user("Bob", "bob", 1).unwrap();
+        let alice = state
+            .db
+            .create_key_user("Alice", "alice_user", "alice", 1)
+            .unwrap();
+        let bob = state
+            .db
+            .create_key_user("Bob", "bob_user", "bob", 1)
+            .unwrap();
 
         state
             .db
@@ -1648,8 +1694,14 @@ mod call_signal_tests {
             upload_dir: Path::new("/tmp").to_path_buf(),
         };
 
-        let alice = state.db.create_key_user("Alice", "alice", 1).unwrap();
-        let bob = state.db.create_key_user("Bob", "bob", 1).unwrap();
+        let alice = state
+            .db
+            .create_key_user("Alice", "alice_user", "alice", 1)
+            .unwrap();
+        let bob = state
+            .db
+            .create_key_user("Bob", "bob_user", "bob", 1)
+            .unwrap();
 
         state
             .db
@@ -1692,9 +1744,18 @@ mod call_signal_tests {
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
         };
-        let alice = state.db.create_key_user("Alice", "alice", 1).unwrap();
-        let bob = state.db.create_key_user("Bob", "bob", 1).unwrap();
-        let outsider = state.db.create_key_user("Outsider", "outside", 1).unwrap();
+        let alice = state
+            .db
+            .create_key_user("Alice", "alice_user", "alice", 1)
+            .unwrap();
+        let bob = state
+            .db
+            .create_key_user("Bob", "bob_user", "bob", 1)
+            .unwrap();
+        let outsider = state
+            .db
+            .create_key_user("Outsider", "outsider", "outside", 1)
+            .unwrap();
         let group = state
             .db
             .create_group(&alice.id, "Group", std::slice::from_ref(&bob.id))
