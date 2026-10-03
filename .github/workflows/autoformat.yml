@@ -1,0 +1,32 @@
+name: Autoformat Rust
+
+on:
+  push:
+    branches: ["fix/ui-calls-groups-channels"]
+
+permissions:
+  contents: write
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Format
+        run: cargo fmt --all
+      - name: Commit formatting
+        run: |
+          if git diff --quiet; then
+            echo "Already formatted"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/protocol/src/lib.rs crates/server/src/api.rs crates/server/src/db.rs crates/server/src/ws.rs
+          git commit -m "style: rustfmt"
+          git push origin HEAD:${{ github.ref_name }}
