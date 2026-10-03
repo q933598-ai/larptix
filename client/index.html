@@ -77,6 +77,7 @@
           <span id="peer-verified" class="verified-badge" title="Device verified" aria-label="Device verified" hidden>Verified ✓</span>
           <div class="call-actions">
             <button id="peer-profile-open" type="button" class="ghost">Profile</button>
+            <button id="group-members-open" type="button" class="ghost" hidden>Members</button>
             <label class="photo-btn" title="Set a background for this chat">
               <input id="chat-background" type="file" accept="image/jpeg,image/png,image/webp" hidden />
               Background
@@ -88,7 +89,10 @@
         </div>
         <section id="call-stage" class="call-stage" aria-label="Call" hidden>
           <div class="call-dock-heading">
-            <p id="call-status" aria-live="polite">Connecting…</p>
+            <div class="call-heading-copy">
+              <p id="call-status" aria-live="polite">Connecting…</p>
+              <small id="group-call-count" class="group-call-count" hidden></small>
+            </div>
             <button id="call-collapse" type="button" class="ghost" title="Minimize call">−</button>
           </div>
           <p class="call-security-note">WebRTC encrypts media in transit. Device-verified end-to-end encryption is not enabled yet.</p>
@@ -109,6 +113,7 @@
               <option value="high">High, up to 4K 144 fps if supported</option>
             </select>
             <button id="toggle-screen-share" type="button" class="ghost">Share screen</button>
+            <button id="group-call-invite" type="button" class="ghost" hidden>＋ Invite</button>
             <button id="end-call" type="button">End call</button>
           </div>
         </section>
@@ -326,6 +331,18 @@
       </header>
       <p id="gif-empty" class="settings-help">No saved GIFs yet. Save a GIF from any chat message.</p>
       <div id="gif-results" class="gif-results"></div>
+    </dialog>
+
+    <dialog id="group-members-dialog" class="group-members-dialog">
+      <header class="settings-header">
+        <div>
+          <p class="eyebrow">GROUP</p>
+          <h2 id="group-members-title">Group members</h2>
+        </div>
+        <button id="group-members-close" type="button" class="ghost" aria-label="Close group members">×</button>
+      </header>
+      <p id="group-members-help" class="settings-help"></p>
+      <div id="group-members-list" class="group-members-list"></div>
     </dialog>
 
     <dialog id="peer-profile-dialog" class="profile-view-dialog">
