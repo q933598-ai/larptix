@@ -1522,7 +1522,7 @@ async function startGroupCall(kind) {
       });
     }
   } catch (err) {
-    appendSystem("Group call setup failed: " (err.message || "Check camera and microphone permissions."));
+    appendSystem("Group call setup failed: " + (err.message || "Check camera and microphone permissions."));
     endCall(false);
   }
 }
@@ -1742,6 +1742,10 @@ async function handleGroupCallSignal(signal) {
 
 function sendGroupCallSignal(targetId, kind, payload) {
   if (!groupCallGroupId || !groupCallId || !socket || socket.readyState !== WebSocket.OPEN) return;
+  if (targetId !== me?.user_id) {
+    const target = users.find((user) => user.user_id === targetId);
+    if (target && !target.online) return;
+  }
   socket.send(JSON.stringify({
     type: "call_signal",
     peer_id: groupCallGroupId,
@@ -2223,6 +2227,7 @@ function endCall(notifyPeer) {
     }
     groupPeerConnections.clear();
     groupPendingIceCandidates.clear();
+    groupCallJoinedMembers.clear();
     groupCallId = null;
     groupCallGroupId = null;
     groupCallMemberIds = [];
