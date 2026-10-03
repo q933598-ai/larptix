@@ -2567,7 +2567,7 @@ html[data-theme="catppuccin-latte"] .saved-messages-dialog {
   padding-top: 4px;
 }
 .music-window-title {
-  display: none;
+  display: flex;
 }
 
 /* Persistent group-call indicator */
