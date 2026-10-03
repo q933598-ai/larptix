@@ -4966,7 +4966,7 @@ async function encryptAttachment(file) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, await file.arrayBuffer());
   const gifId = file.type === "image/gif"
-    ? (file.larptrixGifId || await blobSha256(file))
+    ? await blobSha256(file)
     : null;
   return {
     file: new File([ciphertext], `${file.name}.encrypted`, { type: "application/octet-stream" }),
@@ -5119,7 +5119,6 @@ async function renderGifFavorites() {
         const file = new File([favorite.blob], favorite.name || "saved.gif", {
           type: favorite.mime || favorite.blob.type || "image/gif",
         });
-        file.larptrixGifId = favorite.gif_id;
         queueAttachment(file);
         gifDialog.close();
       });
