@@ -49,7 +49,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/groups", get(list_groups).post(create_group))
         .route("/api/groups/{id}/members", post(add_group_member))
         .route("/api/channels", post(create_channel))
-        .route("/api/channels/{id}/admins", post(add_channel_admin))
+        .route("/api/channels/{id}/admins", post(add_channel_admin).delete(remove_channel_admin))
         .route("/api/channels/{id}/settings", patch(update_channel_settings))
         .route("/api/me/access-key", post(create_access_key))
         .route(
@@ -1427,6 +1427,28 @@ async fn add_channel_admin(
         return Err(ApiError::bad("the new admin must already be a channel member"));
     }
     state.db.add_channel_admin(&id, &body.user_id).map_err(ApiError::from_db)?;
+    Ok(Json(serde_json::json!({ "ok": true, "channel_id": id, "user_id": body.user_id })))
+}
+
+async fn remove_channel_admin(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<AddChannelAdminBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let channel = state.db.group(&id).map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::not_found("channel not found"))?;
+    if !channel.is_channel || !channel.admin_ids.iter().any(|admin| admin == &user.id) {
+        return Err(ApiError::bad("only channel admins can manage admins"));
+    }
+    if body.user_id == channel.admin_ids.first().map(String::as_str).unwrap_or("") {
+        return Err(ApiError::bad("the channel creator must remain an admin"));
+    }
+    if body.user_id == user.id && channel.admin_ids.len() <= 1 {
+        return Err(ApiError::bad("the channel must keep at least one admin"));
+    }
+    state.db.remove_channel_admin(&id, &body.user_id).map_err(ApiError::from_db)?;
     Ok(Json(serde_json::json!({ "ok": true, "channel_id": id, "user_id": body.user_id })))
 }
 
