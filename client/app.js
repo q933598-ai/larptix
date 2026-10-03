@@ -1119,7 +1119,7 @@ mobileChats?.addEventListener("click", () => {
 });
 mobileSaved?.addEventListener("click", () => {
   document.body.classList.remove("mobile-people-visible");
-  openSavedMessages();
+  openSavedMessagesChat();
 });
 mobileMusic?.addEventListener("click", () => {
   document.body.classList.remove("mobile-people-visible");
@@ -3566,57 +3566,77 @@ function appendMessage(message) {
   const li = document.createElement("li");
   li.dataset.messageId = message.id;
   if (me && message.sender_id === me.user_id) li.classList.add("me");
+
   const meta = document.createElement("div");
   meta.className = "meta";
   meta.textContent = (message.sender_name || "Larptrix user") + " · " + new Date(message.created_at).toLocaleTimeString();
   li.append(meta);
 
-  const body = document.createElement("div");
   let encryptedBodyElement = null;
+  let messageBodyForSave = null;
   if (message.body) {
+    const body = document.createElement("div");
     const envelope = parseCryptoEnvelope(message.body);
     if (envelope) {
       body.textContent = "Encrypted message";
       encryptedBodyElement = body;
     } else {
-      body.textContent = cryptoEnabled ? "⚠️ Legacy message (not end-to-end encrypted): " + message.body : message.body;
+      body.textContent = cryptoEnabled
+        ? "⚠️ Legacy message (not end-to-end encrypted): " + message.body
+        : message.body;
     }
     li.append(body);
+    messageBodyForSave = body;
   }
 
   const actions = document.createElement("div");
   actions.className = "message-actions";
+
   const reply = document.createElement("button");
   reply.type = "button";
   reply.className = "ghost";
   reply.textContent = "Reply";
+  reply.title = "Reply to this message";
   reply.addEventListener("click", () => setReplyComposer(message));
+  actions.append(reply);
+
   const forward = document.createElement("button");
   forward.type = "button";
   forward.className = "ghost";
   forward.textContent = "Forward";
+  forward.title = "Forward this message";
   forward.addEventListener("click", () => void openForwardDialog(message));
-  actions.append(reply, forward);
+  actions.append(forward);
 
   if (me && message.sender_id === me.user_id) {
-    const del = document.createElement("button");
-    del.type = "button";
-    del.className = "ghost message-delete-button";
-    del.textContent = "Delete";
-    del.addEventListener("click", () => {
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "ghost message-delete-button";
+    deleteButton.textContent = "Delete";
+    deleteButton.title = "Delete this message for everyone";
+    deleteButton.addEventListener("click", () => {
       if (!window.confirm("Delete this message for everyone?")) return;
-      del.disabled = true;
-      socket?.send(JSON.stringify({ type: "delete", peer_id: message.recipient_id, message_id: message.id }));
+      deleteButton.disabled = true;
+      socket?.send(JSON.stringify({
+        type: "delete",
+        peer_id: message.recipient_id,
+        message_id: message.id,
+      }));
     });
-    actions.append(del);
+    actions.append(deleteButton);
   }
 
-  const save = document.createElement("button");
-  save.type = "button";
-  save.className = "ghost";
-  save.textContent = "☆ Save";
-  save.addEventListener("click", () => void toggleSavedMessage(message, body.textContent || ""));
-  actions.append(save);
+  if (messageBodyForSave) {
+    const saveButton = document.createElement("button");
+    saveButton.type = "button";
+    saveButton.className = "ghost";
+    saveButton.textContent = "☆ Save";
+    saveButton.title = "Save this message";
+    saveButton.addEventListener("click", () => {
+      void toggleSavedMessage(message, messageBodyForSave.textContent || "");
+    });
+    actions.append(saveButton);
+  }
 
   if (message.attachment && !parseCryptoEnvelope(message.body)) {
     if (message.attachment.mime.startsWith("image/")) {
@@ -3624,7 +3644,16 @@ function appendMessage(message) {
       img.className = "photo";
       img.src = message.attachment.url;
       img.alt = message.attachment.name;
+      img.tabIndex = 0;
+      img.setAttribute("role", "button");
+      img.title = "Open image";
       img.addEventListener("click", () => openImageViewer(img.src, img.alt));
+      img.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openImageViewer(img.src, img.alt);
+        }
+      });
       li.append(img);
     } else if (message.attachment.mime.startsWith("audio/")) {
       const audio = document.createElement("audio");
@@ -3646,7 +3675,36 @@ function appendMessage(message) {
 
   if (encryptedBodyElement) {
     messageBodyElementsById.set(message.id, encryptedBodyElement);
-    void displayEncryptedMessage(message, encryptedBodyElement);
+
+    let effectiveMessage = message;
+    const queuedResponse = cryptoRecoveryResponsesByMessageId.get(message.id);
+    if (queuedResponse) {
+      effectiveMessage =
+        mergeCryptoRecoveryResponse(message, queuedResponse)
+        || (
+          parseCryptoEnvelope(message.body)?.version === 1
+            ? { ...message, body: queuedResponse.ciphertext }
+            : message
+        );
+      if (effectiveMessage !== message) cryptoRecoveryResponsesByMessageId.delete(message.id);
+    }
+
+    const recoveredBody = recoveredBodiesByMessageId.get(message.id);
+    if (recoveredBody) {
+      effectiveMessage = { ...effectiveMessage, body: recoveredBody };
+      recoveredBodiesByMessageId.delete(message.id);
+    }
+
+    void displayEncryptedMessage(effectiveMessage, encryptedBodyElement).then((ok) => {
+      if (ok && queuedResponse) {
+        socket?.send(JSON.stringify({
+          type: "crypto_resync_response_ack",
+          peer_id: queuedResponse.sender_id,
+          message_id: message.id,
+          device_id: queuedResponse.device_id,
+        }));
+      }
+    });
   }
   logEl.scrollTop = logEl.scrollHeight;
 }
