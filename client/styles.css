@@ -1933,3 +1933,276 @@ body.menu-open {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+
+/* Floating Music Library window */
+#music-library {
+  position: fixed;
+  z-index: 40;
+  right: 24px;
+  bottom: 24px;
+  width: min(640px, 92vw);
+  height: min(720px, 82vh);
+  max-height: none;
+  min-height: 360px;
+  flex: none;
+  border: 1px solid var(--line-bright);
+  border-radius: 14px;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 60%);
+  overflow: hidden;
+  resize: both;
+}
+
+#music-library:not([hidden]) {
+  display: flex;
+}
+
+.music-library-drag-area {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.music-library-drag-area.dragging {
+  cursor: grabbing;
+}
+
+.music-library-drag-handle {
+  width: 30px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 1.35rem;
+  letter-spacing: -0.25em;
+}
+
+.music-window-close {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  font-size: 1.2rem;
+}
+
+.music-library-header {
+  padding: 18px 20px 14px;
+}
+
+.music-library-content {
+  padding: 0 20px 110px;
+}
+
+@media (max-width: 700px) {
+  #music-library {
+    right: 8px;
+    bottom: 8px;
+    width: calc(100vw - 16px);
+    height: min(680px, 84vh);
+  }
+}
+
+/* Larger Discord-like call window */
+.call-stage {
+  z-index: 50;
+  right: 24px;
+  bottom: 24px;
+  width: min(920px, 74vw);
+  height: min(760px, 80vh);
+  max-height: none;
+  padding: 16px 18px;
+  border-radius: 14px;
+  gap: 14px;
+  box-shadow: 0 28px 90px rgb(0 0 0 / 68%);
+}
+
+.call-stage .call-videos {
+  min-height: 360px;
+  max-height: none;
+  width: 100%;
+  flex: 1 1 auto;
+  border-radius: 12px;
+}
+
+.call-stage .call-controls {
+  gap: 10px;
+  padding: 4px 0 0;
+}
+
+.call-stage .call-controls button {
+  min-height: 42px;
+  padding: 10px 14px;
+  border-radius: 10px;
+}
+
+.call-stage .call-controls select {
+  min-height: 42px;
+  border-radius: 10px;
+}
+
+#group-remotes:not([hidden]) {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+  padding: 8px;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+}
+
+#group-remotes .group-video-tile {
+  position: relative;
+  min-height: 180px;
+  background: #050506;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+#group-remotes .group-video-tile video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 180px;
+  object-fit: contain;
+  background: #050506;
+}
+
+@media (max-width: 1100px) {
+  .call-stage {
+    right: 12px;
+    bottom: 12px;
+    width: min(760px, calc(100vw - 24px));
+    height: min(720px, 78vh);
+  }
+}
+
+@media (max-width: 640px) {
+  .call-stage {
+    right: 8px;
+    bottom: 8px;
+    width: calc(100vw - 16px);
+    height: min(680px, 82vh);
+  }
+  .call-stage .call-videos {
+    min-height: 250px;
+  }
+}
+
+/* KLIPY GIF search */
+.gif-dialog {
+  width: min(760px, 94vw);
+  max-width: none;
+  padding: 20px;
+}
+
+.gif-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.gif-dialog-header h2 {
+  margin-top: 2px;
+  font-size: 1.35rem;
+}
+
+.gif-dialog-header > button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  font-size: 1.25rem;
+}
+
+.gif-attribution {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: .75rem;
+}
+
+.gif-search-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin: 16px 0 9px;
+}
+
+.gif-search-form input {
+  min-width: 0;
+}
+
+.gif-search-status {
+  min-height: 1.2em;
+}
+
+.gif-results {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  max-height: 55vh;
+  overflow: auto;
+  padding: 4px;
+}
+
+.gif-result {
+  aspect-ratio: 1.25;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  border-radius: 8px;
+}
+
+.gif-result:hover {
+  border-color: var(--accent);
+}
+
+.gif-result img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.gif-load-more {
+  display: block;
+  margin: 12px auto 0;
+}
+
+.gif-attachment {
+  margin: 8px 0 0;
+  max-width: min(480px, 100%);
+}
+
+.gif-attachment img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.gif-attachment a {
+  display: inline-block;
+  margin-top: 5px;
+  font-size: .72rem;
+  color: var(--muted);
+}
+
+.gif-preview {
+  width: 86px;
+  height: 62px;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+@media (max-width: 620px) {
+  .gif-results {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
