@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::db::{CryptoResyncRequestRow, CryptoResyncResponseRow, DbError, UserRow};
 use crate::hub::Outbound;
 use crate::now_ms;
-use crate::AppState;
+use crate::{ActiveGroupCall, AppState};
 
 pub async fn handle_socket(
     socket: WebSocket,
@@ -45,6 +45,23 @@ pub async fn handle_socket(
     state
         .hub
         .join(user_id, user.display_name.clone(), tx.clone());
+    {
+        let status = {
+            let mut presence = state.presence.lock().expect("presence lock");
+            let status = presence.entry(user.id.clone()).or_insert_with(|| "online".to_string()).clone();
+            for (id, value) in presence.iter() {
+                let _ = tx.send(ServerMessage::Presence {
+                    user_id: id.clone(),
+                    status: value.clone(),
+                });
+            }
+            status
+        };
+        state.hub.broadcast(ServerMessage::Presence {
+            user_id: user.id.clone(),
+            status,
+        });
+    }
     let _ = tx.send(ServerMessage::Welcome {
         user: me_info(&state, &user),
         users: directory(&state, &user.id),
@@ -61,6 +78,7 @@ pub async fn handle_socket(
         })
         .collect();
     let _ = tx.send(ServerMessage::Groups { groups });
+    send_active_group_calls(&state, &user.id, &tx);
     if let Ok(events) = state.db.matrix_to_device_for_user(&user.id) {
         for event in events {
             let content = serde_json::from_str::<serde_json::Value>(&event.content_json)
@@ -102,6 +120,20 @@ pub async fn handle_socket(
                 Ok(ClientMessage::Ping) => {
                     tracing::debug!(user_id = %user.id, "websocket heartbeat");
                     let _ = tx.send(ServerMessage::Pong);
+                }
+                Ok(ClientMessage::SetPresence { status }) => {
+                    if !matches!(status.as_str(), "online" | "dnd" | "invisible") {
+                        send_error(&tx, "bad_presence", "unsupported presence status");
+                    } else {
+                        {
+                            let mut presence = state.presence.lock().expect("presence lock");
+                            presence.insert(user.id.clone(), status.clone());
+                        }
+                        state.hub.broadcast(ServerMessage::Presence {
+                            user_id: user.id.clone(),
+                            status,
+                        });
+                    }
                 }
                 Ok(ClientMessage::Open { peer_id }) => {
                     if let Err(err) = open_chat(&state, &tx, &user, &peer_id) {
@@ -188,12 +220,94 @@ pub async fn handle_socket(
     }
 
     state.hub.leave(user_id, &tx);
+    let went_offline = !state.hub.online_ids().iter().any(|id| id == &user.id);
+    if went_offline {
+        let mut group_updates = Vec::new();
+        let mut group_ended = Vec::new();
+        {
+            let mut calls = state.group_calls.lock().expect("group call lock");
+            let group_ids: Vec<String> = calls.keys().cloned().collect();
+            for group_id in group_ids {
+                let Some(call) = calls.get_mut(&group_id) else { continue; };
+                if call.initiator_id == user.id {
+                    let ended_call = call.clone();
+                    calls.remove(&group_id);
+                    group_ended.push((group_id, ended_call));
+                } else if call.participant_ids.iter().any(|id| id == &user.id) {
+                    call.participant_ids.retain(|id| id != &user.id);
+                    group_updates.push((group_id.clone(), call.clone()));
+                }
+            }
+        }
+        for (group_id, call) in group_updates {
+            let update = ServerMessage::GroupCallState {
+                group_id: group_id.clone(),
+                call_id: call.call_id,
+                media: call.media,
+                initiator_id: call.initiator_id,
+                participant_ids: call.participant_ids,
+                active: true,
+            };
+            if let Ok(Some(group)) = state.db.group(&group_id) {
+                for member_id in &group.member_ids {
+                    if let Ok(member) = Uuid::parse_str(member_id) {
+                        state.hub.send_to(member, update.clone());
+                    }
+                }
+            }
+        }
+        for (group_id, call) in group_ended {
+            let ended = ServerMessage::GroupCallState {
+                group_id: group_id.clone(),
+                call_id: call.call_id,
+                media: call.media,
+                initiator_id: call.initiator_id,
+                participant_ids: Vec::new(),
+                active: false,
+            };
+            if let Ok(Some(group)) = state.db.group(&group_id) {
+                for member_id in &group.member_ids {
+                    if let Ok(member) = Uuid::parse_str(member_id) {
+                        state.hub.send_to(member, ended.clone());
+                    }
+                }
+            }
+        }
+        state.presence.lock().expect("presence lock").remove(&user.id);
+        state.hub.broadcast(ServerMessage::Presence {
+            user_id: user.id.clone(),
+            status: "offline".to_string(),
+        });
+    }
     drop(tx);
     state.hub.broadcast(ServerMessage::Directory {
         users: directory(&state, ""),
     });
     tracing::info!(user_id = %user.id, "disconnected");
     let _ = writer.await;
+}
+
+fn send_active_group_calls(state: &AppState, user_id: &str, tx: &Outbound) {
+    let calls = state.group_calls.lock().expect("group call lock");
+    for (group_id, call) in calls.iter() {
+        let is_member = state
+            .db
+            .group(group_id)
+            .ok()
+            .flatten()
+            .is_some_and(|group| group.member_ids.iter().any(|id| id == user_id));
+        if !is_member {
+            continue;
+        }
+        let _ = tx.send(ServerMessage::GroupCallState {
+            group_id: group_id.clone(),
+            call_id: call.call_id.clone(),
+            media: call.media.clone(),
+            initiator_id: call.initiator_id.clone(),
+            participant_ids: call.participant_ids.clone(),
+            active: true,
+        });
+    }
 }
 
 fn send_crypto_resync_request(tx: &Outbound, request: CryptoResyncRequestRow) {
@@ -462,7 +576,7 @@ fn relay_call_signal(
 ) -> Result<(), String> {
     if !matches!(
         kind,
-        "offer" | "answer" | "ice_candidate" | "hangup" | "reject" | "group_invite" | "group_join"
+        "offer" | "answer" | "ice_candidate" | "hangup" | "reject" | "group_invite" | "group_join" | "group_end"
     ) {
         return Err("unsupported call signal".into());
     }
@@ -482,6 +596,45 @@ fn relay_call_signal(
             return Err("not a member of this group".into());
         }
 
+        if kind == "group_end" {
+            let call_id = payload
+                .get("call_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "group call signal is missing call id".to_string())?;
+            let should_end = {
+                let calls = state.group_calls.lock().expect("group call lock");
+                calls
+                    .get(peer_id)
+                    .is_some_and(|call| call.call_id == call_id && call.initiator_id == user.id)
+            };
+            if !should_end {
+                return Err("only the active group call initiator can end the call".into());
+            }
+            let media = payload
+                .get("media")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("audio")
+                .to_string();
+            {
+                let mut calls = state.group_calls.lock().expect("group call lock");
+                calls.remove(peer_id);
+            }
+            let ended = ServerMessage::GroupCallState {
+                group_id: peer_id.to_string(),
+                call_id: call_id.to_string(),
+                media,
+                initiator_id: user.id.clone(),
+                participant_ids: Vec::new(),
+                active: false,
+            };
+            for member_id in &group.member_ids {
+                if let Ok(member) = Uuid::parse_str(member_id) {
+                    state.hub.send_to(member, ended.clone());
+                }
+            }
+            return Ok(());
+        }
+
         let object = payload
             .as_object_mut()
             .ok_or_else(|| "group call signal payload must be an object".to_string())?;
@@ -496,6 +649,77 @@ fn relay_call_signal(
         }
         if !group.member_ids.iter().any(|member| member == target_id) {
             return Err("group call target is not a member".into());
+        }
+
+        match kind {
+            "group_invite" => {
+                let call_id = payload
+                    .get("call_id")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| "group call signal is missing call id".to_string())?;
+                let media = payload
+                    .get("media")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("audio");
+                let mut calls = state.group_calls.lock().expect("group call lock");
+                let call = calls.entry(peer_id.to_string()).or_insert_with(|| ActiveGroupCall {
+                    call_id: call_id.to_string(),
+                    media: media.to_string(),
+                    initiator_id: user.id.clone(),
+                    participant_ids: vec![user.id.clone()],
+                });
+                if call.call_id != call_id {
+                    return Err("another group call is already active".into());
+                }
+            }
+            "group_join" => {
+                if let Some(call_id) = payload.get("call_id").and_then(serde_json::Value::as_str) {
+                    let mut calls = state.group_calls.lock().expect("group call lock");
+                    if let Some(call) = calls.get_mut(peer_id) {
+                        if call.call_id != call_id {
+                            return Err("group call id does not match active call".into());
+                        }
+                        if !call.participant_ids.iter().any(|id| id == &user.id) {
+                            call.participant_ids.push(user.id.clone());
+                        }
+                    }
+                }
+            }
+            "hangup" | "reject" => {
+                if let Some(call_id) = payload.get("call_id").and_then(serde_json::Value::as_str) {
+                    let mut calls = state.group_calls.lock().expect("group call lock");
+                    if let Some(call) = calls.get_mut(peer_id) {
+                        if call.call_id == call_id {
+                            call.participant_ids.retain(|id| id != &user.id);
+                            let empty = call.participant_ids.is_empty();
+                            if empty {
+                                calls.remove(peer_id);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        let state_snapshot = {
+            let calls = state.group_calls.lock().expect("group call lock");
+            calls.get(peer_id).cloned()
+        };
+        if let Some(call) = state_snapshot {
+            let update = ServerMessage::GroupCallState {
+                group_id: peer_id.to_string(),
+                call_id: call.call_id,
+                media: call.media,
+                initiator_id: call.initiator_id,
+                participant_ids: call.participant_ids,
+                active: true,
+            };
+            for member_id in &group.member_ids {
+                if let Ok(member) = Uuid::parse_str(member_id) {
+                    state.hub.send_to(member, update.clone());
+                }
+            }
         }
 
         let target = state
@@ -1181,6 +1405,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
         let caller = state
             .db
@@ -1258,6 +1484,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
 
         let alice = state
@@ -1334,6 +1562,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
 
         let alice = state
@@ -1397,6 +1627,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
 
         let alice = state
@@ -1463,6 +1695,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
 
         let alice = state
@@ -1526,6 +1760,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
 
         let alice = state
@@ -1603,6 +1839,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
 
         let alice = state
@@ -1662,6 +1900,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
 
         let alice = state
@@ -1723,6 +1963,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
 
         let alice = state
@@ -1774,6 +2016,8 @@ mod call_signal_tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("/tmp").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
         let alice = state
             .db

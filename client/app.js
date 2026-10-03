@@ -112,6 +112,7 @@ const menuUsername = document.getElementById("menu-username");
 const menuServer = document.getElementById("menu-server");
 const menuChats = document.getElementById("menu-chats");
 const menuMusic = document.getElementById("menu-music");
+const menuSaved = document.getElementById("menu-saved");
 const menuNewGroup = document.getElementById("menu-new-group");
 const menuSettings = document.getElementById("menu-settings");
 const settingsDialog = document.getElementById("settings-dialog");
@@ -121,6 +122,34 @@ const settingsUsername = document.getElementById("settings-username");
 const settingsE2eStatus = document.getElementById("settings-e2e-status");
 const settingsE2eFingerprint = document.getElementById("settings-e2e-fingerprint");
 const settingsLayoutStatus = document.getElementById("settings-layout-status");
+const settingsTheme = document.getElementById("settings-theme");
+const customThemeEditor = document.getElementById("custom-theme-editor");
+const themeBg = document.getElementById("theme-bg");
+const themePanel = document.getElementById("theme-panel");
+const themeText = document.getElementById("theme-text");
+const themeMuted = document.getElementById("theme-muted");
+const themeAccent = document.getElementById("theme-accent");
+const themeMe = document.getElementById("theme-me");
+const themeSaveCustom = document.getElementById("theme-save-custom");
+const settingsPresence = document.getElementById("settings-presence");
+const settingsCallSounds = document.getElementById("settings-call-sounds");
+const settingsMessageSounds = document.getElementById("settings-message-sounds");
+const settingsNoiseSuppression = document.getElementById("settings-noise-suppression");
+const mobileChats = document.getElementById("mobile-chats");
+const mobileSaved = document.getElementById("mobile-saved");
+const mobileMusic = document.getElementById("mobile-music");
+const mobileSettings = document.getElementById("mobile-settings");
+const savedMessagesDialog = document.getElementById("saved-messages-dialog");
+const savedMessagesClose = document.getElementById("saved-messages-close");
+const savedMessagesList = document.getElementById("saved-messages-list");
+const savedMessagesEmpty = document.getElementById("saved-messages-empty");
+const groupCallStart = document.getElementById("group-call-start");
+const groupCallBanner = document.getElementById("group-call-banner");
+const groupCallBannerTitle = document.getElementById("group-call-banner-title");
+const groupCallBannerMeta = document.getElementById("group-call-banner-meta");
+const groupCallJoin = document.getElementById("group-call-join");
+const callWindowTitle = document.getElementById("call-window-title");
+const callRingtone = document.getElementById("call-ringtone");
 const groupMembersOpen = document.getElementById("group-members-open");
 const groupMembersDialog = document.getElementById("group-members-dialog");
 const groupMembersClose = document.getElementById("group-members-close");
@@ -271,7 +300,256 @@ let groupCallGroupId = null;
 let groupCallMemberIds = [];
 const groupCallJoinedMembers = new Set();
 const groupPeerConnections = new Map();
+const activeGroupCalls = new Map();
+const presenceByUserId = new Map();
+let groupCallInitiatorId = null;
+let groupCallWindowDragging = false;
+let groupCallWindowDragOffsetX = 0;
+let groupCallWindowDragOffsetY = 0;
 const groupPendingIceCandidates = new Map();
+
+const THEME_KEY = "larptrix_theme";
+const CUSTOM_THEME_KEY = "larptrix_custom_theme";
+const PRESENCE_KEY = "larptrix_presence";
+const CALL_SOUND_KEY = "larptrix_call_sounds";
+const MESSAGE_SOUND_KEY = "larptrix_message_sounds";
+const NOISE_SUPPRESSION_KEY = "larptrix_noise_suppression";
+const SAVED_MESSAGES_KEY = "larptrix_saved_messages_v1";
+function savedMessagesKey() {
+  return me ? SAVED_MESSAGES_KEY + "_" + me.user_id : SAVED_MESSAGES_KEY;
+}
+
+function readStoredBool(key, fallback = true) {
+  const value = localStorage.getItem(key);
+  return value === null ? fallback : value === "1";
+}
+
+function applyTheme(name = localStorage.getItem(THEME_KEY) || "larptrix") {
+  const root = document.documentElement;
+  root.dataset.theme = name;
+  if (name === "custom") {
+    try {
+      const custom = JSON.parse(localStorage.getItem(CUSTOM_THEME_KEY) || "null");
+      for (const [key, value] of Object.entries(custom || {})) {
+        if (typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)) root.style.setProperty("--" + key, value);
+      }
+    } catch {}
+  } else {
+    for (const key of ["bg", "panel", "panel-2", "panel-3", "line", "line-bright", "text", "muted", "accent", "accent-strong", "me", "danger"]) {
+      root.style.removeProperty("--" + key);
+    }
+  }
+  localStorage.setItem(THEME_KEY, name);
+}
+
+function loadThemeEditor() {
+  let custom = null;
+  try { custom = JSON.parse(localStorage.getItem(CUSTOM_THEME_KEY) || "null"); } catch {}
+  custom = custom || {
+    bg: "#050b08", panel: "#08130e", "panel-2": "#0b1912", text: "#d7f3df", muted: "#6f9b7e",
+    accent: "#35d47a", me: "#0d3020",
+  };
+  themeBg.value = custom.bg || "#050b08";
+  themePanel.value = custom.panel || "#08130e";
+  themeText.value = custom.text || "#d7f3df";
+  themeMuted.value = custom.muted || "#6f9b7e";
+  themeAccent.value = custom.accent || "#35d47a";
+  themeMe.value = custom.me || "#0d3020";
+}
+
+function saveCustomTheme() {
+  const custom = {
+    bg: themeBg.value,
+    panel: themePanel.value,
+    "panel-2": themePanel.value,
+    "panel-3": themePanel.value,
+    line: mixThemeColor(themePanel.value, themeText.value, 0.16),
+    "line-bright": mixThemeColor(themePanel.value, themeAccent.value, 0.34),
+    text: themeText.value,
+    muted: themeMuted.value,
+    accent: themeAccent.value,
+    "accent-strong": themeAccent.value,
+    me: themeMe.value,
+    danger: "#ef6d73",
+  };
+  localStorage.setItem(CUSTOM_THEME_KEY, JSON.stringify(custom));
+  localStorage.setItem(THEME_KEY, "custom");
+  applyTheme("custom");
+  settingsTheme.value = "custom";
+}
+
+function mixThemeColor(a, b, amount) {
+  const parse = (value) => [1, 3, 5].map((i) => parseInt(value.slice(i, i + 2), 16));
+  const ca = parse(a);
+  const cb = parse(b);
+  return "#" + ca.map((v, i) => Math.round(v + (cb[i] - v) * amount).toString(16).padStart(2, "0")).join("");
+}
+
+function getPresence(user) {
+  if (!user) return "offline";
+  const status = presenceByUserId.get(user.user_id);
+  if (!user.online) return "offline";
+  return status === "dnd" || status === "invisible" || status === "online" ? status : "online";
+}
+
+function renderPresenceStatus(status) {
+  const value = status || "offline";
+  statusEl.textContent = value === "dnd" ? "Do Not Disturb" : value === "invisible" ? "Invisible" : value;
+  statusEl.classList.toggle("online", value === "online");
+  statusEl.classList.toggle("dnd", value === "dnd");
+}
+
+function setPresence(status) {
+  const value = ["online", "dnd", "invisible"].includes(status) ? status : "online";
+  localStorage.setItem(PRESENCE_KEY, value);
+  presenceByUserId.set(me?.user_id || "", value);
+  renderPresenceStatus(value);
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: "set_presence", status: value }));
+  }
+}
+
+function playIncomingMessageSound() {
+  if (!readStoredBool(MESSAGE_SOUND_KEY, true) || localStorage.getItem(PRESENCE_KEY) === "dnd") return;
+  try {
+    const context = new AudioContext();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.frequency.value = 880;
+    oscillator.type = "sine";
+    gain.gain.setValueAtTime(0.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.07, context.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.11);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.12);
+    setTimeout(() => context.close().catch(() => {}), 250);
+  } catch {}
+}
+
+function startCallRingtone() {
+  if (!readStoredBool(CALL_SOUND_KEY, true) || localStorage.getItem(PRESENCE_KEY) === "dnd") return;
+  if (!callRingtone) return;
+  callRingtone.currentTime = 0;
+  callRingtone.loop = true;
+  callRingtone.play().catch(() => {});
+}
+
+function stopCallRingtone() {
+  if (!callRingtone) return;
+  callRingtone.pause();
+  callRingtone.currentTime = 0;
+}
+
+async function getSavedMessages() {
+  if (!cryptoRecoveryKey) return [];
+  try {
+    const raw = localStorage.getItem(savedMessagesKey());
+    if (!raw) return [];
+    const record = JSON.parse(raw);
+    const key = await sentPlaintextCacheKey();
+    if (!key || !record?.iv || !record?.ciphertext) return [];
+    const plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: new Uint8Array(record.iv) },
+      key,
+      new Uint8Array(record.ciphertext),
+    );
+    const parsed = JSON.parse(new TextDecoder().decode(plaintext));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function setSavedMessages(items) {
+  if (!cryptoRecoveryKey) return;
+  const key = await sentPlaintextCacheKey();
+  if (!key) return;
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    new TextEncoder().encode(JSON.stringify(items)),
+  );
+  localStorage.setItem(savedMessagesKey(), JSON.stringify({
+    iv: Array.from(iv),
+    ciphertext: Array.from(new Uint8Array(encrypted)),
+  }));
+}
+
+async function toggleSavedMessage(message, textValue) {
+  if (!cryptoRecoveryKey) {
+    appendSystem("Unlock E2E before saving messages.");
+    return;
+  }
+  if (!textValue || textValue === "Encrypted message" || textValue.startsWith("Could not decrypt")) {
+    appendSystem("Wait for the message to decrypt before saving it.");
+    return;
+  }
+  const items = await getSavedMessages();
+  const index = items.findIndex((item) => item.id === message.id);
+  if (index >= 0) {
+    items.splice(index, 1);
+  } else {
+    const peer = message.sender_id === me?.user_id ? message.recipient_id : message.sender_id;
+    items.unshift({
+      id: message.id,
+      peer_id: peer,
+      sender_id: message.sender_id,
+      sender_name: message.sender_name,
+      text: textValue,
+      created_at: message.created_at,
+    });
+  }
+  await setSavedMessages(items.slice(0, 500));
+  await renderSavedMessages();
+}
+
+async function renderSavedMessages() {
+  if (!savedMessagesList || !savedMessagesEmpty) return;
+  const items = await getSavedMessages();
+  savedMessagesList.replaceChildren();
+  savedMessagesEmpty.hidden = items.length > 0;
+  for (const item of items) {
+    const row = document.createElement("article");
+    row.className = "saved-message-row";
+    const meta = document.createElement("span");
+    meta.className = "saved-message-meta";
+    meta.textContent = item.sender_name + " · " + new Date(item.created_at).toLocaleString();
+    const text = document.createElement("p");
+    text.textContent = item.text;
+    const actions = document.createElement("div");
+    actions.className = "saved-message-actions";
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "ghost";
+    open.textContent = "Open chat";
+    open.addEventListener("click", () => {
+      savedMessagesDialog?.close();
+      if (item.peer_id) openChat(item.peer_id);
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ghost";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", async () => {
+      const next = (await getSavedMessages()).filter((entry) => entry.id !== item.id);
+      await setSavedMessages(next);
+      await renderSavedMessages();
+    });
+    actions.append(open, remove);
+    row.append(meta, text, actions);
+    savedMessagesList.append(row);
+  }
+}
+
+function openSavedMessages() {
+  closeAppMenu();
+  void renderSavedMessages();
+  savedMessagesDialog?.showModal();
+}
+
+applyTheme();
 
 function closeAppMenu() {
   appMenu.hidden = true;
@@ -318,6 +596,13 @@ function openSettings() {
       : "E2E is enabled, but this device is locked.";
   settingsE2eFingerprint.hidden = !cryptoDeviceBundle?.fingerprint;
   settingsE2eFingerprint.textContent = cryptoDeviceBundle?.fingerprint || "";
+  settingsTheme.value = localStorage.getItem(THEME_KEY) || "larptrix";
+  loadThemeEditor();
+  customThemeEditor.hidden = settingsTheme.value !== "custom";
+  settingsPresence.value = localStorage.getItem(PRESENCE_KEY) || "online";
+  settingsCallSounds.checked = readStoredBool(CALL_SOUND_KEY, true);
+  settingsMessageSounds.checked = readStoredBool(MESSAGE_SOUND_KEY, true);
+  settingsNoiseSuppression.checked = readStoredBool(NOISE_SUPPRESSION_KEY, true);
   settingsLayoutStatus.textContent = "";
   settingsDialog.showModal();
   closeAppMenu();
@@ -383,6 +668,34 @@ document.getElementById("settings-open-profile-e2e").addEventListener("click", (
   setTimeout(() => enableE2eButton.click(), 0);
 });
 document.getElementById("settings-reset-layout").addEventListener("click", resetChatListWidth);
+settingsTheme.addEventListener("change", () => {
+  customThemeEditor.hidden = settingsTheme.value !== "custom";
+  if (settingsTheme.value === "custom") loadThemeEditor();
+  applyTheme(settingsTheme.value);
+});
+themeSaveCustom.addEventListener("click", saveCustomTheme);
+settingsPresence.addEventListener("change", () => setPresence(settingsPresence.value));
+settingsCallSounds.addEventListener("change", () => localStorage.setItem(CALL_SOUND_KEY, settingsCallSounds.checked ? "1" : "0"));
+settingsMessageSounds.addEventListener("change", () => localStorage.setItem(MESSAGE_SOUND_KEY, settingsMessageSounds.checked ? "1" : "0"));
+settingsNoiseSuppression.addEventListener("change", () => localStorage.setItem(NOISE_SUPPRESSION_KEY, settingsNoiseSuppression.checked ? "1" : "0"));
+menuSaved?.addEventListener("click", openSavedMessages);
+savedMessagesClose?.addEventListener("click", () => savedMessagesDialog.close());
+mobileChats?.addEventListener("click", () => {
+  document.getElementById("chat-view-open").click();
+  document.body.classList.toggle("mobile-people-visible");
+});
+mobileSaved?.addEventListener("click", () => {
+  document.body.classList.remove("mobile-people-visible");
+  openSavedMessages();
+});
+mobileMusic?.addEventListener("click", () => {
+  document.body.classList.remove("mobile-people-visible");
+  window.larptixMusicLibrary?.toggle?.();
+});
+mobileSettings?.addEventListener("click", () => {
+  document.body.classList.remove("mobile-people-visible");
+  openSettings();
+});
 
 tabLogin.addEventListener("click", () => setMode("login"));
 tabRegister.addEventListener("click", () => setMode("register"));
@@ -845,6 +1158,12 @@ document.getElementById("start-video-call").addEventListener("click", () => star
 groupMembersOpen?.addEventListener("click", openGroupMembers);
 groupMembersClose?.addEventListener("click", () => groupMembersDialog.close());
 groupCallInvite?.addEventListener("click", openGroupMembers);
+groupCallStart?.addEventListener("click", () => {
+  const state = activeGroupCalls.get(peerId);
+  if (state?.active) void joinActiveGroupCall();
+  else void startGroupCall("audio");
+});
+groupCallJoin?.addEventListener("click", () => void joinActiveGroupCall());
 document.getElementById("accept-call").addEventListener("click", acceptIncomingCall);
 document.getElementById("reject-call").addEventListener("click", rejectIncomingCall);
 document.getElementById("end-call").addEventListener("click", () => endCall(true));
@@ -1467,6 +1786,8 @@ function connect() {
   nextSocket.addEventListener("open", () => {
     if (socket !== nextSocket) return;
     setStatus("online");
+    const savedPresence = localStorage.getItem(PRESENCE_KEY) || "online";
+    if (me) nextSocket.send(JSON.stringify({ type: "set_presence", status: savedPresence }));
     if (socketHeartbeatTimer) clearInterval(socketHeartbeatTimer);
     socketHeartbeatTimer = setInterval(() => {
       if (socket !== nextSocket || nextSocket.readyState !== WebSocket.OPEN) return;
@@ -1493,6 +1814,8 @@ function connect() {
           setStatus("online");
         }
         me = msg.user;
+        presenceByUserId.set(me.user_id, localStorage.getItem(PRESENCE_KEY) || "online");
+        renderPresenceStatus(presenceByUserId.get(me.user_id));
         users = msg.users;
         renderMe();
         renderUsers();
@@ -1513,6 +1836,7 @@ function connect() {
       case "directory":
         users = msg.users;
         renderUsers();
+        renderGroupCallBanner();
         break;
       case "groups":
         groups = msg.groups.map((group) => ({
@@ -1523,6 +1847,7 @@ function connect() {
           group_member_ids: group.member_ids,
         }));
         renderUsers();
+        renderGroupCallBanner();
         break;
       case "chat":
         emptyEl.hidden = true;
@@ -1539,14 +1864,27 @@ function connect() {
         }
         document.getElementById("start-audio-call").hidden = false;
         document.getElementById("start-video-call").hidden = false;
-        document.getElementById("start-audio-call").textContent = msg.peer.is_group ? "Group call" : "Call";
+        document.getElementById("start-audio-call").textContent = msg.peer.is_group ? "Group audio" : "Call";
         document.getElementById("start-video-call").textContent = msg.peer.is_group ? "Group video" : "Video";
+        groupCallStart.hidden = !msg.peer.is_group;
+        groupCallStart.textContent = msg.peer.is_group
+          ? (activeGroupCalls.get(msg.peer.user_id)?.active ? "Join group call" : "Group call")
+          : "Group call";
+        renderGroupCallBanner();
         logEl.replaceChildren();
         messageBodyElementsById.clear();
         msg.history.forEach(appendMessage);
         break;
       case "message":
         if (isForOpenChat(msg.message)) appendMessage(msg.message);
+        if (msg.message?.sender_id !== me?.user_id) playIncomingMessageSound();
+        break;
+      case "presence":
+        if (msg.user_id) {
+          presenceByUserId.set(msg.user_id, msg.status);
+          if (msg.user_id === me?.user_id) renderPresenceStatus(msg.status);
+          renderUsers();
+        }
         break;
       case "message_deleted":
         deletedMessageIds.add(msg.message_id);
@@ -1556,6 +1894,9 @@ function connect() {
         recoveredBodiesByMessageId.delete(msg.message_id);
         cryptoRecoveryResponsesByMessageId.delete(msg.message_id);
         logEl.querySelector(`[data-message-id="${CSS.escape(msg.message_id)}"]`)?.remove();
+        break;
+      case "group_call_state":
+        handleGroupCallState(msg);
         break;
       case "crypto_resync":
         void handleCryptoResyncRequest(msg);
@@ -1655,20 +1996,96 @@ function renderGroupMembersDialog(group) {
 
 function refreshGroupCallParticipants() {
   const group = groups.find((item) => item.user_id === groupCallGroupId && item.is_group);
-  const active = groupCallId && group;
+  const active = Boolean(groupCallId && groupCallGroupId && group);
   groupCallInvite.hidden = !active;
   groupCallCount.hidden = !active;
+  if (groupCallStart && peerId) {
+    const selectedGroup = groups.find((item) => item.user_id === peerId && item.is_group);
+    groupCallStart.hidden = !selectedGroup;
+    groupCallStart.textContent = selectedGroup
+      ? (activeGroupCalls.get(selectedGroup.user_id)?.active ? "Join group call" : "Group call")
+      : "Group call";
+  }
   if (active) {
-    groupCallCount.textContent = `${groupCallJoinedMembers.size}/${group.group_member_ids.length} joined`;
+    groupCallCount.textContent = groupCallJoinedMembers.size + "/" + group.group_member_ids.length + " joined";
+  }
+}
+function renderGroupCallBanner() {
+  const group = groups.find((item) => item.user_id === peerId && item.is_group);
+  const state = group ? activeGroupCalls.get(group.user_id) : null;
+  const active = Boolean(group && state?.active);
+  if (!groupCallBanner) return;
+  groupCallBanner.hidden = !active;
+  if (!active) {
+    if (groupCallStart) groupCallStart.hidden = !group;
+    return;
+  }
+  const joined = state.participant_ids.includes(me?.user_id);
+  groupCallBannerTitle.textContent = state.media === "video" ? "Group video call is active" : "Group call is active";
+  groupCallBannerMeta.textContent =
+    " · " + state.participant_ids.length + "/" + group.group_member_ids.length + " joined";
+  groupCallJoin.textContent = joined ? "Open call" : "Join";
+  groupCallJoin.disabled = joined && groupCallGroupId !== group.user_id;
+  groupCallJoin.hidden = groupCallId === state.call_id && groupCallGroupId === group.user_id;
+  if (groupCallStart) {
+    groupCallStart.hidden = false;
+    groupCallStart.textContent = joined ? "Group call" : "Join group call";
   }
 }
 
-function openGroupMembers() {
-  const group = groups.find((item) => item.user_id === peerId && item.is_group)
-    || groups.find((item) => item.user_id === groupCallGroupId && item.is_group);
-  if (!group) return;
-  renderGroupMembersDialog(group);
-  groupMembersDialog.showModal();
+function handleGroupCallState(message) {
+  if (!message?.group_id || !message?.call_id) return;
+  if (message.active) {
+    activeGroupCalls.set(message.group_id, message);
+  } else {
+    const current = activeGroupCalls.get(message.group_id);
+    if (!current || current.call_id === message.call_id) activeGroupCalls.delete(message.group_id);
+    if (groupCallId === message.call_id && groupCallGroupId === message.group_id) {
+      endCall(false);
+    }
+  }
+  refreshGroupCallParticipants();
+  renderGroupCallBanner();
+  if (peerId === message.group_id) {
+    const group = groups.find((item) => item.user_id === peerId);
+    if (group) renderGroupMembersDialog(group);
+  }
+}
+
+async function joinActiveGroupCall() {
+  const group = groups.find((item) => item.user_id === peerId && item.is_group);
+  const state = group ? activeGroupCalls.get(group.user_id) : null;
+  if (!state?.active) return;
+  if (groupCallId === state.call_id && groupCallGroupId === group.user_id) {
+    callStage.hidden = false;
+    return;
+  }
+  if (peerConnection || groupPeerConnections.size || groupCallId) endCall(true);
+  pendingIncomingCall = {
+    sender_id: state.initiator_id,
+    peer_id: state.group_id,
+    payload: {
+      group_id: state.group_id,
+      call_id: state.call_id,
+      media: state.media,
+    },
+  };
+  await acceptGroupInvite(pendingIncomingCall);
+  pendingIncomingCall = null;
+}
+
+function sendGroupCallControl(kind) {
+  if (!groupCallGroupId || !groupCallId || !socket || socket.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({
+    type: "call_signal",
+    peer_id: groupCallGroupId,
+    kind,
+    payload: {
+      group_id: groupCallGroupId,
+      call_id: groupCallId,
+      media: callMediaKind || "audio",
+    },
+  }));
 }
 
 function openChat(id) {
@@ -1680,12 +2097,17 @@ function openChat(id) {
   if (!selected?.is_group) void refreshPeerVerification(id);
   document.getElementById("start-audio-call").hidden = false;
   document.getElementById("start-video-call").hidden = false;
-  document.getElementById("start-audio-call").textContent = selected?.is_group ? "Group call" : "Call";
+  document.getElementById("start-audio-call").textContent = selected?.is_group ? "Group audio" : "Call";
   document.getElementById("start-video-call").textContent = selected?.is_group ? "Group video" : "Video";
   groupMembersOpen.hidden = !selected?.is_group;
+  groupCallStart.hidden = !selected?.is_group;
+  groupCallStart.textContent = selected?.is_group
+    ? (activeGroupCalls.get(id)?.active ? "Join group call" : "Group call")
+    : "Group call";
   applyChatWallpaper(id);
   chatTitlebar.hidden = false;
   renderUsers();
+  renderGroupCallBanner();
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "open", peer_id: id }));
   }
@@ -1704,21 +2126,34 @@ async function startGroupCall(kind) {
   const onlineMembers = group.group_member_ids
     .filter((id) => id !== me.user_id)
     .filter((id) => users.some((user) => user.user_id === id && user.online));
-  if (!onlineMembers.length) {
-    appendSystem("No other group member is online.");
+
+  const existing = activeGroupCalls.get(group.user_id);
+  if (existing?.active) {
+    await joinActiveGroupCall();
     return;
   }
 
-  if (peerConnection || groupPeerConnections.size) endCall(true);
+  if (peerConnection || groupPeerConnections.size || groupCallId) endCall(true);
 
   groupCallId = crypto.randomUUID();
   groupCallGroupId = group.user_id;
   groupCallMemberIds = [...group.group_member_ids];
+  groupCallInitiatorId = me.user_id;
   groupCallJoinedMembers.clear();
   groupCallJoinedMembers.add(me.user_id);
   callPeerId = group.user_id;
-  refreshGroupCallParticipants();
   callMediaKind = kind;
+  activeGroupCalls.set(group.user_id, {
+    group_id: group.user_id,
+    call_id: groupCallId,
+    media: kind,
+    initiator_id: me.user_id,
+    participant_ids: [me.user_id],
+    active: true,
+  });
+  refreshGroupCallParticipants();
+  renderGroupCallBanner();
+  callWindowTitle.textContent = "group call.exe";
 
   try {
     localMediaStream = await acquireCallMedia(kind);
@@ -1832,17 +2267,21 @@ async function acceptGroupInvite(signal) {
   const group = groups.find((item) => item.user_id === groupId && item.is_group);
   if (!group) throw new Error("This group is no longer available.");
 
+  stopCallRingtone();
   groupCallGroupId = groupId;
   groupCallId = callId;
   groupCallMemberIds = [...group.group_member_ids];
+  groupCallInitiatorId = signal.sender_id;
   callPeerId = groupId;
   callMediaKind = payload.media === "video" ? "video" : "audio";
+  callWindowTitle.textContent = "group call.exe";
   groupCallJoinedMembers.clear();
   groupCallJoinedMembers.add(me.user_id);
   groupCallJoinedMembers.add(signal.sender_id);
   refreshGroupCallParticipants();
 
 
+  stopCallRingtone();
   try {
     localMediaStream = await acquireCallMedia(callMediaKind);
     callStage.hidden = false;
@@ -1850,7 +2289,6 @@ async function acceptGroupInvite(signal) {
     remoteVideo.hidden = true;
     remoteAudio.hidden = true;
     document.getElementById("group-remotes").hidden = false;
-    document.getElementById("toggle-screen-share").hidden = true;
     await attachLocalMediaPreview();
     callStatus.textContent = "Joining group call…" + callMediaNotice;
     for (const memberId of groupCallMemberIds) {
@@ -1879,6 +2317,11 @@ async function handleGroupCallSignal(signal) {
 
   if (signal.kind === "group_invite") {
     if (groupCallId === callId && groupCallGroupId === groupId) return;
+    if (
+      pendingIncomingCall?.payload?.group_id === groupId
+      && pendingIncomingCall?.payload?.call_id === callId
+      && incomingCallDialog.open
+    ) return;
     pendingIncomingCall = signal;
     callPeerId = groupId;
     callMediaKind = payload.media === "video" ? "video" : "audio";
@@ -1886,6 +2329,7 @@ async function handleGroupCallSignal(signal) {
     incomingCallTitle.textContent = (caller?.display_name || "Larptrix user") + " invited you";
     incomingCallKind.textContent = (callMediaKind === "video" ? "Group video" : "Group") + " call · " + group.display_name;
     document.getElementById("accept-call").textContent = "Join";
+    startCallRingtone();
     incomingCallDialog.showModal();
     return;
   }
@@ -2048,6 +2492,8 @@ async function startCall(kind) {
     await startGroupCall(kind);
     return;
   }
+  if (groupCallId) endCall(true);
+  callWindowTitle.textContent = "call.exe";
   if (typeof globalThis.RTCPeerConnection !== "function") {
     const handoff = await openCallInSystemBrowser(peerId, kind);
     if (handoff.opened) {
@@ -2187,6 +2633,7 @@ async function handleCallSignal(signal) {
     const caller = users.find((user) => user.user_id === signal.sender_id);
     incomingCallTitle.textContent = `Call from ${caller?.display_name || "Larptrix user"}`;
     const requestedKind = callMediaKind === "video" ? "Video call" : "Voice call";
+    callWindowTitle.textContent = "call.exe";
     incomingCallKind.textContent = typeof globalThis.RTCPeerConnection === "function"
       ? requestedKind
       : `${requestedKind} · open the browser client and ask the caller to retry`;
@@ -2247,6 +2694,7 @@ async function acceptIncomingCall() {
     return;
   }
   const incoming = pendingIncomingCall;
+  stopCallRingtone();
   incomingCallDialog.close();
   peerId = incoming.sender_id;
   renderUsers();
@@ -2275,6 +2723,7 @@ async function acceptIncomingCall() {
 }
 
 function rejectIncomingCall() {
+  stopCallRingtone();
   if (pendingIncomingCall?.payload?.group_id) {
     const incoming = pendingIncomingCall;
     const groupId = incoming.payload.group_id;
@@ -2308,6 +2757,14 @@ async function flushIceCandidates() {
   for (const candidate of candidates) await peerConnection.addIceCandidate(candidate);
 }
 
+function callAudioConstraints() {
+  return {
+    echoCancellation: true,
+    noiseSuppression: readStoredBool(NOISE_SUPPRESSION_KEY, true),
+    autoGainControl: true,
+  };
+}
+
 async function acquireCallMedia(kind) {
   callMediaNotice = "";
   if (!navigator.mediaDevices?.getUserMedia) {
@@ -2325,8 +2782,8 @@ async function acquireCallMedia(kind) {
     : [false];
   const attempts = [];
   if (hasMicrophone) {
-    for (const video of videoAttempts) attempts.push({ audio: true, video });
-    if (kind === "video") attempts.push({ audio: true, video: false });
+    for (const video of videoAttempts) attempts.push({ audio: callAudioConstraints(), video });
+    if (kind === "video") attempts.push({ audio: callAudioConstraints(), video: false });
   }
   if (kind === "video") {
     for (const video of videoAttempts) attempts.push({ audio: false, video });
@@ -2491,13 +2948,23 @@ async function stopScreenShare() {
 
 
 function endCall(notifyPeer) {
+  stopCallRingtone();
   if (groupCallGroupId && groupCallId) {
     const groupId = groupCallGroupId;
     const callId = groupCallId;
     const remoteIds = [...groupPeerConnections.keys()];
-    if (notifyPeer) {
+    const isInitiator = groupCallInitiatorId === me?.user_id;
+    if (notifyPeer && isInitiator) {
+      sendGroupCallControl("group_end");
+      activeGroupCalls.delete(groupId);
+    } else if (notifyPeer) {
       for (const remoteId of remoteIds) {
         sendGroupCallSignal(remoteId, "hangup", { group_id: groupId, call_id: callId });
+      }
+      const state = activeGroupCalls.get(groupId);
+      if (state) {
+        state.participant_ids = state.participant_ids.filter((id) => id !== me?.user_id);
+        activeGroupCalls.set(groupId, state);
       }
     }
     for (const [remoteId, connection] of groupPeerConnections) {
@@ -2513,6 +2980,8 @@ function endCall(notifyPeer) {
     groupCallId = null;
     groupCallGroupId = null;
     groupCallMemberIds = [];
+    groupCallInitiatorId = null;
+    renderGroupCallBanner();
   } else if (notifyPeer && callPeerId) {
     sendCallSignal("hangup", {});
   }
@@ -2563,8 +3032,11 @@ function isForOpenChat(message) {
 }
 
 function setStatus(text) {
-  statusEl.textContent = text;
-  statusEl.classList.toggle("online", text === "online");
+  if (text === "online") {
+    renderPresenceStatus(localStorage.getItem(PRESENCE_KEY) || "online");
+    return;
+  }
+  renderPresenceStatus(text);
 }
 
 function renderMe() {
@@ -2605,7 +3077,9 @@ function renderUsers() {
     avatar.className = "avatar";
     paintAvatar(avatar, user);
     const dot = document.createElement("span");
-    dot.className = user.online ? "dot on" : "dot";
+    const presence = getPresence(user);
+    dot.className = presence === "online" ? "dot on" : presence === "dnd" ? "dot dnd" : "dot";
+    dot.title = presence === "dnd" ? "Do Not Disturb" : presence === "invisible" ? "Invisible" : presence;
     const name = document.createElement("span");
     name.className = "person-name";
     const displayName = document.createElement("span");
@@ -2753,6 +3227,7 @@ function appendMessage(message) {
   }
 
   let encryptedBodyElement = null;
+  let messageBodyForSave = null;
   if (message.body) {
     const body = document.createElement("div");
     const envelope = parseCryptoEnvelope(message.body);
@@ -2766,6 +3241,19 @@ function appendMessage(message) {
         : message.body;
     }
     li.append(body);
+    messageBodyForSave = body;
+  }
+
+  if (messageBodyForSave) {
+    const saveButton = document.createElement("button");
+    saveButton.type = "button";
+    saveButton.className = "message-save-button ghost";
+    saveButton.textContent = "☆ Save";
+    saveButton.title = "Save this message";
+    saveButton.addEventListener("click", () => {
+      void toggleSavedMessage(message, messageBodyForSave.textContent || "");
+    });
+    li.append(saveButton);
   }
   if (message.attachment && !parseCryptoEnvelope(message.body)) {
     if (message.attachment.mime.startsWith("image/")) {

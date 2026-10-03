@@ -39,6 +39,7 @@
         <nav class="app-menu-nav" aria-label="Larptrix navigation">
           <button id="menu-chats" type="button" class="app-menu-item active"><span aria-hidden="true">▣</span><span>Chats</span></button>
           <button id="menu-music" type="button" class="app-menu-item"><span aria-hidden="true">♫</span><span>Music Library</span></button>
+          <button id="menu-saved" type="button" class="app-menu-item"><span aria-hidden="true">★</span><span>Saved Messages</span></button>
           <button id="menu-new-group" type="button" class="app-menu-item"><span aria-hidden="true">＋</span><span>New group</span></button>
         </nav>
 
@@ -78,6 +79,7 @@
           <div class="call-actions">
             <button id="peer-profile-open" type="button" class="ghost">Profile</button>
             <button id="group-members-open" type="button" class="ghost" hidden>Members</button>
+            <button id="group-call-start" type="button" class="ghost" hidden>Group call</button>
             <label class="photo-btn" title="Set a background for this chat">
               <input id="chat-background" type="file" accept="image/jpeg,image/png,image/webp" hidden />
               Background
@@ -87,8 +89,19 @@
             <button id="start-video-call" type="button" class="ghost" title="Video call">Video</button>
           </div>
         </div>
+        <div id="group-call-banner" class="group-call-banner" hidden>
+          <div>
+            <strong id="group-call-banner-title">Group call is active</strong>
+            <span id="group-call-banner-meta"></span>
+          </div>
+          <button id="group-call-join" type="button">Join</button>
+        </div>
         <section id="call-stage" class="call-stage" aria-label="Call" hidden>
-          <div class="call-dock-heading">
+          <div class="call-dock-heading xp-window-titlebar">
+            <div class="xp-window-title">
+              <span id="call-window-icon" aria-hidden="true">☎</span>
+              <strong id="call-window-title">call.exe</strong>
+            </div>
             <div class="call-heading-copy">
               <p id="call-status" aria-live="polite">Connecting…</p>
               <small id="group-call-count" class="group-call-count" hidden></small>
@@ -106,6 +119,7 @@
             <button id="toggle-microphone" type="button" class="ghost" aria-pressed="false">🎙 Mute mic</button>
             <button id="toggle-camera" type="button" class="ghost">📷 Turn camera off</button>
             <audio id="remote-audio" autoplay></audio>
+            <audio id="call-ringtone" preload="auto" loop><source src="/assets/02439.mp3" type="audio/mpeg" /></audio>
             <button id="enable-call-audio" type="button" class="ghost" hidden>🔊 Enable sound</button>
             <button id="toggle-call-fullscreen" type="button" class="ghost" title="Toggle fullscreen">⛶ Fullscreen</button>
             <select id="screen-quality" aria-label="Screen sharing quality">
@@ -152,6 +166,10 @@
           <header class="music-library-header">
             <div class="music-library-drag-area" title="Drag to move the music library">
               <span class="music-library-drag-handle" aria-hidden="true">☷</span>
+              <div class="xp-window-title music-window-title">
+                <span aria-hidden="true">♫</span>
+                <strong id="music-window-title">music.exe</strong>
+              </div>
               <div>
                 <p class="eyebrow">LOCAL MEDIA</p>
                 <h2>Music Library</h2>
@@ -222,6 +240,13 @@
         </section>
       </main>
     </div>
+
+    <nav class="mobile-nav" aria-label="Mobile navigation">
+      <button id="mobile-chats" type="button">▣<span>Chats</span></button>
+      <button id="mobile-saved" type="button">★<span>Saved</span></button>
+      <button id="mobile-music" type="button">♫<span>Music</span></button>
+      <button id="mobile-settings" type="button">⚙<span>Settings</span></button>
+    </nav>
 
     <dialog id="profile-dialog">
       <form id="profile-form" class="profile-form">
@@ -311,6 +336,43 @@
 
       <section class="settings-section">
         <h3>Interface</h3>
+        <label for="settings-theme">Theme</label>
+        <select id="settings-theme">
+          <option value="larptix">Larptix Green</option>
+          <option value="nord">Nord</option>
+          <option value="black">Black</option>
+          <option value="light">Light</option>
+          <option value="catppuccin-latte">Catppuccin Latte</option>
+          <option value="custom">Custom</option>
+        </select>
+        <div id="custom-theme-editor" class="custom-theme-editor" hidden>
+          <label>Background <input id="theme-bg" type="color" /></label>
+          <label>Panels <input id="theme-panel" type="color" /></label>
+          <label>Text <input id="theme-text" type="color" /></label>
+          <label>Muted <input id="theme-muted" type="color" /></label>
+          <label>Accent <input id="theme-accent" type="color" /></label>
+          <label>Bubble <input id="theme-me" type="color" /></label>
+          <button id="theme-save-custom" type="button" class="ghost">Save custom theme</button>
+        </div>
+        <label for="settings-presence">Presence</label>
+        <select id="settings-presence">
+          <option value="online">Online</option>
+          <option value="dnd">Do Not Disturb</option>
+          <option value="invisible">Invisible</option>
+        </select>
+        <label class="key-saved-label">
+          <input id="settings-call-sounds" type="checkbox" checked />
+          Play incoming call sound
+        </label>
+        <label class="key-saved-label">
+          <input id="settings-message-sounds" type="checkbox" checked />
+          Play incoming message sound
+        </label>
+        <label class="key-saved-label">
+          <input id="settings-noise-suppression" type="checkbox" checked />
+          Browser noise suppression
+        </label>
+        <p id="settings-noise-note" class="settings-help">Uses the browser's microphone noise suppression. Krisp SDK can be plugged in when its licensed browser package is installed.</p>
         <button id="settings-reset-layout" type="button" class="ghost">Reset chat list width</button>
         <p id="settings-layout-status" class="settings-help" aria-live="polite"></p>
       </section>
@@ -331,6 +393,19 @@
       </header>
       <p id="gif-empty" class="settings-help">No saved GIFs yet. Save a GIF from any chat message.</p>
       <div id="gif-results" class="gif-results"></div>
+    </dialog>
+
+    <dialog id="saved-messages-dialog" class="saved-messages-dialog">
+      <header class="settings-header">
+        <div>
+          <p class="eyebrow">LOCAL</p>
+          <h2>Saved Messages</h2>
+        </div>
+        <button id="saved-messages-close" type="button" class="ghost" aria-label="Close saved messages">×</button>
+      </header>
+      <p class="settings-help">Saved messages stay in this browser. They are stored locally rather than sent as a duplicate message.</p>
+      <div id="saved-messages-list" class="saved-messages-list"></div>
+      <p id="saved-messages-empty" class="settings-help">No saved messages yet.</p>
     </dialog>
 
     <dialog id="group-members-dialog" class="group-members-dialog">
