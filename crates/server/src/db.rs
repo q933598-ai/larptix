@@ -1999,7 +1999,10 @@ mod tests {
         let err = db
             .create_key_user_with_username("Bob", "ALICE", "hash-b", 1)
             .unwrap_err();
-        assert!(matches!(err, DbError::BadRequest("username is already taken")));
+        assert!(matches!(
+            err,
+            DbError::BadRequest("username is already taken")
+        ));
     }
 
     #[test]
