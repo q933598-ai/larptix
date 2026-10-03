@@ -135,7 +135,6 @@ const themeSaveCustom = document.getElementById("theme-save-custom");
 const settingsPresence = document.getElementById("settings-presence");
 const settingsCallSounds = document.getElementById("settings-call-sounds");
 const settingsMessageSounds = document.getElementById("settings-message-sounds");
-const settingsNoiseSuppression = document.getElementById("settings-noise-suppression");
 const mobileChats = document.getElementById("mobile-chats");
 const mobileSaved = document.getElementById("mobile-saved");
 const mobileMusic = document.getElementById("mobile-music");
@@ -353,6 +352,7 @@ function applyTheme(name = localStorage.getItem(THEME_KEY) || "larptrix") {
     }
   }
   localStorage.setItem(THEME_KEY, name);
+  if (peerId) applyChatWallpaper(peerId);
 }
 
 function loadThemeEditor() {
@@ -1031,7 +1031,7 @@ function openSettings() {
   settingsPresence.value = localStorage.getItem(PRESENCE_KEY) || "online";
   settingsCallSounds.checked = readStoredBool(CALL_SOUND_KEY, true);
   settingsMessageSounds.checked = readStoredBool(MESSAGE_SOUND_KEY, true);
-  settingsNoiseSuppression.checked = readStoredBool(NOISE_SUPPRESSION_KEY, true);
+
   settingsLayoutStatus.textContent = "";
   settingsDialog.showModal();
   closeAppMenu();
@@ -1097,6 +1097,10 @@ document.getElementById("settings-open-profile-e2e").addEventListener("click", (
   setTimeout(() => enableE2eButton.click(), 0);
 });
 document.getElementById("settings-reset-layout").addEventListener("click", resetChatListWidth);
+settingsWallpaperTint?.addEventListener("change", () => {
+  localStorage.setItem("larptrix_wallpaper_tint", settingsWallpaperTint.value);
+  if (peerId) applyChatWallpaper(peerId);
+});
 settingsTheme.addEventListener("change", () => {
   customThemeEditor.hidden = settingsTheme.value !== "custom";
   if (settingsTheme.value === "custom") loadThemeEditor();
@@ -1106,7 +1110,7 @@ themeSaveCustom.addEventListener("click", saveCustomTheme);
 settingsPresence.addEventListener("change", () => setPresence(settingsPresence.value));
 settingsCallSounds.addEventListener("change", () => localStorage.setItem(CALL_SOUND_KEY, settingsCallSounds.checked ? "1" : "0"));
 settingsMessageSounds.addEventListener("change", () => localStorage.setItem(MESSAGE_SOUND_KEY, settingsMessageSounds.checked ? "1" : "0"));
-settingsNoiseSuppression.addEventListener("change", () => localStorage.setItem(NOISE_SUPPRESSION_KEY, settingsNoiseSuppression.checked ? "1" : "0"));
+
 menuSaved?.addEventListener("click", openSavedMessagesChat);
 savedMessagesClose?.addEventListener("click", () => savedMessagesDialog.close());
 mobileChats?.addEventListener("click", () => {
