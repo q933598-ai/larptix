@@ -97,11 +97,13 @@ pub fn router() -> Router<Arc<AppState>> {
 #[derive(Deserialize)]
 pub struct RegisterBody {
     pub display_name: String,
+    pub username: String,
 }
 
 #[derive(Deserialize)]
 pub struct PasswordRegisterBody {
     pub display_name: String,
+    pub username: String,
     pub email: String,
     pub password: String,
 }
@@ -173,18 +175,25 @@ async fn register(
     Json(body): Json<RegisterBody>,
 ) -> Result<Response, ApiError> {
     let display_name = sanitize_display_name(&body.display_name).map_err(ApiError::bad)?;
+    let username = sanitize_username(&body.username).map_err(ApiError::bad)?;
+    if username.is_empty() {
+        return Err(ApiError::bad("username is required when creating an account"));
+    }
     let access_key = new_access_key();
     let access_key_hash = access_key_hash(&access_key).expect("generated key is valid");
     let user = state
         .db
-        .create_key_user(&display_name, &access_key_hash, now_ms())
+        .create_key_user(&display_name, &username, &access_key_hash, now_ms())
         .map_err(ApiError::from_db)?;
     let online = state.hub.online_ids();
     let users = state.db.list_users(&online).map_err(ApiError::db)?;
     state.hub.broadcast(ServerMessage::Directory { users });
+    let mut info = public_me(&user);
+    info.username = username;
     Ok(Json(serde_json::json!({
-        "user": public_me(&user),
-        "access_key": access_key
+        "user": info,
+        "access_key": access_key,
+        "e2e_setup_required": true
     }))
     .into_response())
 }
@@ -194,6 +203,10 @@ async fn register_password(
     Json(body): Json<PasswordRegisterBody>,
 ) -> Result<Response, ApiError> {
     let display_name = sanitize_display_name(&body.display_name).map_err(ApiError::bad)?;
+    let username = sanitize_username(&body.username).map_err(ApiError::bad)?;
+    if username.is_empty() {
+        return Err(ApiError::bad("username is required when creating an account"));
+    }
     let email = sanitize_email(&body.email).map_err(ApiError::bad)?;
     let password = sanitize_password(&body.password)
         .map_err(ApiError::bad)?
@@ -204,12 +217,16 @@ async fn register_password(
         .map_err(ApiError::internal)?;
     let user = state
         .db
-        .create_user(&email, &password_hash, &display_name, now_ms())
+        .create_user(&email, &password_hash, &display_name, &username, now_ms())
         .map_err(ApiError::from_db)?;
     let online = state.hub.online_ids();
     let users = state.db.list_users(&online).map_err(ApiError::db)?;
     state.hub.broadcast(ServerMessage::Directory { users });
-    cookie_response(&state, user)
+    let response = cookie_response(&state, user)?;
+    if let Ok(body) = response.into_body().collect().await {
+        let _ = body;
+    }
+    Ok(response)
 }
 
 async fn login(
