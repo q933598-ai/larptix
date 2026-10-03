@@ -38,16 +38,29 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Generate app icons
+        run: npm run tauri icon src-tauri/icon-source.png
+
       - name: Initialize Android project
         run: npx tauri android init --ci
 
-      - name: Build APK
-        run: npx tauri android build --apk
+      - name: Build signed debug APK
+        run: npx tauri android build --apk --debug
+
+      - name: Verify APK signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n1)"
+          APK="$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*debug*.apk' | head -n1)"
+          test -n "$APKSIGNER"
+          test -n "$APK"
+          "$APKSIGNER" verify --verbose "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: larptrix-android-apk
-          path: desktop/src-tauri/gen/android/app/build/outputs/**/*.apk
+          path: desktop/src-tauri/gen/android/app/build/outputs/apk/**/*debug*.apk
           if-no-files-found: error
           retention-days: 14
