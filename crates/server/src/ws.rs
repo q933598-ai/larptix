@@ -453,7 +453,7 @@ fn relay_call_signal(
 ) -> Result<(), String> {
     if !matches!(
         kind,
-        "offer" | "answer" | "ice_candidate" | "hangup" | "reject"
+        "offer" | "answer" | "ice_candidate" | "hangup" | "reject" | "group_invite"
     ) {
         return Err("unsupported call signal".into());
     }
