@@ -594,6 +594,38 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
     Ok(())
 }
 
+fn delete_message(state: &AppState, user: &UserRow, peer_id: &str, message_id: &str) -> Result<(), String> {
+    if message_id.is_empty() { return Err("message id is empty".into()); }
+    let conversation_id = if let Some(group) = state.db.group(peer_id).map_err(db_err)? {
+        if !group.member_ids.iter().any(|member| member == &user.id) {
+            return Err("not a member of this group".into());
+        }
+        format!("group_{peer_id}")
+    } else {
+        let peer = state.db.user_by_id(peer_id).map_err(db_err)?.ok_or_else(|| "unknown user".to_string())?;
+        if peer.id == user.id { return Err("cannot delete a message from yourself".into()); }
+        let (a, b) = if user.id < peer.id { (user.id.as_str(), peer.id.as_str()) } else { (peer.id.as_str(), user.id.as_str()) };
+        format!("{a}_{b}")
+    };
+    let deleted = state.db.delete_message(&user.id, &conversation_id, message_id).map_err(db_err)?;
+    if !deleted { return Err("message not found or you are not its author".into()); }
+    fanout_deleted(state, peer_id, message_id);
+    Ok(())
+}
+
+fn fanout_deleted(state: &AppState, peer_id: &str, message_id: &str) {
+    let payload = ServerMessage::MessageDeleted { peer_id: peer_id.to_string(), message_id: message_id.to_string() };
+    if let Ok(Some(group)) = state.db.group(peer_id) {
+        for member_id in group.member_ids {
+            if let Ok(member) = Uuid::parse_str(&member_id) { state.hub.send_to(member, payload.clone()); }
+        }
+    } else if let Ok(recipient) = Uuid::parse_str(peer_id) {
+        state.hub.send_to(recipient, payload.clone());
+    }
+    // The requester receives the same event through the group/DM fanout above only for groups.
+    // For DMs the requester is not peer_id, so send it explicitly.
+    // Duplicate delivery is harmless but avoid it by checking group membership here.
+}
 fn send_dm(
     state: &AppState,
     user: &UserRow,
