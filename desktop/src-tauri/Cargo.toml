@@ -6,6 +6,10 @@ authors = ["Larptrix"]
 edition = "2021"
 build = "build.rs"
 
+[lib]
+name = "larptrix_desktop"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
