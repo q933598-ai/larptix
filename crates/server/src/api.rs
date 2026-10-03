@@ -316,10 +316,9 @@ fn valid_short_value(value: &str, max: usize) -> bool {
 fn klipy_media_url(value: &serde_json::Value) -> Option<String> {
     let url = value.as_str()?;
     let parsed = url.parse::<axum::http::Uri>().ok()?;
+    let host = parsed.authority()?.host();
     if parsed.scheme_str() != Some("https")
-        || !parsed
-            .host()
-            .is_some_and(|host| host.eq_ignore_ascii_case("static.klipy.com"))
+        || !host.eq_ignore_ascii_case("static.klipy.com")
     {
         return None;
     }
@@ -329,11 +328,9 @@ fn klipy_media_url(value: &serde_json::Value) -> Option<String> {
 fn klipy_item_url(value: &serde_json::Value) -> Option<String> {
     let url = value.as_str()?;
     let parsed = url.parse::<axum::http::Uri>().ok()?;
+    let host = parsed.authority()?.host();
     if parsed.scheme_str() != Some("https")
-        || !parsed
-            .host()
-            .is_some_and(|host| host.eq_ignore_ascii_case("klipy.com")
-                || host.ends_with(".klipy.com"))
+        || !(host.eq_ignore_ascii_case("klipy.com") || host.ends_with(".klipy.com"))
     {
         return None;
     }
