@@ -50,6 +50,29 @@ pub struct MatrixToDeviceRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct CryptoResyncRequestRow {
+    pub id: i64,
+    pub requester_user_id: String,
+    pub target_user_id: String,
+    pub message_id: String,
+    pub device_id: String,
+    pub body: String,
+    pub attachment_id: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CryptoResyncResponseRow {
+    pub id: i64,
+    pub recipient_user_id: String,
+    pub sender_user_id: String,
+    pub message_id: String,
+    pub device_id: String,
+    pub ciphertext: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone)]
 pub struct StoredFile {
     pub id: String,
     pub ext: String,
@@ -741,6 +764,195 @@ impl Database {
         }
         tx.commit()?;
         Ok(deleted)
+    }
+
+    pub fn enqueue_crypto_resync_request(
+        &self,
+        requester_user_id: &str,
+        target_user_id: &str,
+        message_id: &str,
+        device_id: &str,
+        body: &str,
+        attachment_id: Option<&str>,
+    ) -> rusqlite::Result<i64> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "INSERT INTO crypto_resync_requests (
+                requester_user_id,
+                target_user_id,
+                message_id,
+                device_id,
+                body,
+                attachment_id,
+                created_at
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(
+                requester_user_id,
+                target_user_id,
+                message_id,
+                device_id
+             ) DO NOTHING",
+            params![
+                requester_user_id,
+                target_user_id,
+                message_id,
+                device_id,
+                body,
+                attachment_id,
+                crate::now_ms()
+            ],
+        )?;
+
+        conn.query_row(
+            "SELECT id
+             FROM crypto_resync_requests
+             WHERE requester_user_id = ?1
+               AND target_user_id = ?2
+               AND message_id = ?3
+               AND device_id = ?4",
+            params![requester_user_id, target_user_id, message_id, device_id],
+            |row| row.get(0),
+        )
+    }
+
+    pub fn crypto_resync_requests_for_user(
+        &self,
+        target_user_id: &str,
+    ) -> rusqlite::Result<Vec<CryptoResyncRequestRow>> {
+        let conn = self.conn.lock().expect("db lock");
+        let mut stmt = conn.prepare(
+            "SELECT id, requester_user_id, target_user_id, message_id,
+                    device_id, body, attachment_id, created_at
+             FROM crypto_resync_requests
+             WHERE target_user_id = ?1
+             ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map([target_user_id], |row| {
+            Ok(CryptoResyncRequestRow {
+                id: row.get(0)?,
+                requester_user_id: row.get(1)?,
+                target_user_id: row.get(2)?,
+                message_id: row.get(3)?,
+                device_id: row.get(4)?,
+                body: row.get(5)?,
+                attachment_id: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn delete_crypto_resync_request(
+        &self,
+        requester_user_id: &str,
+        target_user_id: &str,
+        message_id: &str,
+        device_id: &str,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("db lock");
+        let deleted = conn.execute(
+            "DELETE FROM crypto_resync_requests
+             WHERE requester_user_id = ?1
+               AND target_user_id = ?2
+               AND message_id = ?3
+               AND device_id = ?4",
+            params![requester_user_id, target_user_id, message_id, device_id],
+        )?;
+        Ok(deleted > 0)
+    }
+
+    pub fn enqueue_crypto_resync_response(
+        &self,
+        recipient_user_id: &str,
+        sender_user_id: &str,
+        message_id: &str,
+        device_id: &str,
+        ciphertext: &str,
+    ) -> rusqlite::Result<i64> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "INSERT INTO crypto_resync_responses (
+                recipient_user_id,
+                sender_user_id,
+                message_id,
+                device_id,
+                ciphertext,
+                created_at
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(
+                recipient_user_id,
+                sender_user_id,
+                message_id,
+                device_id
+             ) DO UPDATE SET
+                ciphertext = excluded.ciphertext",
+            params![
+                recipient_user_id,
+                sender_user_id,
+                message_id,
+                device_id,
+                ciphertext,
+                crate::now_ms()
+            ],
+        )?;
+
+        conn.query_row(
+            "SELECT id
+             FROM crypto_resync_responses
+             WHERE recipient_user_id = ?1
+               AND sender_user_id = ?2
+               AND message_id = ?3
+               AND device_id = ?4",
+            params![recipient_user_id, sender_user_id, message_id, device_id],
+            |row| row.get(0),
+        )
+    }
+
+    pub fn crypto_resync_responses_for_user(
+        &self,
+        recipient_user_id: &str,
+    ) -> rusqlite::Result<Vec<CryptoResyncResponseRow>> {
+        let conn = self.conn.lock().expect("db lock");
+        let mut stmt = conn.prepare(
+            "SELECT id, recipient_user_id, sender_user_id, message_id,
+                    device_id, ciphertext, created_at
+             FROM crypto_resync_responses
+             WHERE recipient_user_id = ?1
+             ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map([recipient_user_id], |row| {
+            Ok(CryptoResyncResponseRow {
+                id: row.get(0)?,
+                recipient_user_id: row.get(1)?,
+                sender_user_id: row.get(2)?,
+                message_id: row.get(3)?,
+                device_id: row.get(4)?,
+                ciphertext: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn ack_crypto_resync_response(
+        &self,
+        recipient_user_id: &str,
+        sender_user_id: &str,
+        message_id: &str,
+        device_id: &str,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("db lock");
+        let deleted = conn.execute(
+            "DELETE FROM crypto_resync_responses
+             WHERE recipient_user_id = ?1
+               AND sender_user_id = ?2
+               AND message_id = ?3
+               AND device_id = ?4",
+            params![recipient_user_id, sender_user_id, message_id, device_id],
+        )?;
+        Ok(deleted > 0)
     }
 
     pub fn delete_crypto_device(&self, user_id: &str, device_id: &str) -> rusqlite::Result<bool> {
@@ -1597,6 +1809,48 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_matrix_to_device_recipient
             ON matrix_to_device_events(recipient_user_id, recipient_device_id, id);
+
+        CREATE TABLE IF NOT EXISTS crypto_resync_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            requester_user_id TEXT NOT NULL,
+            target_user_id TEXT NOT NULL,
+            message_id TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            body TEXT NOT NULL,
+            attachment_id TEXT,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (requester_user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (attachment_id) REFERENCES attachments(id),
+            UNIQUE (
+                requester_user_id,
+                target_user_id,
+                message_id,
+                device_id
+            )
+        );
+        CREATE INDEX IF NOT EXISTS idx_crypto_resync_requests_target
+            ON crypto_resync_requests(target_user_id, id);
+
+        CREATE TABLE IF NOT EXISTS crypto_resync_responses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recipient_user_id TEXT NOT NULL,
+            sender_user_id TEXT NOT NULL,
+            message_id TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            ciphertext TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (recipient_user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (sender_user_id) REFERENCES users(id) ON DELETE CASCADE,
+            UNIQUE (
+                recipient_user_id,
+                sender_user_id,
+                message_id,
+                device_id
+            )
+        );
+        CREATE INDEX IF NOT EXISTS idx_crypto_resync_responses_recipient
+            ON crypto_resync_responses(recipient_user_id, id);
 
         CREATE TABLE IF NOT EXISTS conversations (
             id TEXT PRIMARY KEY,
