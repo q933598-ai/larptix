@@ -2432,8 +2432,90 @@ function renderGroupMembersDialog(group) {
   if (!groupMembersList || !group) return;
   const memberIds = Array.isArray(group.group_member_ids) ? group.group_member_ids : [];
   groupMembersTitle.textContent = group.display_name;
-  groupMembersHelp.textContent = `${memberIds.length} member(s). Members with an active connection can be invited to the current call.`;
+  groupMembersHelp.textContent = group.is_channel ? memberIds.length + " member(s) · " + (group.post_policy === "admins" ? "admins can post" : "all members can post") : memberIds.length + " member(s). Members with an active connection can be invited to the current call.";
   groupMembersList.replaceChildren();
+
+  if (group.is_channel && group.admin_ids?.includes(me?.user_id)) {
+    const settingsBox = document.createElement("div");
+    settingsBox.className = "channel-admin-settings";
+    const policyLabel = document.createElement("label");
+    policyLabel.textContent = "Who can post";
+    const policy = document.createElement("select");
+    policy.innerHTML = '<option value="admins">Admins only</option><option value="members">All members</option>';
+    policy.value = group.post_policy || "admins";
+    policy.addEventListener("change", async () => {
+      try {
+        await api("PATCH", "/api/channels/" + encodeURIComponent(group.user_id) + "/settings", { post_policy: policy.value });
+        group.post_policy = policy.value;
+        groups = groups.map((item) => item.user_id === group.user_id ? { ...item, post_policy: policy.value } : item);
+      } catch (err) {
+        appendSystem(err.message || "Could not update channel posting settings.");
+        policy.value = group.post_policy || "admins";
+      }
+    });
+    settingsBox.append(policyLabel, policy);
+    const adminTitle = document.createElement("strong");
+    adminTitle.textContent = "Channel admins";
+    settingsBox.append(adminTitle);
+    for (const adminId of (group.admin_ids || [])) {
+      const row = document.createElement("div");
+      row.className = "channel-admin-row";
+      const name = document.createElement("span");
+      const user = users.find((item) => item.user_id === adminId);
+      name.textContent = user?.display_name || "Unknown admin";
+      row.append(name);
+      if (adminId !== (group.admin_ids || [])[0]) {
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "ghost";
+        remove.textContent = "Remove admin";
+        remove.addEventListener("click", async () => {
+          try {
+            await api("DELETE", "/api/channels/" + encodeURIComponent(group.user_id) + "/admins", { user_id: adminId });
+            await loadGroups();
+            const updated = groups.find((item) => item.user_id === group.user_id);
+            if (updated) renderGroupMembersDialog(updated);
+          } catch (err) {
+            appendSystem(err.message || "Could not remove channel admin.");
+          }
+        });
+        row.append(remove);
+      }
+      settingsBox.append(row);
+    }
+    const candidates = memberIds.filter((id) => !(group.admin_ids || []).includes(id));
+    if (candidates.length) {
+      const make = document.createElement("select");
+      make.innerHTML = '<option value="">Make member an admin…</option>';
+      for (const id of candidates) {
+        const option = document.createElement("option");
+        option.value = id;
+        const user = users.find((item) => item.user_id === id);
+        option.textContent = user?.display_name || id;
+        make.append(option);
+      }
+      const addAdmin = document.createElement("button");
+      addAdmin.type = "button";
+      addAdmin.className = "ghost";
+      addAdmin.textContent = "Make admin";
+      addAdmin.addEventListener("click", async () => {
+        if (!make.value) return;
+        addAdmin.disabled = true;
+        try {
+          await api("POST", "/api/channels/" + encodeURIComponent(group.user_id) + "/admins", { user_id: make.value });
+          await loadGroups();
+          const updated = groups.find((item) => item.user_id === group.user_id);
+          if (updated) renderGroupMembersDialog(updated);
+        } catch (err) {
+          appendSystem(err.message || "Could not add channel admin.");
+        } finally {
+          addAdmin.disabled = false;
+        }
+      });
+      settingsBox.append(make, addAdmin);
+    }
+    groupMembersList.append(settingsBox);
+  }
 
   const addBox = document.createElement("div");
   addBox.className = "group-add-member";
