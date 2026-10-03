@@ -1269,7 +1269,7 @@ async function waitForMatrixDevices(userIds, { attempts = 8, delayMs = 350 } = {
   );
 }
 
-function refreshPeerVerification(userId) {
+async function refreshPeerVerification(userId) {
   peerVerified.hidden = true;
 
   try {
