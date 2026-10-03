@@ -3499,7 +3499,7 @@ async function encryptAttachment(file) {
   };
 }
 
-async const GIF_FAVORITES_DB = "larptrix-local-media";
+const GIF_FAVORITES_DB = "larptrix-local-media";
 const GIF_FAVORITES_STORE = "gifs";
 
 function openGifFavoritesDb() {
