@@ -121,10 +121,10 @@ impl Database {
         let id = Uuid::new_v4().to_string();
         let conn = self.conn.lock().expect("db lock");
         let username_taken: bool = conn.query_row(
-                "SELECT EXISTS(
-                    SELECT 1 FROM users WHERE username = ?1 COLLATE NOCASE AND username <> ''
-                )",
-                [username],
+            "SELECT EXISTS(
+                SELECT 1 FROM users WHERE username = ?1 COLLATE NOCASE AND username <> ''
+            )",
+            [username],
             |row| row.get(0),
         )?;
         if username_taken {
@@ -157,14 +157,13 @@ impl Database {
         let id = Uuid::new_v4().to_string();
         let internal_email = format!("{id}@key.larptrix.invalid");
         let conn = self.conn.lock().expect("db lock");
-        let username_taken: bool = conn
-            .query_row(
-                "SELECT EXISTS(
-                    SELECT 1 FROM users WHERE username = ?1 COLLATE NOCASE AND username <> ''
-                )",
-                [username],
-                |row| row.get(0),
-            )?;
+        let username_taken: bool = conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM users WHERE username = ?1 COLLATE NOCASE AND username <> ''
+            )",
+            [username],
+            |row| row.get(0),
+        )?;
         if username_taken {
             return Err(DbError::UsernameTaken);
         }
