@@ -2733,6 +2733,14 @@ async function flushIceCandidates() {
   for (const candidate of candidates) await peerConnection.addIceCandidate(candidate);
 }
 
+function callAudioConstraints() {
+  return {
+    echoCancellation: true,
+    noiseSuppression: readStoredBool(NOISE_SUPPRESSION_KEY, true),
+    autoGainControl: true,
+  };
+}
+
 async function acquireCallMedia(kind) {
   callMediaNotice = "";
   if (!navigator.mediaDevices?.getUserMedia) {
@@ -2750,8 +2758,8 @@ async function acquireCallMedia(kind) {
     : [false];
   const attempts = [];
   if (hasMicrophone) {
-    for (const video of videoAttempts) attempts.push({ audio: true, video });
-    if (kind === "video") attempts.push({ audio: true, video: false });
+    for (const video of videoAttempts) attempts.push({ audio: callAudioConstraints(), video });
+    if (kind === "video") attempts.push({ audio: callAudioConstraints(), video: false });
   }
   if (kind === "video") {
     for (const video of videoAttempts) attempts.push({ audio: false, video });
