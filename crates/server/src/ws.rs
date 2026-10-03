@@ -602,7 +602,7 @@ fn delete_message(state: &AppState, user: &UserRow, peer_id: &str, message_id: &
         }
         format!("group_{peer_id}")
     } else {
-        let peer = state.db.user_by_id(peer_id).map_err(db_err)?.ok_or_else(|| "unknown user".to_string())?;
+        let peer = state.db.user_by_id(peer_id).map_err(|err| err.to_string())?.ok_or_else(|| "unknown user".to_string())?;
         if peer.id == user.id { return Err("cannot delete a message from yourself".into()); }
         let (a, b) = if user.id < peer.id { (user.id.as_str(), peer.id.as_str()) } else { (peer.id.as_str(), user.id.as_str()) };
         format!("{a}_{b}")
