@@ -677,7 +677,6 @@ fn validate_matrix_group_e2e_message(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "Matrix group message is missing room id".to_string())?;
 
-    let server_name = std::env::var("DOMAIN").unwrap_or_else(|_| "localhost".into());
     let expected_room_id = format!("!larpgrp_{group_id}:{server_name}");
     if room_id != expected_room_id {
         return Err("Matrix group message has an invalid room id".into());
@@ -1078,7 +1077,7 @@ fn send_error(tx: &Outbound, code: &str, message: impl ToString) {
 mod call_signal_tests {
     use super::{
         fanout, relay_call_signal, validate_e2e_message, validate_e2e_message_with_state,
-        validate_group_e2e_message,
+        validate_group_e2e_message, validate_matrix_group_e2e_message,
     };
     use crate::db::Database;
     use crate::hub::Hub;
