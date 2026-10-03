@@ -1143,6 +1143,12 @@ document.getElementById("start-video-call").addEventListener("click", () => star
 groupMembersOpen?.addEventListener("click", openGroupMembers);
 groupMembersClose?.addEventListener("click", () => groupMembersDialog.close());
 groupCallInvite?.addEventListener("click", openGroupMembers);
+groupCallStart?.addEventListener("click", () => {
+  const state = activeGroupCalls.get(peerId);
+  if (state?.active) void joinActiveGroupCall();
+  else void startGroupCall("audio");
+});
+groupCallJoin?.addEventListener("click", () => void joinActiveGroupCall());
 document.getElementById("accept-call").addEventListener("click", acceptIncomingCall);
 document.getElementById("reject-call").addEventListener("click", rejectIncomingCall);
 document.getElementById("end-call").addEventListener("click", () => endCall(true));
