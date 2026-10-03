@@ -772,7 +772,6 @@ composer.addEventListener("submit", async (event) => {
 });
 
 photoInput.addEventListener("change", () => queueAttachment(photoInput.files[0]));
-gifInput.addEventListener("change", () => queueAttachment(gifInput.files[0]));
 fileInput.addEventListener("change", () => queueAttachment(fileInput.files[0]));
 audioFileInput.addEventListener("change", () => queueAttachment(audioFileInput.files[0]));
 recordAudioButton.addEventListener("click", toggleRecording);
@@ -2517,6 +2516,14 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
           `Could not open encrypted attachment: ${err?.message || String(err)}`;
       }
     }
+    if (payload?.gif) {
+      try {
+        renderSelectedGif(payload.gif, bodyElement.parentElement);
+      } catch (err) {
+        bodyElement.textContent =
+          `Could not open GIF: ${err?.message || String(err)}`;
+      }
+    }
   } catch (err) {
     bodyElement.textContent = `Could not decrypt message: ${err?.message || String(err)}`;
     return false;
@@ -3144,8 +3151,16 @@ function renderKlipyGifResults(results) {
 }
 
 function renderSelectedGif(gif, container) {
-  if (!gif || typeof gif.url !== "string" || !gif.url.startsWith("https://")) {
+  if (!gif || typeof gif.url !== "string") {
     throw new Error("This GIF has an invalid media URL.");
+  }
+
+  const mediaUrl = new URL(gif.url);
+  if (
+    mediaUrl.protocol !== "https:"
+    || mediaUrl.hostname.toLowerCase() !== "static.klipy.com"
+  ) {
+    throw new Error("This GIF did not come from KLIPY.");
   }
 
   const figure = document.createElement("figure");
@@ -3160,13 +3175,20 @@ function renderSelectedGif(gif, container) {
 
   figure.append(image);
 
-  if (typeof gif.item_url === "string" && gif.item_url.startsWith("https://")) {
-    const link = document.createElement("a");
-    link.href = gif.item_url;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    link.textContent = "View on KLIPY";
-    figure.append(link);
+  if (typeof gif.item_url === "string") {
+    const itemUrl = new URL(gif.item_url);
+    if (
+      itemUrl.protocol === "https:"
+      && (itemUrl.hostname.toLowerCase() === "klipy.com"
+        || itemUrl.hostname.toLowerCase().endsWith(".klipy.com"))
+    ) {
+      const link = document.createElement("a");
+      link.href = gif.item_url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = "View on KLIPY";
+      figure.append(link);
+    }
   }
 
   container.append(figure);
@@ -3180,7 +3202,7 @@ function clearAttachment() {
   attachmentPreview.replaceChildren();
   attachmentPreview.hidden = true;
   photoInput.value = "";
-  gifInput.value = "";
+
   fileInput.value = "";
   audioFileInput.value = "";
 }
