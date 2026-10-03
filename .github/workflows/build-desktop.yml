@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build-linux:
-    name: Linux AppImage
+    name: Linux AppImage + pacman
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -32,10 +32,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install pacman build dependency
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends bsdtar
+
       - name: Generate app icons
         run: npm run tauri icon src-tauri/icon-source.png
 
-      - name: Build AppImage
+      - name: Build AppImage + pacman
         run: npm run build:linux
 
       - name: Upload AppImage
@@ -45,8 +48,15 @@ jobs:
           path: desktop/dist/*.AppImage
           if-no-files-found: error
 
+      - name: Upload pacman package
+        uses: actions/upload-artifact@v4
+        with:
+          name: larptrix-linux-pacman
+          path: desktop/dist/*.pacman
+          if-no-files-found: error
+
   build-windows:
-    name: Windows x64 ZIP
+    name: Windows NSIS installer
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -68,12 +78,12 @@ jobs:
       - name: Generate app icons
         run: npm run tauri icon src-tauri/icon-source.png
 
-      - name: Build Windows ZIP
+      - name: Build NSIS installer
         run: npm run build:windows
 
-      - name: Upload Windows ZIP
+      - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: larptrix-windows-x64
-          path: desktop/dist/*.zip
+          name: larptrix-windows-installer
+          path: desktop/dist/*.exe
           if-no-files-found: error
