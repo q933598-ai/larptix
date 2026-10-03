@@ -3316,34 +3316,30 @@ html[data-theme="custom"] .music-library {
   min-height: 34px;
 }
 
-@container (max-width: 620px) {
-  .call-stage .call-controls {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    max-height: 240px;
-  }
+.call-stage.call-compact .call-controls {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-height: 240px;
 }
 
-@container (max-width: 460px) {
-  .call-stage {
-    min-width: 320px;
-  }
+.call-stage.call-ultra-compact {
+  min-width: 320px;
+}
 
-  .call-stage .call-controls {
-    grid-template-columns: 1fr;
-    gap: 6px;
-    max-height: 250px;
-  }
+.call-stage.call-ultra-compact .call-controls {
+  grid-template-columns: 1fr;
+  gap: 6px;
+  max-height: 250px;
+}
 
-  .call-stage .call-controls button,
-  .call-stage .call-controls select {
-    min-height: 38px;
-    padding: 7px 9px;
-    font-size: .78rem;
-  }
+.call-stage.call-ultra-compact .call-controls button,
+.call-stage.call-ultra-compact .call-controls select {
+  min-height: 38px;
+  padding: 7px 9px;
+  font-size: .78rem;
+}
 
-  .call-stage .call-videos {
-    min-height: 180px;
-  }
+.call-stage.call-ultra-compact .call-videos {
+  min-height: 180px;
 }
 
 /* Keep the floating music library reliably draggable and responsive */
