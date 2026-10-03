@@ -1225,7 +1225,7 @@ mod call_signal_tests {
         assert!(validate_matrix_group_e2e_message(
             &state,
             "group-1",
-            &[alice.id, bob.id],
+            &[alice.id.clone(), bob.id.clone()],
             &alice.id,
             "localhost",
             &fake,
