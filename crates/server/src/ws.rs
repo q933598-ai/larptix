@@ -1031,6 +1031,70 @@ mod call_signal_tests {
     }
 
     #[test]
+    fn matrix_group_message_accepts_valid_envelope_and_rejects_unknown_sender() {
+        let state = AppState {
+            db: Database::open(Path::new(":memory:")).unwrap(),
+            hub: Hub::new(),
+            upload_dir: Path::new("/tmp").to_path_buf(),
+        };
+
+        let alice = state.db.create_key_user("Alice", "alice", 1).unwrap();
+        let bob = state.db.create_key_user("Bob", "bob", 1).unwrap();
+
+        for (user_id, device_id) in [(&alice.id, "alice-matrix-device"), (&bob.id, "bob-matrix-device")] {
+            state
+                .db
+                .upsert_matrix_crypto_device(
+                    user_id,
+                    device_id,
+                    &serde_json::json!({
+                        "user_id": format!("@{}:localhost", user_id),
+                        "device_id": device_id,
+                        "algorithms": ["m.olm.v1.curve25519-aes-sha2", "m.megolm.v1.aes-sha2"],
+                        "keys": {},
+                        "signatures": {}
+                    }).to_string(),
+                    "{}",
+                    "{}",
+                )
+                .unwrap();
+        }
+
+        let body = serde_json::json!({
+            "version": 3,
+            "message_type": "matrix",
+            "sender_device_id": "alice-matrix-device",
+            "room_id": format!("!larpgrp_group-1:localhost"),
+            "ciphertext": {
+                "algorithm": "m.megolm.v1.aes-sha2",
+                "ciphertext": "opaque"
+            }
+        }).to_string();
+
+        assert!(validate_matrix_group_e2e_message(
+            &state,
+            "group-1",
+            &[alice.id.clone(), bob.id.clone()],
+            &alice.id,
+            &body,
+            true,
+        ).is_ok());
+
+        let fake = body.replace(
+            "alice-matrix-device",
+            "not-alice-device",
+        );
+        assert!(validate_matrix_group_e2e_message(
+            &state,
+            "group-1",
+            &[alice.id, bob.id],
+            &alice.id,
+            &fake,
+            true,
+        ).is_err());
+    }
+
+    #[test]
     fn multi_device_message_accepts_valid_device_ciphertexts() {
         let state = AppState {
             db: Database::open(Path::new(":memory:")).unwrap(),
