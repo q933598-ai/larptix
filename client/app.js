@@ -176,6 +176,10 @@ const profileBannerFile = document.getElementById("profile-banner-file");
 const settingsBrowserNotifications = document.getElementById("settings-browser-notifications");
 const settingsEnableNotifications = document.getElementById("settings-enable-notifications");
 const settingsNotificationsStatus = document.getElementById("settings-notifications-status");
+const settingsUpdateStatus = document.getElementById("settings-update-status");
+const settingsCheckUpdates = document.getElementById("settings-check-updates");
+const settingsInstallUpdate = document.getElementById("settings-install-update");
+const settingsOpenReleases = document.getElementById("settings-open-releases");
 const peerProfileBanner = document.getElementById("peer-profile-banner");
 const profileBanner = document.querySelector("#profile-dialog .profile-banner");
 
@@ -1149,6 +1153,165 @@ function renderMenuAccount() {
   menuServer.textContent = location.host;
 }
 
+const LARPTRIX_RELEASE_API = "https://api.github.com/repos/q933598-ai/larptix/releases/latest";
+const LARPTRIX_RELEASES_URL = "https://github.com/q933598-ai/larptix/releases/latest";
+
+let pendingClientUpdate = null;
+
+function normalizedVersion(value) {
+  const match = String(value || "")
+    .trim()
+    .replace(/^v/i, "")
+    .match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+  return match
+    ? [Number(match[1]), Number(match[2] || 0), Number(match[3] || 0)]
+    : null;
+}
+
+function compareClientVersions(left, right) {
+  const a = normalizedVersion(left);
+  const b = normalizedVersion(right);
+  if (!a || !b) return 0;
+  for (let i = 0; i < 3; i += 1) {
+    if (a[i] > b[i]) return 1;
+    if (a[i] < b[i]) return -1;
+  }
+  return 0;
+}
+
+function isAndroidClientRuntime() {
+  return /Android/i.test(navigator.userAgent || "") && !globalThis.larptrixDesktop;
+}
+
+async function getNativeClientVersion() {
+  try {
+    if (globalThis.larptrixDesktop?.appVersion) {
+      return await globalThis.larptrixDesktop.appVersion();
+    }
+  } catch (err) {
+    console.warn("Desktop app version lookup failed:", err?.message || err);
+  }
+
+  try {
+    const tauriApp = globalThis.__TAURI__?.app;
+    if (typeof tauriApp?.getVersion === "function") {
+      return await tauriApp.getVersion();
+    }
+  } catch (err) {
+    console.warn("Tauri app version lookup failed:", err?.message || err);
+  }
+
+  return null;
+}
+
+async function fetchLatestLarptrixRelease() {
+  const response = await fetch(LARPTRIX_RELEASE_API, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "Larptrix-client",
+    },
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`GitHub Releases returned HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+function findAndroidReleaseAsset(release) {
+  const version = String(release?.tag_name || "").replace(/^v/i, "");
+  return Array.isArray(release?.assets)
+    ? release.assets.find((asset) => asset.name === `Larptrix-${version}-android.apk`) || null
+    : null;
+}
+
+function renderClientUpdateStatus(text) {
+  if (settingsUpdateStatus) {
+    settingsUpdateStatus.textContent = text;
+  }
+}
+
+async function checkForClientUpdate({ silent = false } = {}) {
+  if (!settingsUpdateStatus && !settingsCheckUpdates) return null;
+
+  if (!silent) {
+    renderClientUpdateStatus("Checking for updates…");
+  }
+
+  try {
+    if (globalThis.larptrixDesktop?.checkForUpdate) {
+      const update = await globalThis.larptrixDesktop.checkForUpdate();
+      pendingClientUpdate = update || null;
+      if (update) {
+        settingsInstallUpdate.hidden = false;
+        settingsInstallUpdate.textContent = "Install update";
+        renderClientUpdateStatus(
+          `Larptrix ${update.version} is available (current ${update.currentVersion}).`,
+        );
+      } else {
+        settingsInstallUpdate.hidden = true;
+        renderClientUpdateStatus(
+          `Larptrix ${await getNativeClientVersion() || "current"} is up to date.`,
+        );
+      }
+      return update || null;
+    }
+
+    const currentVersion = await getNativeClientVersion();
+    if (!currentVersion) {
+      settingsInstallUpdate.hidden = true;
+      renderClientUpdateStatus(
+        isAndroidClientRuntime()
+          ? "Android app version could not be detected."
+          : "This web client is updated with the connected server.",
+      );
+      return null;
+    }
+
+    const release = await fetchLatestLarptrixRelease();
+    const latestVersion = String(release?.tag_name || "").replace(/^v/i, "");
+    if (!latestVersion || compareClientVersions(latestVersion, currentVersion) <= 0) {
+      pendingClientUpdate = null;
+      settingsInstallUpdate.hidden = true;
+      renderClientUpdateStatus(`Larptrix ${currentVersion} is up to date.`);
+      return null;
+    }
+
+    const android = isAndroidClientRuntime();
+    const asset = android ? findAndroidReleaseAsset(release) : null;
+    pendingClientUpdate = {
+      version: latestVersion,
+      currentVersion,
+      releaseUrl: release?.html_url || LARPTRIX_RELEASES_URL,
+      assetUrl: asset?.browser_download_url || null,
+      assetName: asset?.name || null,
+    };
+
+    settingsInstallUpdate.hidden = false;
+    settingsInstallUpdate.textContent = android ? "Download APK" : "Open update";
+    renderClientUpdateStatus(
+      android
+        ? `Larptrix ${latestVersion} is available. Download the new APK to update.`
+        : `Larptrix ${latestVersion} is available.`,
+    );
+    return pendingClientUpdate;
+  } catch (err) {
+    if (!silent) {
+      renderClientUpdateStatus(err?.message || "Could not check for updates.");
+    }
+    return null;
+  }
+}
+
+function openExternalReleaseUrl(url) {
+  const target = url || LARPTRIX_RELEASES_URL;
+  const link = document.createElement("a");
+  link.href = target;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.click();
+}
+
 function openSettings() {
   if (!me) return;
   settingsServer.value = location.host;
@@ -1244,6 +1407,31 @@ profileOpen.addEventListener("click", async () => {
 });
 menuSettings.addEventListener("click", openSettings);
 document.getElementById("settings-close").addEventListener("click", () => settingsDialog.close());
+settingsCheckUpdates?.addEventListener("click", () => {
+  void checkForClientUpdate({ silent: false });
+});
+settingsInstallUpdate?.addEventListener("click", async () => {
+  if (globalThis.larptrixDesktop?.installUpdate) {
+    try {
+      renderClientUpdateStatus("Installing update…");
+      await globalThis.larptrixDesktop.installUpdate();
+      return;
+    } catch (err) {
+      renderClientUpdateStatus(err?.message || "Could not install update.");
+      return;
+    }
+  }
+
+  const target = pendingClientUpdate?.assetUrl || pendingClientUpdate?.releaseUrl || LARPTRIX_RELEASES_URL;
+  openExternalReleaseUrl(target);
+});
+settingsOpenReleases?.addEventListener("click", () => {
+  if (globalThis.larptrixDesktop?.openReleases) {
+    void globalThis.larptrixDesktop.openReleases();
+    return;
+  }
+  openExternalReleaseUrl(LARPTRIX_RELEASES_URL);
+});
 settingsEnableNotifications?.addEventListener("click", async () => {
   try {
     await requestBrowserNotifications();
@@ -1771,6 +1959,8 @@ avatarFile.addEventListener("change", async () => {
 
 wireCallWindowDragging();
 wireCallResponsiveSizing();
+setTimeout(() => void checkForClientUpdate({ silent: true }), 12000);
+setInterval(() => void checkForClientUpdate({ silent: true }), 6 * 60 * 60 * 1000);
 setCallPinned(localStorage.getItem("larptrix_call_window_pinned") === "1");
 setMusicWindowPinned(localStorage.getItem("larptrix_music_window_pinned") === "1");
 bootstrap();
