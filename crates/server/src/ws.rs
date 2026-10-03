@@ -1422,6 +1422,9 @@ fn user_info(user: &UserRow, online: bool) -> UserInfo {
         avatar_url: user.avatar_id.as_ref().map(|_| avatar_url(&user.id)),
         activity: None,
         is_group: false,
+        is_channel: false,
+        admin_ids: Vec::new(),
+        post_policy: String::new(),
         e2e_enabled: false,
         group_member_ids: Vec::new(),
     }
