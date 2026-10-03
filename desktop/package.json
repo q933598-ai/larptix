@@ -8,9 +8,9 @@
   "scripts": {
     "tauri": "tauri",
     "dev": "electron .",
-    "build": "electron-builder --linux AppImage pacman && electron-builder --win nsis",
-    "build:linux": "electron-builder --linux AppImage pacman",
-    "build:windows": "electron-builder --win nsis",
+    "build": "electron-builder --linux AppImage pacman --publish never && electron-builder --win nsis --publish never",
+    "build:linux": "electron-builder --linux AppImage pacman --publish never",
+    "build:windows": "electron-builder --win nsis --publish never",
     "dev:tauri": "tauri dev",
     "build:tauri": "tauri build",
     "build:android": "tauri android build --apk",
@@ -37,7 +37,9 @@
       "syncDesktopName": true,
       "icon": "src-tauri/icons/icon.png",
       "artifactName": "Larptrix-${version}-${arch}.${ext}",
-      "executableName": "larptrix"
+      "executableName": "larptrix",
+      "maintainer": "Larptrix <q933598@gmail.com>",
+      "vendor": "Larptrix"
     },
     "win": {
       "target": [
@@ -67,5 +69,14 @@
     "@tauri-apps/cli": "^2.5.0",
     "electron": "^44.4.5",
     "electron-builder": "^26.15.3"
+  },
+  "author": {
+    "name": "Larptrix",
+    "email": "q933598@gmail.com"
+  },
+  "homepage": "https://github.com/q933598-ai/larptix",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/q933598-ai/larptix.git"
   }
 }
