@@ -173,6 +173,34 @@ const cryptoRecoveryResponsesByMessageId = new Map();
 const messageBodyElementsById = new Map();
 const messagesById = new Map();
 
+function pinnedChatsKey() {
+  return me ? `larptrix_pinned_chats_${me.user_id}` : null;
+}
+
+function getPinnedChats() {
+  if (!me) return new Set();
+  try {
+    const value = JSON.parse(localStorage.getItem(pinnedChatsKey()) || "[]");
+    return new Set(Array.isArray(value) ? value.filter((id) => typeof id === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function setPinnedChats(pinned) {
+  const key = pinnedChatsKey();
+  if (!key) return;
+  localStorage.setItem(key, JSON.stringify([...pinned]));
+}
+
+function togglePinnedChat(id) {
+  const pinned = getPinnedChats();
+  if (pinned.has(id)) pinned.delete(id);
+  else pinned.add(id);
+  setPinnedChats(pinned);
+  renderUsers();
+}
+
 async function sentPlaintextCacheId(ciphertext) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ciphertext));
   return `sent-plaintext:${[...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
@@ -1643,7 +1671,6 @@ async function startGroupCall(kind) {
     remoteVideo.hidden = true;
     remoteAudio.hidden = true;
     document.getElementById("group-remotes").hidden = false;
-    document.getElementById("toggle-screen-share").hidden = true;
     await attachLocalMediaPreview();
     callStatus.textContent = "Starting group " + (kind === "video" ? "video " : "") + "call…" + callMediaNotice;
 
@@ -1896,25 +1923,47 @@ function sendGroupCallSignal(targetId, kind, payload) {
 
 function renderGroupRemoteTrack(remoteId, stream, kind) {
   const container = document.getElementById("group-remotes");
-  const selector =
-    '[data-group-remote-id="' + CSS.escape(remoteId) + '"][data-kind="' + kind + '"]';
-  let media = container.querySelector(selector);
-  if (!media) {
-    media = kind === "video" ? document.createElement("video") : document.createElement("audio");
+  let tile = container.querySelector('[data-group-tile-id="' + CSS.escape(remoteId) + '"]');
+  if (!tile) {
+    tile = document.createElement("article");
+    tile.className = "group-video-tile";
+    tile.dataset.groupTileId = remoteId;
+
+    const media = document.createElement("video");
+    media.className = "group-remote-video";
     media.dataset.groupRemoteId = remoteId;
-    media.dataset.kind = kind;
+    media.dataset.kind = "video";
     media.autoplay = true;
     media.playsInline = true;
-    if (kind === "audio") media.hidden = true;
-    if (kind === "video") {
-      media.className = "group-remote-video";
-      media.title = users.find((user) => user.user_id === remoteId)?.display_name || "Participant";
-    }
-    container.append(media);
+    tile.append(media);
+
+    const audio = document.createElement("audio");
+    audio.dataset.groupRemoteId = remoteId;
+    audio.dataset.kind = "audio";
+    audio.autoplay = true;
+    audio.hidden = true;
+    tile.append(audio);
+
+    const identity = document.createElement("div");
+    identity.className = "group-participant";
+    const avatar = document.createElement("span");
+    avatar.className = "avatar";
+    const user = users.find((item) => item.user_id === remoteId);
+    paintAvatar(avatar, user || { display_name: "?" });
+    const name = document.createElement("span");
+    name.textContent = user?.display_name || "Participant";
+    identity.append(avatar, name);
+    tile.append(identity);
+    container.append(tile);
   }
-  media.srcObject = stream;
-  media.play?.().catch(() => {});
+
+  const media = tile.querySelector('[data-kind="' + kind + '"]');
+  if (media) {
+    media.srcObject = stream;
+    media.play?.().catch(() => {});
+  }
 }
+
 
 function removeGroupPeer(remoteId) {
   const connection = groupPeerConnections.get(remoteId);
@@ -1924,8 +1973,10 @@ function removeGroupPeer(remoteId) {
   document.getElementById("group-remotes")
     ?.querySelectorAll('[data-group-remote-id="' + CSS.escape(remoteId) + '"]')
     .forEach((element) => element.remove());
-  if (groupCallId && groupPeerConnections.size === 0 && !pendingIncomingCall) {
-    callStatus.textContent = "Waiting for group participants" + callMediaNotice;
+  if (groupCallId && !pendingIncomingCall) {
+    callStatus.textContent = groupCallJoinedMembers.size > 1
+      ? "Group call · waiting for participants" + callMediaNotice
+      : "Group call · waiting for participants to join" + callMediaNotice;
   }
 }
 
@@ -2268,7 +2319,7 @@ function toggleCamera() {
 }
 
 async function toggleScreenShare() {
-  if (!peerConnection) return;
+  if (!callPeerId) return;
   if (screenMediaStream) {
     await stopScreenShare();
     return;
@@ -2289,36 +2340,56 @@ async function toggleScreenShare() {
     localScreenVideo.srcObject = screenMediaStream;
     localScreenVideo.hidden = false;
     localScreenVideo.play().catch(() => {});
-    let sender = peerConnection.getSenders().find((item) => item.track === localMediaStream?.getVideoTracks()[0]);
-    let renegotiate = false;
-    if (sender) {
-      await sender.replaceTrack(screenTrack);
-    } else {
-      sender = peerConnection.addTrack(screenTrack, screenMediaStream);
-      renegotiate = true;
+
+    const connections = groupCallId
+      ? [...groupPeerConnections.entries()]
+      : peerConnection ? [["direct", peerConnection]] : [];
+    let sharedAudio = false;
+
+    for (const [remoteId, connection] of connections) {
+      let sender = connection.getSenders().find((item) =>
+        item.track?.kind === "video" || item.track === localMediaStream?.getVideoTracks()[0]
+      );
+      let renegotiate = false;
+      if (sender) {
+        await sender.replaceTrack(screenTrack);
+      } else {
+        sender = connection.addTrack(screenTrack, screenMediaStream);
+        renegotiate = true;
+      }
+      const screenAudioTrack = screenMediaStream.getAudioTracks()[0];
+      if (screenAudioTrack && !connection.getSenders().some((item) => item.track === screenAudioTrack)) {
+        connection.addTrack(screenAudioTrack, screenMediaStream);
+        renegotiate = true;
+        sharedAudio = true;
+      }
+      try {
+        const params = sender.getParameters();
+        params.encodings = params.encodings?.length ? params.encodings : [{}];
+        params.encodings[0].maxBitrate = highQuality ? 12_000_000 : 3_000_000;
+        params.encodings[0].maxFramerate = highQuality ? 144 : 30;
+        await sender.setParameters(params);
+      } catch {}
+      if (renegotiate) {
+        applyCallCodecPreferences(connection);
+        const offer = await connection.createOffer();
+        await connection.setLocalDescription(offer);
+        if (groupCallId) {
+          sendGroupCallSignal(remoteId, "offer", {
+            group_id: groupCallGroupId,
+            call_id: groupCallId,
+            target_id: remoteId,
+            description: connection.localDescription,
+            media: callMediaKind,
+          });
+        } else {
+          sendCallSignal("offer", { description: connection.localDescription, media: callMediaKind });
+        }
+      }
     }
-    const screenAudioTrack = screenMediaStream.getAudioTracks()[0];
-    if (screenAudioTrack) {
-      peerConnection.addTrack(screenAudioTrack, screenMediaStream);
-      renegotiate = true;
-    }
-    if (renegotiate) {
-      applyCallCodecPreferences(peerConnection);
-      const offer = await peerConnection.createOffer();
-      await peerConnection.setLocalDescription(offer);
-      sendCallSignal("offer", { description: peerConnection.localDescription, media: callMediaKind });
-    }
-    try {
-      const params = sender.getParameters();
-      params.encodings = params.encodings?.length ? params.encodings : [{}];
-      params.encodings[0].maxBitrate = highQuality ? 12_000_000 : 3_000_000;
-      params.encodings[0].maxFramerate = highQuality ? 144 : 30;
-      await sender.setParameters(params);
-    } catch {
-      // The browser may not expose encoder controls for this track.
-    }
+
     const settings = screenTrack.getSettings();
-    const audioStatus = screenAudioTrack
+    const audioStatus = sharedAudio
       ? " with shared audio"
       : webkitGtk
         ? " (screen audio unavailable in WebKitGTK)"
@@ -2335,13 +2406,20 @@ async function toggleScreenShare() {
 async function stopScreenShare() {
   if (!screenMediaStream) return;
   const screenTrack = screenMediaStream.getVideoTracks()[0];
-  const sender = peerConnection?.getSenders().find((item) => item.track === screenTrack);
   const cameraTrack = localMediaStream?.getVideoTracks()[0];
-  if (sender) await sender.replaceTrack(cameraTrack || null);
-  for (const audioTrack of screenMediaStream.getAudioTracks()) {
-    const audioSender = peerConnection?.getSenders().find((item) => item.track === audioTrack);
-    if (audioSender) await audioSender.replaceTrack(null);
+  const connections = groupCallId
+    ? [...groupPeerConnections.entries()]
+    : peerConnection ? [["direct", peerConnection]] : [];
+
+  for (const [remoteId, connection] of connections) {
+    const sender = connection.getSenders().find((item) => item.track === screenTrack);
+    if (sender) await sender.replaceTrack(cameraTrack || null);
+    for (const audioTrack of screenMediaStream.getAudioTracks()) {
+      const audioSender = connection.getSenders().find((item) => item.track === audioTrack);
+      if (audioSender) await audioSender.replaceTrack(null);
+    }
   }
+
   screenMediaStream.getTracks().forEach((track) => track.stop());
   screenMediaStream = null;
   localScreenVideo.srcObject = null;
@@ -2349,6 +2427,7 @@ async function stopScreenShare() {
   document.getElementById("toggle-screen-share").textContent = "Share screen";
   if (callStatus.textContent.startsWith("Sharing ")) callStatus.textContent = "Connected";
 }
+
 
 function endCall(notifyPeer) {
   if (groupCallGroupId && groupCallId) {
@@ -2448,6 +2527,12 @@ function renderUsers() {
     return user.display_name.toLocaleLowerCase().includes(query)
       || (user.username || "").toLocaleLowerCase().includes(query);
   });
+  const pinned = getPinnedChats();
+  matches.sort((a, b) => {
+    const ap = pinned.has(a.user_id) ? 1 : 0;
+    const bp = pinned.has(b.user_id) ? 1 : 0;
+    return bp - ap || a.display_name.localeCompare(b.display_name);
+  });
   for (const user of matches) {
     if (me && user.user_id === me.user_id) continue;
     const li = document.createElement("li");
@@ -2477,7 +2562,21 @@ function renderUsers() {
     }
     button.append(avatar, name, dot);
     button.addEventListener("click", () => openChat(user.user_id));
-    li.append(button);
+
+    const pin = document.createElement("button");
+    pin.type = "button";
+    pin.className = "chat-pin ghost";
+    pin.title = pinned.has(user.user_id) ? "Unpin chat" : "Pin chat";
+    pin.setAttribute("aria-label", pin.title);
+    pin.textContent = pinned.has(user.user_id) ? "★" : "☆";
+    pin.classList.toggle("is-pinned", pinned.has(user.user_id));
+    pin.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      togglePinnedChat(user.user_id);
+    });
+
+    li.append(button, pin);
     usersEl.append(li);
   }
 }
