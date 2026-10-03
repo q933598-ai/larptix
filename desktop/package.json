@@ -11,7 +11,8 @@
     "build:linux": "electron-builder --linux AppImage",
     "build:windows": "electron-builder --win zip --x64",
     "dev:tauri": "tauri dev",
-    "build:tauri": "tauri build"
+    "build:tauri": "tauri build",
+    "build:android": "tauri android build --apk"
   },
   "build": {
     "appId": "com.larptrix.desktop",
