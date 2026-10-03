@@ -108,7 +108,6 @@ const menuServer = document.getElementById("menu-server");
 const menuChats = document.getElementById("menu-chats");
 const menuMusic = document.getElementById("menu-music");
 const menuNewGroup = document.getElementById("menu-new-group");
-const menuProfile = document.getElementById("menu-profile");
 const menuSettings = document.getElementById("menu-settings");
 const settingsDialog = document.getElementById("settings-dialog");
 const settingsServer = document.getElementById("settings-server");
@@ -301,9 +300,22 @@ menuNewGroup.addEventListener("click", () => {
   document.getElementById("create-group-open").click();
   closeAppMenu();
 });
-menuProfile.addEventListener("click", () => {
-  profileOpen.click();
+profileOpen.addEventListener("click", async () => {
   closeAppMenu();
+  try {
+    const profile = await api("GET", `/api/users/${encodeURIComponent(me.user_id)}/profile`);
+    profileName.value = profile.display_name;
+    profileUsername.value = profile.username;
+    profileAbout.value = profile.about;
+    updateOwnProfileCard(profile);
+    customActivity = profile.activity?.startsWith("Listening to ") ? "" : (profile.activity || "");
+    profileActivity.value = customActivity;
+    showMusicActivity.checked = musicActivityEnabled;
+    profileDialog.showModal();
+  } catch (err) {
+    profileError.textContent = err.message;
+    profileError.hidden = false;
+  }
 });
 menuSettings.addEventListener("click", openSettings);
 document.getElementById("settings-close").addEventListener("click", () => settingsDialog.close());
@@ -379,22 +391,6 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && imageViewer.open) {
     event.preventDefault();
     imageViewer.close();
-  }
-});
-profileOpen.addEventListener("click", async () => {
-  try {
-    const profile = await api("GET", `/api/users/${encodeURIComponent(me.user_id)}/profile`);
-    profileName.value = profile.display_name;
-    profileUsername.value = profile.username;
-    profileAbout.value = profile.about;
-    updateOwnProfileCard(profile);
-    customActivity = profile.activity?.startsWith("Listening to ") ? "" : (profile.activity || "");
-    profileActivity.value = customActivity;
-    showMusicActivity.checked = musicActivityEnabled;
-    profileDialog.showModal();
-  } catch (err) {
-    profileError.textContent = err.message;
-    profileError.hidden = false;
   }
 });
 document.getElementById("peer-profile-open").addEventListener("click", () => {
