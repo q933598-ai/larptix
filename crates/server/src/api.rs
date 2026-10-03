@@ -72,7 +72,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/matrix/keys/query", post(matrix_keys_query))
         .route("/api/matrix/keys/claim", post(matrix_keys_claim))
         .route("/api/matrix/to-device", post(matrix_send_to_device))
-        .route("/api/matrix/to-device/pending", get(matrix_pending_to_device))
+        .route(
+            "/api/matrix/to-device/pending",
+            get(matrix_pending_to_device),
+        )
         .route("/api/matrix/to-device/ack", post(matrix_ack_to_device))
         .route("/api/rtc-config", get(rtc_config))
         .route("/api/users/{id}/avatar", get(user_avatar))
@@ -373,14 +376,21 @@ async fn matrix_keys_upload(
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
 
-    if let Some(request_user_id) = device_keys.get("user_id").and_then(serde_json::Value::as_str) {
-        let resolved = resolve_matrix_user(&state, request_user_id, &matrix_server_name(&headers)?)?;
+    if let Some(request_user_id) = device_keys
+        .get("user_id")
+        .and_then(serde_json::Value::as_str)
+    {
+        let resolved =
+            resolve_matrix_user(&state, request_user_id, &matrix_server_name(&headers)?)?;
         if resolved.id != user.id {
             return Err(ApiError::bad("Matrix device belongs to another account"));
         }
     }
 
-    if let Some(request_device_id) = device_keys.get("device_id").and_then(serde_json::Value::as_str) {
+    if let Some(request_device_id) = device_keys
+        .get("device_id")
+        .and_then(serde_json::Value::as_str)
+    {
         if request_device_id != body.device_id {
             return Err(ApiError::bad("Matrix device id does not match device keys"));
         }
@@ -469,7 +479,10 @@ async fn matrix_keys_query(
         };
 
         let wanted = requested_devices.as_array();
-        let devices = state.db.matrix_devices_for_user(&user.id).map_err(ApiError::db)?;
+        let devices = state
+            .db
+            .matrix_devices_for_user(&user.id)
+            .map_err(ApiError::db)?;
         let mut user_devices = serde_json::Map::new();
 
         for device in devices {
@@ -488,7 +501,10 @@ async fn matrix_keys_query(
             user_devices.insert(device.device_id, value);
         }
 
-        device_keys.insert(matrix_user_id.clone(), serde_json::Value::Object(user_devices));
+        device_keys.insert(
+            matrix_user_id.clone(),
+            serde_json::Value::Object(user_devices),
+        );
     }
 
     Ok(Json(serde_json::json!({
@@ -537,14 +553,14 @@ async fn matrix_keys_claim(
                     .map_err(|_| ApiError::internal("stored Matrix one-time key is invalid"))?;
                 let mut device_result = serde_json::Map::new();
                 device_result.insert(key_id, value);
-                user_result.insert(
-                    device_id.clone(),
-                    serde_json::Value::Object(device_result),
-                );
+                user_result.insert(device_id.clone(), serde_json::Value::Object(device_result));
             }
         }
 
-        one_time_keys.insert(matrix_user_id.clone(), serde_json::Value::Object(user_result));
+        one_time_keys.insert(
+            matrix_user_id.clone(),
+            serde_json::Value::Object(user_result),
+        );
     }
 
     Ok(Json(serde_json::json!({

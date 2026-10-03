@@ -28,7 +28,7 @@ pub enum ClientMessage {
         message_id: String,
         device_id: String,
         body: String,
-        #[serde(default) ]
+        #[serde(default)]
         attachment_id: Option<String>,
     },
     /// Deliver a freshly encrypted copy of a message to a specific device

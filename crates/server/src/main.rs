@@ -88,7 +88,9 @@ async fn ws_upgrade(
     };
 
     match require_user(&state, &headers) {
-        Ok(user) => ws.on_upgrade(move |socket| ws::handle_socket(socket, state, user, server_name)),
+        Ok(user) => {
+            ws.on_upgrade(move |socket| ws::handle_socket(socket, state, user, server_name))
+        }
         Err(err) => err.into_response(),
     }
 }

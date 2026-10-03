@@ -14,7 +14,12 @@ use crate::hub::Outbound;
 use crate::now_ms;
 use crate::AppState;
 
-pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: UserRow, server_name: String) {
+pub async fn handle_socket(
+    socket: WebSocket,
+    state: Arc<AppState>,
+    user: UserRow,
+    server_name: String,
+) {
     let user_id = match Uuid::parse_str(&user.id) {
         Ok(id) => id,
         Err(_) => return,
@@ -104,7 +109,9 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: UserRo
                     body,
                     attachment_id,
                 }) => {
-                    if let Err(err) = send_dm(&state, &user, &peer_id, body, attachment_id, &server_name) {
+                    if let Err(err) =
+                        send_dm(&state, &user, &peer_id, body, attachment_id, &server_name)
+                    {
                         send_error(&tx, "bad_send", err);
                     }
                 }
@@ -158,13 +165,9 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: UserRo
                     message_id,
                     device_id,
                 }) => {
-                    if let Err(err) = ack_crypto_resync_response(
-                        &state,
-                        &user,
-                        &peer_id,
-                        &message_id,
-                        &device_id,
-                    ) {
+                    if let Err(err) =
+                        ack_crypto_resync_response(&state, &user, &peer_id, &message_id, &device_id)
+                    {
                         send_error(&tx, "bad_crypto_resync_response_ack", err);
                     }
                 }
@@ -241,7 +244,10 @@ fn relay_crypto_resync(
         .db
         .crypto_devices_for_user(&user.id)
         .map_err(|err| err.to_string())?;
-    if !own_devices.iter().any(|device| device.device_id == device_id) {
+    if !own_devices
+        .iter()
+        .any(|device| device.device_id == device_id)
+    {
         return Err("recovery target device does not belong to requester".into());
     }
     let recipient = Uuid::parse_str(&peer.id).map_err(|_| "invalid peer id".to_string())?;
@@ -321,7 +327,9 @@ fn relay_crypto_resync_response(
         .map_err(|_| "crypto recovery response contains invalid ciphertext envelope".to_string())?;
     if envelope.get("version").and_then(serde_json::Value::as_u64) != Some(1)
         || !matches!(
-            envelope.get("message_type").and_then(serde_json::Value::as_str),
+            envelope
+                .get("message_type")
+                .and_then(serde_json::Value::as_str),
             Some("message" | "prekey")
         )
         || envelope
@@ -351,7 +359,10 @@ fn relay_crypto_resync_response(
         .crypto_devices_for_user(&peer.id)
         .map_err(|err| err.to_string())?;
 
-    if !peer_devices.iter().any(|device| device.device_id == device_id) {
+    if !peer_devices
+        .iter()
+        .any(|device| device.device_id == device_id)
+    {
         return Err("recovery response target device does not belong to recipient".into());
     }
 
@@ -367,13 +378,7 @@ fn relay_crypto_resync_response(
 
     state
         .db
-        .enqueue_crypto_resync_response(
-            &peer.id,
-            &user.id,
-            message_id,
-            device_id,
-            ciphertext,
-        )
+        .enqueue_crypto_resync_response(&peer.id, &user.id, message_id, device_id, ciphertext)
         .map_err(|err| err.to_string())?;
 
     if state.hub.online_ids().iter().all(|id| id != &peer.id) {
@@ -562,10 +567,12 @@ fn send_dm(
             None => true,
         };
         let parsed_envelope = serde_json::from_str::<serde_json::Value>(&body).ok();
-        if parsed_envelope.as_ref()
+        if parsed_envelope
+            .as_ref()
             .and_then(|value| value.get("version").and_then(|v| v.as_u64()))
             == Some(3)
-            && parsed_envelope.as_ref()
+            && parsed_envelope
+                .as_ref()
                 .and_then(|value| value.get("message_type").and_then(|v| v.as_str()))
                 == Some("matrix")
         {
@@ -579,7 +586,12 @@ fn send_dm(
                 attachment_is_ciphertext,
             )?;
         } else {
-            validate_group_e2e_message(&body, &group.member_ids, &user.id, attachment_is_ciphertext)?;
+            validate_group_e2e_message(
+                &body,
+                &group.member_ids,
+                &user.id,
+                attachment_is_ciphertext,
+            )?;
         }
         let message = state
             .db
@@ -641,11 +653,14 @@ fn validate_matrix_group_e2e_message(
         return Err("E2E chat attachments must be encrypted before upload".into());
     }
 
-    let envelope: serde_json::Value =
-        serde_json::from_str(body).map_err(|_| "invalid Matrix group ciphertext envelope".to_string())?;
+    let envelope: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| "invalid Matrix group ciphertext envelope".to_string())?;
 
     if envelope.get("version").and_then(|value| value.as_u64()) != Some(3)
-        || envelope.get("message_type").and_then(|value| value.as_str()) != Some("matrix")
+        || envelope
+            .get("message_type")
+            .and_then(|value| value.as_str())
+            != Some("matrix")
     {
         return Err("invalid Matrix group ciphertext envelope".into());
     }
@@ -673,8 +688,7 @@ fn validate_matrix_group_e2e_message(
         .and_then(|value| value.as_object())
         .ok_or_else(|| "Matrix group message is missing ciphertext".to_string())?;
 
-    if ciphertext.get("algorithm").and_then(|value| value.as_str())
-        != Some("m.megolm.v1.aes-sha2")
+    if ciphertext.get("algorithm").and_then(|value| value.as_str()) != Some("m.megolm.v1.aes-sha2")
     {
         return Err("Matrix group message uses an unsupported algorithm".into());
     }
@@ -814,11 +828,7 @@ fn validate_e2e_message_with_state(
             .filter(|value| !value.is_empty())
             .ok_or_else(|| "Matrix encrypted message is missing room id".to_string())?;
 
-        let expected_room_id = matrix_dm_room_id(
-            server_name,
-            sender_user_id,
-            recipient_user_id,
-        );
+        let expected_room_id = matrix_dm_room_id(server_name, sender_user_id, recipient_user_id);
         if room_id != expected_room_id {
             return Err("Matrix encrypted message has an invalid DM room id".into());
         }
@@ -828,9 +838,7 @@ fn validate_e2e_message_with_state(
             .and_then(|value| value.as_object())
             .ok_or_else(|| "Matrix encrypted message is missing ciphertext".to_string())?;
 
-        if ciphertext
-            .get("algorithm")
-            .and_then(|value| value.as_str())
+        if ciphertext.get("algorithm").and_then(|value| value.as_str())
             != Some("m.megolm.v1.aes-sha2")
         {
             return Err("Matrix encrypted message uses an unsupported algorithm".into());
@@ -1168,7 +1176,10 @@ mod call_signal_tests {
         let alice = state.db.create_key_user("Alice", "alice", 1).unwrap();
         let bob = state.db.create_key_user("Bob", "bob", 1).unwrap();
 
-        for (user_id, device_id) in [(&alice.id, "alice-matrix-device"), (&bob.id, "bob-matrix-device")] {
+        for (user_id, device_id) in [
+            (&alice.id, "alice-matrix-device"),
+            (&bob.id, "bob-matrix-device"),
+        ] {
             state
                 .db
                 .upsert_matrix_crypto_device(
@@ -1180,7 +1191,8 @@ mod call_signal_tests {
                         "algorithms": ["m.olm.v1.curve25519-aes-sha2", "m.megolm.v1.aes-sha2"],
                         "keys": {},
                         "signatures": {}
-                    }).to_string(),
+                    })
+                    .to_string(),
                     "{}",
                     "{}",
                 )
@@ -1196,7 +1208,8 @@ mod call_signal_tests {
                 "algorithm": "m.megolm.v1.aes-sha2",
                 "ciphertext": "opaque"
             }
-        }).to_string();
+        })
+        .to_string();
 
         assert!(validate_matrix_group_e2e_message(
             &state,
@@ -1206,12 +1219,10 @@ mod call_signal_tests {
             "localhost",
             &body,
             true,
-        ).is_ok());
+        )
+        .is_ok());
 
-        let fake = body.replace(
-            "alice-matrix-device",
-            "not-alice-device",
-        );
+        let fake = body.replace("alice-matrix-device", "not-alice-device");
         assert!(validate_matrix_group_e2e_message(
             &state,
             "group-1",
@@ -1220,7 +1231,8 @@ mod call_signal_tests {
             "localhost",
             &fake,
             true,
-        ).is_err());
+        )
+        .is_err());
     }
 
     #[test]
@@ -1267,7 +1279,15 @@ mod call_signal_tests {
         .to_string();
 
         assert!(validate_e2e_message_with_state(
-            &state, &alice.id, &bob.id, true, true, &envelope, None, true, "localhost",
+            &state,
+            &alice.id,
+            &bob.id,
+            true,
+            true,
+            &envelope,
+            None,
+            true,
+            "localhost",
         )
         .is_ok());
     }
@@ -1319,7 +1339,15 @@ mod call_signal_tests {
         .to_string();
 
         assert!(validate_e2e_message_with_state(
-            &state, &alice.id, &bob.id, true, true, &envelope, None, true, "localhost",
+            &state,
+            &alice.id,
+            &bob.id,
+            true,
+            true,
+            &envelope,
+            None,
+            true,
+            "localhost",
         )
         .is_ok());
     }
@@ -1368,7 +1396,15 @@ mod call_signal_tests {
         .to_string();
 
         assert!(validate_e2e_message_with_state(
-            &state, &alice.id, &bob.id, true, true, &envelope, None, true, "localhost",
+            &state,
+            &alice.id,
+            &bob.id,
+            true,
+            true,
+            &envelope,
+            None,
+            true,
+            "localhost",
         )
         .is_err());
     }
@@ -1428,7 +1464,15 @@ mod call_signal_tests {
         .to_string();
 
         assert!(validate_e2e_message_with_state(
-            &state, &alice.id, &bob.id, true, true, &envelope, None, true, "localhost",
+            &state,
+            &alice.id,
+            &bob.id,
+            true,
+            true,
+            &envelope,
+            None,
+            true,
+            "localhost",
         )
         .is_err());
     }
@@ -1473,7 +1517,15 @@ mod call_signal_tests {
         .to_string();
 
         assert!(validate_e2e_message_with_state(
-            &state, &alice.id, &bob.id, true, true, &envelope, None, true, "localhost",
+            &state,
+            &alice.id,
+            &bob.id,
+            true,
+            true,
+            &envelope,
+            None,
+            true,
+            "localhost",
         )
         .is_err());
     }
@@ -1520,7 +1572,15 @@ mod call_signal_tests {
         .to_string();
 
         assert!(validate_e2e_message_with_state(
-            &state, &alice.id, &bob.id, true, true, &envelope, None, true, "localhost",
+            &state,
+            &alice.id,
+            &bob.id,
+            true,
+            true,
+            &envelope,
+            None,
+            true,
+            "localhost",
         )
         .is_err());
     }

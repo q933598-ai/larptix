@@ -337,7 +337,10 @@ impl CryptoDevice {
             .create_outbound_session(SessionConfig::version_1(), identity_key, one_time_key)
             .map_err(|_| JsValue::from_str("could not establish encrypted session"))?;
 
-        push_session(self.sessions.entry(peer_device_id.to_string()).or_default(), session);
+        push_session(
+            self.sessions.entry(peer_device_id.to_string()).or_default(),
+            session,
+        );
 
         Ok(())
     }
@@ -455,7 +458,10 @@ impl CryptoDevice {
         let plaintext = String::from_utf8(result.plaintext)
             .map_err(|_| JsValue::from_str("decrypted message is not valid UTF-8"))?;
 
-        push_session(self.sessions.entry(peer_device_id.to_string()).or_default(), result.session);
+        push_session(
+            self.sessions.entry(peer_device_id.to_string()).or_default(),
+            result.session,
+        );
 
         self.ensure_otk_pool()?;
 
@@ -589,11 +595,9 @@ fn parse_and_verify_bundle(
         let signature = Ed25519Signature::from_base64(&one_time_key.signature)
             .map_err(|_| JsValue::from_str("invalid one-time or fallback key signature"))?;
 
-        ed_key
-            .verify(key.as_bytes(), &signature)
-            .map_err(|_| {
-                JsValue::from_str("one-time or fallback key signature verification failed")
-            })?;
+        ed_key.verify(key.as_bytes(), &signature).map_err(|_| {
+            JsValue::from_str("one-time or fallback key signature verification failed")
+        })?;
     }
 
     Ok(bundle)
@@ -791,11 +795,7 @@ mod tests {
 
         for _ in 0..5 {
             alice
-                .establish_session(
-                    &bob_bundle.device_id,
-                    &bundle,
-                    &bob_bundle.fingerprint,
-                )
+                .establish_session(&bob_bundle.device_id, &bundle, &bob_bundle.fingerprint)
                 .unwrap();
         }
 
@@ -904,7 +904,10 @@ mod tests {
             .create_inbound_session(SessionConfig::version_1(), alice.curve25519_key(), &pre_key)
             .unwrap();
 
-        assert_eq!(String::from_utf8(inbound.plaintext).unwrap(), "fallback hello");
+        assert_eq!(
+            String::from_utf8(inbound.plaintext).unwrap(),
+            "fallback hello"
+        );
         assert_eq!(alice_session.session_id(), inbound.session.session_id());
 
         // The fallback key remains available for another session, unlike an OTK.
@@ -931,13 +934,8 @@ mod tests {
 
         let first = alice.encrypt(&bob.device_id, "before recovery").unwrap();
         assert_eq!(
-            bob.decrypt(
-                &alice.device_id,
-                &first,
-                &alice_bundle,
-                &alice_fingerprint,
-            )
-            .unwrap(),
+            bob.decrypt(&alice.device_id, &first, &alice_bundle, &alice_fingerprint,)
+                .unwrap(),
             "before recovery"
         );
         assert_eq!(bob.session_count(&alice.device_id), 1);
@@ -948,16 +946,10 @@ mod tests {
         // session without knowing anything about the old broken session.
         let refreshed_bob_bundle = bob.public_bundle_json().unwrap();
         alice
-            .establish_session(
-                &bob.device_id,
-                &refreshed_bob_bundle,
-                &bob_fingerprint,
-            )
+            .establish_session(&bob.device_id, &refreshed_bob_bundle, &bob_fingerprint)
             .unwrap();
 
-        let recovered = alice
-            .encrypt(&bob.device_id, "recovered payload")
-            .unwrap();
+        let recovered = alice.encrypt(&bob.device_id, "recovered payload").unwrap();
 
         let envelope: super::CipherEnvelope = serde_json::from_str(&recovered).unwrap();
         assert_eq!(envelope.message_type, "prekey");
@@ -983,21 +975,13 @@ mod tests {
             .unwrap();
         assert_eq!(
             alice
-                .decrypt(
-                    &bob.device_id,
-                    &bob_reply,
-                    &bob_bundle,
-                    &bob_fingerprint,
-                )
+                .decrypt(&bob.device_id, &bob_reply, &bob_bundle, &bob_fingerprint,)
                 .unwrap(),
             "recovery acknowledgement"
         );
 
-        let after_recovery = alice
-            .encrypt(&bob.device_id, "after recovery")
-            .unwrap();
-        let after_envelope: super::CipherEnvelope =
-            serde_json::from_str(&after_recovery).unwrap();
+        let after_recovery = alice.encrypt(&bob.device_id, "after recovery").unwrap();
+        let after_envelope: super::CipherEnvelope = serde_json::from_str(&after_recovery).unwrap();
         assert_eq!(after_envelope.message_type, "message");
 
         assert_eq!(

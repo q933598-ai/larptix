@@ -326,10 +326,7 @@ impl Database {
         }))
     }
 
-    pub fn claim_crypto_one_time_key(
-        &self,
-        device_id: &str,
-    ) -> rusqlite::Result<Option<String>> {
+    pub fn claim_crypto_one_time_key(&self, device_id: &str) -> rusqlite::Result<Option<String>> {
         let mut conn = self.conn.lock().expect("db lock");
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
@@ -555,10 +552,7 @@ impl Database {
         .optional()
     }
 
-    pub fn matrix_one_time_key_count(
-        &self,
-        device_id: &str,
-    ) -> rusqlite::Result<usize> {
+    pub fn matrix_one_time_key_count(&self, device_id: &str) -> rusqlite::Result<usize> {
         let conn = self.conn.lock().expect("db lock");
 
         let json: Option<String> = conn
@@ -2098,22 +2092,18 @@ mod tests {
             .insert_dm(&alice.id, &bob.id, "encrypted", None, 1)
             .unwrap();
 
-        assert!(
-            db.dm_message_is_between(&message.id, &alice.id, &bob.id)
-                .unwrap()
-        );
-        assert!(
-            !db.dm_message_is_between(&message.id, &alice.id, &carol.id)
-                .unwrap()
-        );
-        assert!(
-            !db.dm_message_is_between(&message.id, &bob.id, &alice.id)
-                .unwrap()
-        );
-        assert!(
-            !db.dm_message_is_between("missing", &alice.id, &bob.id)
-                .unwrap()
-        );
+        assert!(db
+            .dm_message_is_between(&message.id, &alice.id, &bob.id)
+            .unwrap());
+        assert!(!db
+            .dm_message_is_between(&message.id, &alice.id, &carol.id)
+            .unwrap());
+        assert!(!db
+            .dm_message_is_between(&message.id, &bob.id, &alice.id)
+            .unwrap());
+        assert!(!db
+            .dm_message_is_between("missing", &alice.id, &bob.id)
+            .unwrap());
     }
 
     #[test]
