@@ -133,6 +133,16 @@ pub struct GroupInfo {
     pub group_id: String,
     pub name: String,
     pub member_ids: Vec<String>,
+    #[serde(default)]
+    pub is_channel: bool,
+    #[serde(default)]
+    pub admin_ids: Vec<String>,
+    #[serde(default = "default_channel_post_policy")]
+    pub post_policy: String,
+}
+
+fn default_channel_post_policy() -> String {
+    "admins".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,6 +160,12 @@ pub struct UserInfo {
     pub activity: Option<String>,
     #[serde(default)]
     pub is_group: bool,
+    #[serde(default)]
+    pub is_channel: bool,
+    #[serde(default)]
+    pub admin_ids: Vec<String>,
+    #[serde(default)]
+    pub post_policy: String,
     #[serde(default)]
     pub e2e_enabled: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
