@@ -506,6 +506,11 @@ async function createMainWindow() {
   scheduleDesktopUpdates();
 }
 
+ipcMain.handle("larptrix:app-version", () => app.getVersion());
+ipcMain.handle("larptrix:open-releases", async () => {
+  await shell.openExternal(`https://github.com/${UPDATE_REPOSITORY}/releases/latest`);
+  return true;
+});
 ipcMain.handle("larptrix:update-check", async () => getAvailableDesktopUpdate());
 ipcMain.handle("larptrix:update-install", async () => {
   const update = await getAvailableDesktopUpdate();
