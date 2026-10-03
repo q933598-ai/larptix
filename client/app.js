@@ -1264,7 +1264,10 @@ function connect() {
         void handleCryptoResyncResponse(msg);
         break;
       case "matrix_to_device":
-        void matrixCryptoReady.then(() => matrixCrypto?.handleLiveToDevice(msg)).catch((err) => {
+        void matrixCryptoReady.then(async () => {
+          await matrixCrypto?.handleLiveToDevice(msg);
+          await retryVisibleMatrixMessages();
+        }).catch((err) => {
           console.error("[E2E] Matrix to-device processing failed", err);
         });
         break;
@@ -2064,6 +2067,16 @@ function parseCryptoEnvelope(raw) {
 }
 
 console.log("[E2E] displayEncryptedMessage loaded");
+
+async function retryVisibleMatrixMessages() {
+  const entries = [...messageBodyElementsById.entries()];
+  for (const [messageId, bodyElement] of entries) {
+    const message = messagesById.get(messageId);
+    if (!message || !parseCryptoEnvelope(message.body)) continue;
+    if (!(bodyElement.textContent || "").startsWith("Could not decrypt Matrix message:")) continue;
+    await displayEncryptedMessage(message, bodyElement, { allowRecovery: false });
+  }
+}
 
 async function displayEncryptedMessage(message, bodyElement, { allowRecovery = true } = {}) {
   const matrixEnvelope = parseCryptoEnvelope(message.body);
