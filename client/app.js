@@ -2086,3 +2086,2514 @@ function sendGroupCallControl(kind) {
   if (!groupCallGroupId || !groupCallId || !socket || socket.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify({
     type: "call_signal",
+    peer_id: groupCallGroupId,
+    kind,
+    payload: {
+      group_id: groupCallGroupId,
+      call_id: groupCallId,
+      media: callMediaKind || "audio",
+    },
+  }));
+}
+
+function openChat(id) {
+  // Switching chats must not terminate an active call.
+  // Calls live independently from the currently opened chat.
+  peerId = id;
+  const selected = [...users, ...groups].find((user) => user.user_id === id);
+  peerVerified.hidden = true;
+  if (!selected?.is_group) void refreshPeerVerification(id);
+  document.getElementById("start-audio-call").hidden = false;
+  document.getElementById("start-video-call").hidden = false;
+  document.getElementById("start-audio-call").textContent = selected?.is_group ? "Group audio" : "Call";
+  document.getElementById("start-video-call").textContent = selected?.is_group ? "Group video" : "Video";
+  groupMembersOpen.hidden = !selected?.is_group;
+  groupCallStart.hidden = !selected?.is_group;
+  groupCallStart.textContent = selected?.is_group
+    ? (activeGroupCalls.get(id)?.active ? "Join group call" : "Group call")
+    : "Group call";
+  applyChatWallpaper(id);
+  chatTitlebar.hidden = false;
+  renderUsers();
+  renderGroupCallBanner();
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: "open", peer_id: id }));
+  }
+}
+
+
+async function startGroupCall(kind) {
+  if (!peerId || !socket || socket.readyState !== WebSocket.OPEN) return;
+  const group = groups.find((item) => item.user_id === peerId && item.is_group);
+  if (!group) return;
+  if (typeof globalThis.RTCPeerConnection !== "function") {
+    appendSystem("Group calls require WebRTC support in this desktop runtime.");
+    return;
+  }
+
+  const onlineMembers = group.group_member_ids
+    .filter((id) => id !== me.user_id)
+    .filter((id) => users.some((user) => user.user_id === id && user.online));
+
+  const existing = activeGroupCalls.get(group.user_id);
+  if (existing?.active) {
+    await joinActiveGroupCall();
+    return;
+  }
+
+  if (peerConnection || groupPeerConnections.size || groupCallId) endCall(true);
+
+  groupCallId = crypto.randomUUID();
+  groupCallGroupId = group.user_id;
+  groupCallMemberIds = [...group.group_member_ids];
+  groupCallInitiatorId = me.user_id;
+  groupCallJoinedMembers.clear();
+  groupCallJoinedMembers.add(me.user_id);
+  callPeerId = group.user_id;
+  callMediaKind = kind;
+  activeGroupCalls.set(group.user_id, {
+    group_id: group.user_id,
+    call_id: groupCallId,
+    media: kind,
+    initiator_id: me.user_id,
+    participant_ids: [me.user_id],
+    active: true,
+  });
+  refreshGroupCallParticipants();
+  renderGroupCallBanner();
+  callWindowTitle.textContent = "group call.exe";
+
+  try {
+    localMediaStream = await acquireCallMedia(kind);
+    callStage.hidden = false;
+    callStage.classList.remove("call-collapsed");
+    remoteVideo.hidden = true;
+    remoteAudio.hidden = true;
+    document.getElementById("group-remotes").hidden = false;
+    await attachLocalMediaPreview();
+    callStatus.textContent = "Starting group " + (kind === "video" ? "video " : "") + "call…" + callMediaNotice;
+    refreshGroupCallParticipants();
+
+    for (const remoteId of onlineMembers) {
+      sendGroupCallSignal(remoteId, "group_invite", {
+        group_id: groupCallGroupId,
+        call_id: groupCallId,
+        media: kind,
+      });
+    }
+  } catch (err) {
+    appendSystem("Group call setup failed: " + (err.message || "Check camera and microphone permissions."));
+    endCall(false);
+  }
+}
+
+async function establishGroupOffers() {
+  const onlineMembers = groupCallMemberIds
+    .filter((id) => id !== me.user_id)
+    .filter((id) => groupCallJoinedMembers.has(id))
+    .filter((id) => users.some((user) => user.user_id === id && user.online));
+
+  for (const remoteId of onlineMembers) {
+    if (me.user_id < remoteId) {
+      await createGroupOffer(remoteId);
+    }
+  }
+}
+
+async function createGroupPeerConnection(remoteId) {
+  if (typeof globalThis.RTCPeerConnection !== "function") {
+    throw new Error("WebRTC is unavailable.");
+  }
+  const config = await api("GET", "/api/rtc-config");
+  if (!Array.isArray(config.ice_servers) || config.ice_servers.length === 0) {
+    throw new Error("The server returned no ICE servers. Configure STUN/TURN.");
+  }
+
+  const connection = new globalThis.RTCPeerConnection({ iceServers: config.ice_servers });
+  connection.addEventListener("icecandidate", (event) => {
+    if (event.candidate) {
+      sendGroupCallSignal(remoteId, "ice_candidate", {
+        group_id: groupCallGroupId,
+        call_id: groupCallId,
+        candidate: event.candidate.toJSON(),
+      });
+    }
+  });
+  connection.addEventListener("track", (event) => {
+    const stream = event.streams[0] || new MediaStream([event.track]);
+    renderGroupRemoteTrack(remoteId, stream, event.track.kind);
+  });
+  connection.addEventListener("connectionstatechange", () => {
+    if (connection !== groupPeerConnections.get(remoteId)) return;
+    const connected = [...groupPeerConnections.values()]
+      .filter((peer) => peer.connectionState === "connected").length;
+    if (connection.connectionState === "connected") {
+      callStatus.textContent = "Group call · " + (connected + 1) + " participant(s) connected" + callMediaNotice;
+    } else if (connection.connectionState === "failed" || connection.connectionState === "closed") {
+      removeGroupPeer(remoteId);
+    }
+  });
+  connection.addEventListener("iceconnectionstatechange", () => {
+    if (connection !== groupPeerConnections.get(remoteId)) return;
+    if (connection.iceConnectionState === "failed") {
+      const name = users.find((user) => user.user_id === remoteId)?.display_name || "participant";
+      callStatus.textContent = name + " could not connect" + callMediaNotice;
+    }
+  });
+  groupPeerConnections.set(remoteId, connection);
+  return connection;
+}
+
+async function createGroupOffer(remoteId) {
+  if (groupPeerConnections.has(remoteId)) return groupPeerConnections.get(remoteId);
+  const connection = await createGroupPeerConnection(remoteId);
+  for (const track of localMediaStream?.getTracks() || []) {
+    connection.addTrack(track, localMediaStream);
+  }
+  if (!localMediaStream?.getAudioTracks().length && connection.addTransceiver) {
+    connection.addTransceiver("audio", { direction: "recvonly" });
+  }
+  applyCallCodecPreferences(connection);
+  const offer = await connection.createOffer();
+  await connection.setLocalDescription(offer);
+  sendGroupCallSignal(remoteId, "offer", {
+    group_id: groupCallGroupId,
+    call_id: groupCallId,
+    target_id: remoteId,
+    description: connection.localDescription,
+    media: callMediaKind,
+  });
+  return connection;
+}
+
+async function acceptGroupInvite(signal) {
+  const payload = signal.payload || {};
+  const groupId = payload.group_id;
+  const callId = payload.call_id;
+  if (!groupId || !callId) throw new Error("Group call invitation is malformed.");
+
+  const group = groups.find((item) => item.user_id === groupId && item.is_group);
+  if (!group) throw new Error("This group is no longer available.");
+
+  stopCallRingtone();
+  groupCallGroupId = groupId;
+  groupCallId = callId;
+  groupCallMemberIds = [...group.group_member_ids];
+  groupCallInitiatorId = signal.sender_id;
+  callPeerId = groupId;
+  callMediaKind = payload.media === "video" ? "video" : "audio";
+  callWindowTitle.textContent = "group call.exe";
+  groupCallJoinedMembers.clear();
+  groupCallJoinedMembers.add(me.user_id);
+  groupCallJoinedMembers.add(signal.sender_id);
+  refreshGroupCallParticipants();
+
+
+  stopCallRingtone();
+  try {
+    localMediaStream = await acquireCallMedia(callMediaKind);
+    callStage.hidden = false;
+    callStage.classList.remove("call-collapsed");
+    remoteVideo.hidden = true;
+    remoteAudio.hidden = true;
+    document.getElementById("group-remotes").hidden = false;
+    await attachLocalMediaPreview();
+    callStatus.textContent = "Joining group call…" + callMediaNotice;
+    for (const memberId of groupCallMemberIds) {
+      if (memberId !== me.user_id) {
+        sendGroupCallSignal(memberId, "group_join", {
+          group_id: groupCallGroupId,
+          call_id: groupCallId,
+        });
+      }
+    }
+    await establishGroupOffers();
+  } catch (err) {
+    appendSystem("Could not join group call: " + (err.message || "Check camera and microphone permissions."));
+    endCall(false);
+  }
+}
+
+async function handleGroupCallSignal(signal) {
+  const payload = signal.payload || {};
+  const groupId = payload.group_id || signal.peer_id;
+  const callId = payload.call_id;
+  if (!groupId || !callId) return;
+
+  const group = groups.find((item) => item.user_id === groupId && item.is_group);
+  if (!group || !group.group_member_ids.includes(me.user_id)) return;
+
+  if (signal.kind === "group_invite") {
+    if (groupCallId === callId && groupCallGroupId === groupId) return;
+    if (
+      pendingIncomingCall?.payload?.group_id === groupId
+      && pendingIncomingCall?.payload?.call_id === callId
+      && incomingCallDialog.open
+    ) return;
+    pendingIncomingCall = signal;
+    callPeerId = groupId;
+    callMediaKind = payload.media === "video" ? "video" : "audio";
+    const caller = users.find((user) => user.user_id === signal.sender_id);
+    incomingCallTitle.textContent = (caller?.display_name || "Larptrix user") + " invited you";
+    incomingCallKind.textContent = (callMediaKind === "video" ? "Group video" : "Group") + " call · " + group.display_name;
+    document.getElementById("accept-call").textContent = "Join";
+    startCallRingtone();
+    incomingCallDialog.showModal();
+    return;
+  }
+
+  if (groupCallId !== callId || groupCallGroupId !== groupId) return;
+
+  if (signal.kind === "group_join") {
+    const alreadyKnown = groupCallJoinedMembers.has(signal.sender_id);
+    groupCallJoinedMembers.add(signal.sender_id);
+    refreshGroupCallParticipants();
+    if (!alreadyKnown) {
+      sendGroupCallSignal(signal.sender_id, "group_join", {
+        group_id: groupId,
+        call_id: callId,
+      });
+      await establishGroupOffers();
+    }
+    return;
+  }
+
+  if (signal.kind === "offer") {
+    let connection = groupPeerConnections.get(signal.sender_id);
+    if (!connection) connection = await createGroupPeerConnection(signal.sender_id);
+    if (!connection.currentRemoteDescription) {
+      await connection.setRemoteDescription(signal.payload.description);
+      for (const candidate of groupPendingIceCandidates.get(signal.sender_id) || []) {
+        await connection.addIceCandidate(candidate);
+      }
+      groupPendingIceCandidates.delete(signal.sender_id);
+    }
+    for (const track of localMediaStream?.getTracks() || []) {
+      if (!connection.getSenders().some((sender) => sender.track === track)) {
+        connection.addTrack(track, localMediaStream);
+      }
+    }
+    applyCallCodecPreferences(connection);
+    const answer = await connection.createAnswer();
+    await connection.setLocalDescription(answer);
+    sendGroupCallSignal(signal.sender_id, "answer", {
+      group_id: groupId,
+      call_id: callId,
+      target_id: signal.sender_id,
+      description: connection.localDescription,
+      media: callMediaKind,
+    });
+    return;
+  }
+
+  if (signal.kind === "answer") {
+    const connection = groupPeerConnections.get(signal.sender_id);
+    if (!connection) return;
+    await connection.setRemoteDescription(signal.payload.description);
+    for (const candidate of groupPendingIceCandidates.get(signal.sender_id) || []) {
+      await connection.addIceCandidate(candidate);
+    }
+    groupPendingIceCandidates.delete(signal.sender_id);
+    return;
+  }
+
+  if (signal.kind === "ice_candidate") {
+    const candidate = signal.payload?.candidate;
+    if (!candidate) return;
+    const connection = groupPeerConnections.get(signal.sender_id);
+    if (connection?.remoteDescription) await connection.addIceCandidate(candidate);
+    else groupPendingIceCandidates.set(signal.sender_id, [
+      ...(groupPendingIceCandidates.get(signal.sender_id) || []),
+      candidate,
+    ]);
+    return;
+  }
+
+  if (signal.kind === "hangup" || signal.kind === "reject") {
+    groupCallJoinedMembers.delete(signal.sender_id);
+    refreshGroupCallParticipants();
+    removeGroupPeer(signal.sender_id);
+    if (signal.kind === "reject") {
+      const name = users.find((user) => user.user_id === signal.sender_id)?.display_name || "Participant";
+      callStatus.textContent = name + " declined the group call" + callMediaNotice;
+    }
+  }
+}
+
+function sendGroupCallSignal(targetId, kind, payload) {
+  if (!groupCallGroupId || !groupCallId || !socket || socket.readyState !== WebSocket.OPEN) return;
+  if (targetId !== me?.user_id) {
+    const target = users.find((user) => user.user_id === targetId);
+    if (target && !target.online) return;
+  }
+  socket.send(JSON.stringify({
+    type: "call_signal",
+    peer_id: groupCallGroupId,
+    kind,
+    payload: { ...payload, group_id: groupCallGroupId, call_id: groupCallId, target_id: targetId },
+  }));
+}
+
+function renderGroupRemoteTrack(remoteId, stream, kind) {
+  const container = document.getElementById("group-remotes");
+  let tile = container.querySelector('[data-group-tile-id="' + CSS.escape(remoteId) + '"]');
+  if (!tile) {
+    tile = document.createElement("article");
+    tile.className = "group-video-tile";
+    tile.dataset.groupTileId = remoteId;
+
+    const media = document.createElement("video");
+    media.className = "group-remote-video";
+    media.dataset.groupRemoteId = remoteId;
+    media.dataset.kind = "video";
+    media.autoplay = true;
+    media.playsInline = true;
+    tile.append(media);
+
+    const audio = document.createElement("audio");
+    audio.dataset.groupRemoteId = remoteId;
+    audio.dataset.kind = "audio";
+    audio.autoplay = true;
+    audio.hidden = true;
+    tile.append(audio);
+
+    const identity = document.createElement("div");
+    identity.className = "group-participant";
+    const avatar = document.createElement("span");
+    avatar.className = "avatar";
+    const user = users.find((item) => item.user_id === remoteId);
+    paintAvatar(avatar, user || { display_name: "?" });
+    const name = document.createElement("span");
+    name.textContent = user?.display_name || "Participant";
+    identity.append(avatar, name);
+    tile.append(identity);
+    container.append(tile);
+  }
+
+  const media = tile.querySelector('[data-kind="' + kind + '"]');
+  if (media) {
+    media.srcObject = stream;
+    media.play?.().catch(() => {});
+  }
+}
+
+
+function removeGroupPeer(remoteId) {
+  const connection = groupPeerConnections.get(remoteId);
+  connection?.close();
+  groupPeerConnections.delete(remoteId);
+  groupPendingIceCandidates.delete(remoteId);
+  document.getElementById("group-remotes")
+    ?.querySelectorAll('[data-group-remote-id="' + CSS.escape(remoteId) + '"]')
+    .forEach((element) => element.remove());
+  if (groupCallId && !pendingIncomingCall) {
+    callStatus.textContent = groupCallJoinedMembers.size > 1
+      ? "Group call · waiting for participants" + callMediaNotice
+      : "Group call · waiting for participants to join" + callMediaNotice;
+  }
+}
+
+async function startCall(kind) {
+  if (!peerId || !socket || socket.readyState !== WebSocket.OPEN) return;
+  const selectedGroup = groups.find((item) => item.user_id === peerId && item.is_group);
+  if (selectedGroup) {
+    await startGroupCall(kind);
+    return;
+  }
+  if (groupCallId) endCall(true);
+  callWindowTitle.textContent = "call.exe";
+  if (typeof globalThis.RTCPeerConnection !== "function") {
+    const handoff = await openCallInSystemBrowser(peerId, kind);
+    if (handoff.opened) {
+      appendSystem("This desktop WebKit has no WebRTC support. The chat opened in your browser; sign in there if asked, then retry the call.");
+      return;
+    }
+    appendSystem(`This desktop WebKit has no WebRTC support, and browser handoff failed: ${handoff.error}. Open this server in Firefox or Chromium to call.`);
+    return;
+  }
+  if (peerConnection) endCall(true);
+  callPeerId = peerId;
+  callMediaKind = kind;
+  try {
+    localMediaStream = await acquireCallMedia(kind);
+    callStage.hidden = false;
+    await attachLocalMediaPreview();
+    callStatus.textContent = `Calling…${callMediaNotice}`;
+    peerConnection = await createPeerConnection();
+    for (const track of localMediaStream.getTracks()) {
+      peerConnection.addTrack(track, localMediaStream);
+    }
+    if (!localMediaStream.getAudioTracks().length && peerConnection.addTransceiver) {
+      peerConnection.addTransceiver("audio", { direction: "recvonly" });
+    }
+    applyCallCodecPreferences(peerConnection);
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+    sendCallSignal("offer", {
+      description: peerConnection.localDescription,
+      media: kind,
+    });
+  } catch (err) {
+    appendSystem(`Call setup failed: ${err.message || "Check camera and microphone permissions."}`);
+    endCall(false);
+  }
+}
+
+async function openCallInSystemBrowser(targetPeerId, kind) {
+  const invoke = globalThis.__TAURI__?.core?.invoke;
+  if (typeof invoke !== "function") return { opened: false, error: "desktop bridge unavailable" };
+  const url = new URL(location.href);
+  url.search = new URLSearchParams({ peer: targetPeerId, call: kind }).toString();
+  try {
+    await invoke("open_call_in_browser", { url: url.toString() });
+    return { opened: true, error: "" };
+  } catch (err) {
+    return { opened: false, error: err?.message || String(err) };
+  }
+}
+
+async function createPeerConnection() {
+  if (typeof globalThis.RTCPeerConnection !== "function") {
+    throw new Error("Calls are unavailable in this desktop runtime. Install WebRTC support for WebKitGTK, including the GStreamer webrtc plugin (gst-plugins-bad), then restart the app.");
+  }
+  const config = await api("GET", "/api/rtc-config");
+  if (!Array.isArray(config.ice_servers) || config.ice_servers.length === 0) {
+    throw new Error("The server returned no ICE servers. Configure STUN/TURN and restart the server.");
+  }
+  const connection = new globalThis.RTCPeerConnection({ iceServers: config.ice_servers });
+  connection.addEventListener("icecandidate", (event) => {
+    if (event.candidate) sendCallSignal("ice_candidate", event.candidate.toJSON());
+  });
+  connection.addEventListener("icecandidateerror", (event) => {
+    if (connection !== peerConnection) return;
+    const server = event.url || "configured ICE server";
+    const code = event.errorCode ? ` (${event.errorCode})` : "";
+    callStatus.textContent = `Could not reach ${server}${code}; checking available network routes.${callMediaNotice}`;
+  });
+  connection.addEventListener("track", (event) => {
+    if (event.track.kind === "audio") {
+      remoteAudio.srcObject = new MediaStream([event.track]);
+      remoteAudio.play().then(() => {
+        enableCallAudio.hidden = true;
+      }).catch(() => {
+        enableCallAudio.hidden = false;
+        callStatus.textContent = "Connected. Use Enable sound to hear the call.";
+      });
+    } else if (event.streams[0]) {
+      remoteVideo.srcObject = event.streams[0];
+      remoteVideo.play().catch(() => {});
+    }
+  });
+  connection.addEventListener("connectionstatechange", () => {
+    if (connection !== peerConnection) return;
+    const states = {
+      connecting: "Connecting…",
+      connected: "Connected",
+      disconnected: "Connection interrupted",
+      failed: "Connection failed. A STUN/TURN server may be required on this network.",
+      closed: "Call ended",
+    };
+    const baseStatus = states[connection.connectionState] || connection.connectionState;
+    callStatus.textContent = `${baseStatus}${callMediaNotice}`;
+    if (connection.connectionState === "failed" || connection.connectionState === "closed") {
+      endCall(false);
+    }
+  });
+  connection.addEventListener("iceconnectionstatechange", () => {
+    if (connection !== peerConnection) return;
+    if (connection.iceConnectionState === "checking") {
+      callStatus.textContent = `Checking network path${callMediaNotice}`;
+    } else if (connection.iceConnectionState === "failed") {
+      callStatus.textContent = `ICE failed. This network may require TURN.${callMediaNotice}`;
+    } else if (connection.iceConnectionState === "disconnected") {
+      callStatus.textContent = `ICE connection interrupted${callMediaNotice}`;
+    }
+  });
+  return connection;
+}
+
+function applyCallCodecPreferences(connection) {
+  if (typeof RTCRtpReceiver === "undefined" || !RTCRtpReceiver.getCapabilities) return;
+  for (const transceiver of connection.getTransceivers()) {
+    const kind = transceiver.receiver.track?.kind || transceiver.sender.track?.kind;
+    if (!kind || !transceiver.setCodecPreferences) continue;
+    const codecs = RTCRtpReceiver.getCapabilities(kind)?.codecs;
+    if (!codecs) continue;
+    const compatibleCodecs = codecs.filter((codec) => {
+      return !(kind === "audio" && codec.mimeType.toLowerCase() === "audio/telephone-event");
+    });
+    if (compatibleCodecs.length) transceiver.setCodecPreferences(compatibleCodecs);
+  }
+}
+
+async function handleCallSignal(signal) {
+  if (signal?.payload?.group_id || groups.some((group) => group.user_id === signal?.peer_id && group.is_group)) {
+    await handleGroupCallSignal(signal);
+    return;
+  }
+  if (!me || signal.sender_id === me.user_id) return;
+  if (signal.kind === "offer" && !peerConnection) {
+    pendingIncomingCall = signal;
+    callPeerId = signal.sender_id;
+    pendingIceCandidates = iceCandidatesBeforeOffer.get(signal.sender_id) || [];
+    iceCandidatesBeforeOffer.delete(signal.sender_id);
+    callMediaKind = signal.payload.media === "video" ? "video" : "audio";
+    const caller = users.find((user) => user.user_id === signal.sender_id);
+    incomingCallTitle.textContent = `Call from ${caller?.display_name || "Larptrix user"}`;
+    const requestedKind = callMediaKind === "video" ? "Video call" : "Voice call";
+    callWindowTitle.textContent = "call.exe";
+    incomingCallKind.textContent = typeof globalThis.RTCPeerConnection === "function"
+      ? requestedKind
+      : `${requestedKind} · open the browser client and ask the caller to retry`;
+    document.getElementById("accept-call").textContent = typeof globalThis.RTCPeerConnection === "function"
+      ? "Accept"
+      : "Open browser";
+    incomingCallDialog.showModal();
+    return;
+  }
+  if (signal.kind === "ice_candidate" && !peerConnection) {
+    if (pendingIncomingCall && signal.sender_id === callPeerId) {
+      pendingIceCandidates.push(signal.payload);
+    }
+
+    // Ignore ICE candidates that arrive without a pending offer.
+    // They may belong to a previous/ended ICE generation.
+    return;
+  }
+
+  if (signal.sender_id !== callPeerId) return;
+  if (!peerConnection) return;
+  if (signal.kind === "answer") {
+    await peerConnection.setRemoteDescription(signal.payload);
+    await flushIceCandidates();
+  } else if (signal.kind === "ice_candidate") {
+    const candidate = signal.payload;
+    if (peerConnection.remoteDescription) await peerConnection.addIceCandidate(candidate);
+    else pendingIceCandidates.push(candidate);
+  } else if (signal.kind === "offer") {
+    await peerConnection.setRemoteDescription(signal.payload.description);
+    await flushIceCandidates();
+    applyCallCodecPreferences(peerConnection);
+    const answer = await peerConnection.createAnswer();
+    await peerConnection.setLocalDescription(answer);
+    sendCallSignal("answer", peerConnection.localDescription);
+  } else if (signal.kind === "reject" || signal.kind === "hangup") {
+    callStatus.textContent = signal.kind === "reject" ? "Call declined" : "Call ended";
+    endCall(false);
+  }
+}
+
+async function acceptIncomingCall() {
+  if (pendingIncomingCall?.payload?.group_id || groups.some((group) => group.user_id === pendingIncomingCall?.peer_id && group.is_group)) {
+    const groupIncoming = pendingIncomingCall;
+    pendingIncomingCall = null;
+    incomingCallDialog.close();
+    await acceptGroupInvite(groupIncoming);
+    return;
+  }
+  if (!pendingIncomingCall) return;
+  if (typeof globalThis.RTCPeerConnection !== "function") {
+    const callerId = pendingIncomingCall.sender_id;
+    const handoff = await openCallInSystemBrowser(callerId, "");
+    callStatus.textContent = "This desktop cannot answer calls. Open the same chat in your browser and ask the caller to try again.";
+    appendSystem(handoff.opened
+      ? "The same chat opened in your browser. Sign in there if asked, then ask the caller to retry."
+      : `Could not open the browser (${handoff.error}). Open this server in Firefox or Chromium and ask the caller to retry.`);
+    return;
+  }
+  const incoming = pendingIncomingCall;
+  stopCallRingtone();
+  incomingCallDialog.close();
+  peerId = incoming.sender_id;
+  renderUsers();
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: "open", peer_id: peerId }));
+  }
+  try {
+    localMediaStream = await acquireCallMedia(callMediaKind);
+    callStage.hidden = false;
+    await attachLocalMediaPreview();
+    callStatus.textContent = `Connecting…${callMediaNotice}`;
+    peerConnection = await createPeerConnection();
+    for (const track of localMediaStream.getTracks()) peerConnection.addTrack(track, localMediaStream);
+    applyCallCodecPreferences(peerConnection);
+    await peerConnection.setRemoteDescription(incoming.payload.description);
+    await flushIceCandidates();
+    const answer = await peerConnection.createAnswer();
+    await peerConnection.setLocalDescription(answer);
+    pendingIncomingCall = null;
+    sendCallSignal("answer", peerConnection.localDescription);
+  } catch (err) {
+    appendSystem(err.message || "Could not accept the call. Check camera and microphone permissions.");
+    sendCallSignal("reject", {});
+    endCall(false);
+  }
+}
+
+function rejectIncomingCall() {
+  stopCallRingtone();
+  if (pendingIncomingCall?.payload?.group_id) {
+    const incoming = pendingIncomingCall;
+    const groupId = incoming.payload.group_id;
+    const callId = incoming.payload.call_id;
+    const target = incoming.sender_id;
+    pendingIncomingCall = null;
+    incomingCallDialog.close();
+    groupCallGroupId = groupId;
+    groupCallId = callId;
+    callPeerId = groupId;
+    sendGroupCallSignal(target, "reject", { group_id: groupId, call_id: callId });
+    groupCallGroupId = null;
+    groupCallId = null;
+    callPeerId = null;
+    return;
+  }
+  if (pendingIncomingCall) {
+    const rejectedPeerId = pendingIncomingCall.sender_id;
+    callPeerId = pendingIncomingCall.sender_id;
+    sendCallSignal("reject", {});
+    iceCandidatesBeforeOffer.delete(rejectedPeerId);
+  }
+  pendingIncomingCall = null;
+  incomingCallDialog.close();
+  callPeerId = null;
+}
+
+async function flushIceCandidates() {
+  const candidates = pendingIceCandidates;
+  pendingIceCandidates = [];
+  for (const candidate of candidates) await peerConnection.addIceCandidate(candidate);
+}
+
+function callAudioConstraints() {
+  return {
+    echoCancellation: true,
+    noiseSuppression: readStoredBool(NOISE_SUPPRESSION_KEY, true),
+    autoGainControl: true,
+  };
+}
+
+async function acquireCallMedia(kind) {
+  callMediaNotice = "";
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error("This desktop runtime does not provide camera or microphone capture.");
+  }
+  let hasMicrophone = true;
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    hasMicrophone = devices.some((device) => device.kind === "audioinput");
+  } catch {
+    // Device enumeration can be blocked until capture permission is granted.
+  }
+  const videoAttempts = kind === "video"
+    ? [{ width: { ideal: 1280 }, height: { ideal: 720 } }, true]
+    : [false];
+  const attempts = [];
+  if (hasMicrophone) {
+    for (const video of videoAttempts) attempts.push({ audio: callAudioConstraints(), video });
+    if (kind === "video") attempts.push({ audio: callAudioConstraints(), video: false });
+  }
+  if (kind === "video") {
+    for (const video of videoAttempts) attempts.push({ audio: false, video });
+  }
+  if (!attempts.length) {
+    callMediaNotice = " · listen-only (no microphone detected)";
+    return new MediaStream();
+  }
+  let lastError;
+  for (const constraints of attempts) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      if (kind === "video" && !stream.getVideoTracks().length) {
+        callMediaNotice = " · camera unavailable, audio-only";
+      } else if (!stream.getAudioTracks().length) {
+        callMediaNotice = kind === "video"
+          ? " · video only (no microphone)"
+          : " · listen-only (no microphone)";
+      }
+      return stream;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  if (kind === "audio") {
+    callMediaNotice = " · listen-only, microphone unavailable";
+    return new MediaStream();
+  }
+  throw new Error(lastError?.message || "Could not access a camera or microphone.");
+}
+
+function sendCallSignal(kind, payload) {
+  if (!callPeerId || !socket || socket.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({ type: "call_signal", peer_id: callPeerId, kind, payload }));
+}
+
+function toggleMicrophone() {
+  const track = localMediaStream?.getAudioTracks()[0];
+  if (!track) return;
+  track.enabled = !track.enabled;
+  const button = document.getElementById("toggle-microphone");
+  button.textContent = track.enabled ? "🎙 Mute mic" : "🔇 Unmute mic";
+  button.setAttribute("aria-pressed", String(!track.enabled));
+}
+
+function toggleCamera() {
+  const track = localMediaStream?.getVideoTracks()[0];
+  if (!track) return;
+  track.enabled = !track.enabled;
+  document.getElementById("toggle-camera").textContent = track.enabled ? "📷 Turn camera off" : "🚫 Turn camera on";
+}
+
+async function toggleScreenShare() {
+  if (!callPeerId) return;
+  if (screenMediaStream) {
+    await stopScreenShare();
+    return;
+  }
+  try {
+    const highQuality = screenQuality.value === "high";
+    const webkitGtk = navigator.platform.toLowerCase().includes("linux")
+      && navigator.userAgent.includes("AppleWebKit")
+      && !/(Chrome|Chromium)/.test(navigator.userAgent);
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      throw new Error("Screen capture is not supported by this desktop runtime.");
+    }
+    screenMediaStream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: !webkitGtk,
+    });
+    const screenTrack = screenMediaStream.getVideoTracks()[0];
+    localScreenVideo.srcObject = screenMediaStream;
+    localScreenVideo.hidden = false;
+    localScreenVideo.play().catch(() => {});
+
+    const connections = groupCallId
+      ? [...groupPeerConnections.entries()]
+      : peerConnection ? [["direct", peerConnection]] : [];
+    let sharedAudio = false;
+
+    for (const [remoteId, connection] of connections) {
+      let sender = connection.getSenders().find((item) =>
+        item.track?.kind === "video" || item.track === localMediaStream?.getVideoTracks()[0]
+      );
+      let renegotiate = false;
+      if (sender) {
+        await sender.replaceTrack(screenTrack);
+      } else {
+        sender = connection.addTrack(screenTrack, screenMediaStream);
+        renegotiate = true;
+      }
+      const screenAudioTrack = screenMediaStream.getAudioTracks()[0];
+      if (screenAudioTrack && !connection.getSenders().some((item) => item.track === screenAudioTrack)) {
+        connection.addTrack(screenAudioTrack, screenMediaStream);
+        renegotiate = true;
+        sharedAudio = true;
+      }
+      try {
+        const params = sender.getParameters();
+        params.encodings = params.encodings?.length ? params.encodings : [{}];
+        params.encodings[0].maxBitrate = highQuality ? 12_000_000 : 3_000_000;
+        params.encodings[0].maxFramerate = highQuality ? 144 : 30;
+        await sender.setParameters(params);
+      } catch {}
+      if (renegotiate) {
+        applyCallCodecPreferences(connection);
+        const offer = await connection.createOffer();
+        await connection.setLocalDescription(offer);
+        if (groupCallId) {
+          sendGroupCallSignal(remoteId, "offer", {
+            group_id: groupCallGroupId,
+            call_id: groupCallId,
+            target_id: remoteId,
+            description: connection.localDescription,
+            media: callMediaKind,
+          });
+        } else {
+          sendCallSignal("offer", { description: connection.localDescription, media: callMediaKind });
+        }
+      }
+    }
+
+    const settings = screenTrack.getSettings();
+    const audioStatus = sharedAudio
+      ? " with shared audio"
+      : webkitGtk
+        ? " (screen audio unavailable in WebKitGTK)"
+        : " (source audio unavailable)";
+    callStatus.textContent = `Sharing ${settings.width || "?"}×${settings.height || "?"} at ${Math.round(settings.frameRate || 0)} fps${audioStatus}`;
+    screenTrack.addEventListener("ended", stopScreenShare, { once: true });
+    document.getElementById("toggle-screen-share").textContent = "Stop sharing";
+  } catch (err) {
+    if (err.name !== "NotAllowedError") appendSystem(err.message || "Could not start screen sharing.");
+    screenMediaStream = null;
+  }
+}
+
+async function stopScreenShare() {
+  if (!screenMediaStream) return;
+  const screenTrack = screenMediaStream.getVideoTracks()[0];
+  const cameraTrack = localMediaStream?.getVideoTracks()[0];
+  const connections = groupCallId
+    ? [...groupPeerConnections.entries()]
+    : peerConnection ? [["direct", peerConnection]] : [];
+
+  for (const [remoteId, connection] of connections) {
+    const sender = connection.getSenders().find((item) => item.track === screenTrack);
+    if (sender) await sender.replaceTrack(cameraTrack || null);
+    for (const audioTrack of screenMediaStream.getAudioTracks()) {
+      const audioSender = connection.getSenders().find((item) => item.track === audioTrack);
+      if (audioSender) await audioSender.replaceTrack(null);
+    }
+  }
+
+  screenMediaStream.getTracks().forEach((track) => track.stop());
+  screenMediaStream = null;
+  localScreenVideo.srcObject = null;
+  localScreenVideo.hidden = true;
+  document.getElementById("toggle-screen-share").textContent = "Share screen";
+  if (callStatus.textContent.startsWith("Sharing ")) callStatus.textContent = "Connected";
+}
+
+
+function endCall(notifyPeer) {
+  stopCallRingtone();
+  if (groupCallGroupId && groupCallId) {
+    const groupId = groupCallGroupId;
+    const callId = groupCallId;
+    const remoteIds = [...groupPeerConnections.keys()];
+    const isInitiator = groupCallInitiatorId === me?.user_id;
+    if (notifyPeer && isInitiator) {
+      sendGroupCallControl("group_end");
+      activeGroupCalls.delete(groupId);
+    } else if (notifyPeer) {
+      for (const remoteId of remoteIds) {
+        sendGroupCallSignal(remoteId, "hangup", { group_id: groupId, call_id: callId });
+      }
+      const state = activeGroupCalls.get(groupId);
+      if (state) {
+        state.participant_ids = state.participant_ids.filter((id) => id !== me?.user_id);
+        activeGroupCalls.set(groupId, state);
+      }
+    }
+    for (const [remoteId, connection] of groupPeerConnections) {
+      connection.close();
+      document.getElementById("group-remotes")
+        ?.querySelectorAll("[data-group-remote-id=\"" + CSS.escape(remoteId) + "\"]")
+        .forEach((element) => element.remove());
+    }
+    groupPeerConnections.clear();
+    groupPendingIceCandidates.clear();
+    groupCallJoinedMembers.clear();
+    refreshGroupCallParticipants();
+    groupCallId = null;
+    groupCallGroupId = null;
+    groupCallMemberIds = [];
+    groupCallInitiatorId = null;
+    renderGroupCallBanner();
+  } else if (notifyPeer && callPeerId) {
+    sendCallSignal("hangup", {});
+  }
+
+  const endedPeerId = callPeerId;
+  if (incomingCallDialog.open) incomingCallDialog.close();
+  screenMediaStream?.getTracks().forEach((track) => track.stop());
+  localMediaStream?.getTracks().forEach((track) => track.stop());
+  peerConnection?.close();
+  peerConnection = null;
+  localMediaStream = null;
+  screenMediaStream = null;
+  pendingIncomingCall = null;
+  pendingIceCandidates = [];
+  if (endedPeerId) iceCandidatesBeforeOffer.delete(endedPeerId);
+  callPeerId = null;
+  callMediaKind = null;
+  localVideo.srcObject = null;
+  localScreenVideo.srcObject = null;
+  localScreenVideo.hidden = true;
+  remoteVideo.srcObject = null;
+  remoteVideo.hidden = false;
+  remoteAudio.srcObject = null;
+  remoteAudio.hidden = false;
+  document.getElementById("group-remotes").replaceChildren();
+  document.getElementById("group-remotes").hidden = true;
+  document.getElementById("toggle-screen-share").hidden = false;
+  enableCallAudio.hidden = true;
+  callStage.hidden = true;
+  callStage.classList.remove("call-collapsed");
+  const collapseButton = document.getElementById("call-collapse");
+  collapseButton.textContent = "−";
+  collapseButton.title = "Minimize call";
+  document.getElementById("toggle-microphone").textContent = "🎙 Mute mic";
+  document.getElementById("toggle-microphone").setAttribute("aria-pressed", "false");
+  document.getElementById("toggle-camera").textContent = "📷 Turn camera off";
+  document.getElementById("toggle-screen-share").textContent = "Share screen";
+}
+
+function isForOpenChat(message) {
+  if (!peerId || !me) return false;
+  const group = groups.find((item) => item.user_id === peerId);
+  if (group?.is_group) return message.recipient_id === peerId;
+  return (
+    (message.sender_id === me.user_id && message.recipient_id === peerId) ||
+    (message.sender_id === peerId && message.recipient_id === me.user_id)
+  );
+}
+
+function setStatus(text) {
+  if (text === "online") {
+    renderPresenceStatus(localStorage.getItem(PRESENCE_KEY) || "online");
+    return;
+  }
+  renderPresenceStatus(text);
+}
+
+function renderMe() {
+  if (!me) return;
+  profileOpen.hidden = false;
+  meLabel.textContent = me.display_name;
+  meUsername.textContent = me.username ? `@${me.username}` : "";
+  renderMenuAccount();
+  profileName.value = me.display_name;
+  profileEmail.value = me.email || "";
+  profileEmail.hidden = !me.email;
+  profileEmailLabel.hidden = !me.email;
+  paintAvatar(meAvatar, me);
+  updateOwnProfileCard(me);
+}
+
+function renderUsers() {
+  usersEl.replaceChildren();
+  const query = userSearchInput.value.trim().replace(/^@/, "").toLocaleLowerCase();
+  const matches = [...users, ...groups].filter((user) => {
+    if (!query) return true;
+    return user.display_name.toLocaleLowerCase().includes(query)
+      || (user.username || "").toLocaleLowerCase().includes(query);
+  });
+  const pinned = getPinnedChats();
+  matches.sort((a, b) => {
+    const ap = pinned.has(a.user_id) ? 1 : 0;
+    const bp = pinned.has(b.user_id) ? 1 : 0;
+    return bp - ap || a.display_name.localeCompare(b.display_name);
+  });
+  for (const user of matches) {
+    if (me && user.user_id === me.user_id) continue;
+    const li = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.classList.toggle("active", user.user_id === peerId);
+    const avatar = document.createElement("span");
+    avatar.className = "avatar";
+    paintAvatar(avatar, user);
+    const dot = document.createElement("span");
+    const presence = getPresence(user);
+    dot.className = presence === "online" ? "dot on" : presence === "dnd" ? "dot dnd" : "dot";
+    dot.title = presence === "dnd" ? "Do Not Disturb" : presence === "invisible" ? "Invisible" : presence;
+    const name = document.createElement("span");
+    name.className = "person-name";
+    const displayName = document.createElement("span");
+    displayName.textContent = user.is_group ? `👥 ${user.display_name}` : user.display_name;
+    name.append(displayName);
+    if (user.activity && !user.is_group) {
+      const activity = document.createElement("small");
+      activity.className = "person-activity";
+      activity.textContent = user.activity;
+      name.append(activity);
+    }
+    if (user.username && !user.is_group) {
+      const handle = document.createElement("small");
+      handle.textContent = `@${user.username}`;
+      name.append(handle);
+    }
+    button.append(avatar, name, dot);
+    button.addEventListener("click", () => openChat(user.user_id));
+
+    const pin = document.createElement("button");
+    pin.type = "button";
+    pin.className = "chat-pin ghost";
+    pin.title = pinned.has(user.user_id) ? "Unpin chat" : "Pin chat";
+    pin.setAttribute("aria-label", pin.title);
+    pin.textContent = pinned.has(user.user_id) ? "★" : "☆";
+    pin.classList.toggle("is-pinned", pinned.has(user.user_id));
+    pin.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      togglePinnedChat(user.user_id);
+    });
+
+    li.append(button, pin);
+    usersEl.append(li);
+  }
+}
+
+async function loadGroups() {
+  try {
+    const savedGroups = await api("GET", "/api/groups");
+    groups = savedGroups.map((group) => ({
+      user_id: group.group_id,
+      display_name: group.name,
+      online: true,
+      is_group: true,
+      group_member_ids: group.member_ids,
+    }));
+    renderUsers();
+  } catch (err) {
+    appendSystem(`Could not load groups: ${err.message}`);
+  }
+}
+
+function renderGroupMemberChoices() {
+  groupMemberList.replaceChildren();
+  for (const user of users.filter((item) => item.user_id !== me?.user_id && !item.is_group)) {
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = user.user_id;
+    checkbox.disabled = !user.e2e_enabled;
+    const name = document.createElement("span");
+    name.textContent = user.e2e_enabled
+      ? `${user.display_name} · E2E ready`
+      : `${user.display_name} · sign in and set up E2E first`;
+    if (!user.e2e_enabled) label.classList.add("member-needs-e2e");
+    label.append(checkbox, name);
+    groupMemberList.append(label);
+  }
+}
+
+async function createGroup(event) {
+  event.preventDefault();
+  const error = document.getElementById("group-create-error");
+  error.hidden = true;
+  const memberIds = [...groupMemberList.querySelectorAll("input:checked")].map((input) => input.value);
+  try {
+    const created = await api("POST", "/api/groups", {
+      name: document.getElementById("group-name").value.trim(),
+      member_ids: memberIds,
+    });
+    const newGroup = {
+      user_id: created.group_id,
+      display_name: created.name,
+      online: true,
+      is_group: true,
+      group_member_ids: created.member_ids,
+    };
+    groups = [...groups.filter((group) => group.user_id !== newGroup.user_id), newGroup];
+    createGroupDialog.close();
+    renderUsers();
+    openChat(created.group_id);
+  } catch (err) {
+    error.textContent = err.message;
+    error.hidden = false;
+  }
+}
+
+function paintAvatar(el, user) {
+  el.replaceChildren();
+  el.classList.toggle("emoji-avatar", !user.avatar_url);
+  if (user.avatar_url) {
+    const img = document.createElement("img");
+    const cacheKey = user.avatar_id || user.updated_at || user.avatar_version || Date.now();
+    img.src = `${user.avatar_url}${user.avatar_url.includes("?") ? "&" : "?"}v=${encodeURIComponent(cacheKey)}`;
+    img.alt = "";
+    el.append(img);
+  } else {
+    const faces = ["🐸", "🦊", "🐙", "🐟", "🦉", "🐧", "🐢", "🦋"];
+    const seed = [...(user.user_id || user.display_name || "")]
+      .reduce((value, character) => value + character.charCodeAt(0), 0);
+    el.classList.add("emoji-avatar");
+    el.textContent = faces[seed % faces.length];
+  }
+}
+
+function appendMessage(message) {
+  messagesById.set(message.id, message);
+  if (deletedMessageIds.has(message.id)) return;
+  const li = document.createElement("li");
+  li.dataset.messageId = message.id;
+  if (me && message.sender_id === me.user_id) li.classList.add("me");
+
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = `${message.sender_name} · ${new Date(message.created_at).toLocaleTimeString()}`;
+  li.append(meta);
+
+  if (me && message.sender_id === me.user_id) {
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "message-delete-button ghost";
+    deleteButton.textContent = "Delete";
+    deleteButton.title = "Delete this message for everyone";
+    deleteButton.addEventListener("click", () => {
+      if (!window.confirm("Delete this message for everyone?")) return;
+      deleteButton.disabled = true;
+      socket?.send(JSON.stringify({
+        type: "delete",
+        peer_id: message.recipient_id,
+        message_id: message.id,
+      }));
+    });
+    li.append(deleteButton);
+  }
+
+  let encryptedBodyElement = null;
+  let messageBodyForSave = null;
+  if (message.body) {
+    const body = document.createElement("div");
+    const envelope = parseCryptoEnvelope(message.body);
+    if (envelope) {
+      body.textContent = "Encrypted message";
+      encryptedBodyElement = body;
+
+    } else {
+      body.textContent = cryptoEnabled
+        ? `⚠️ Legacy message (not end-to-end encrypted): ${message.body}`
+        : message.body;
+    }
+    li.append(body);
+    messageBodyForSave = body;
+  }
+
+  if (messageBodyForSave) {
+    const saveButton = document.createElement("button");
+    saveButton.type = "button";
+    saveButton.className = "message-save-button ghost";
+    saveButton.textContent = "☆ Save";
+    saveButton.title = "Save this message";
+    saveButton.addEventListener("click", () => {
+      void toggleSavedMessage(message, messageBodyForSave.textContent || "");
+    });
+    li.append(saveButton);
+  }
+  if (message.attachment && !parseCryptoEnvelope(message.body)) {
+    if (message.attachment.mime.startsWith("image/")) {
+      const img = document.createElement("img");
+      img.className = "photo";
+      img.src = message.attachment.url;
+      img.alt = message.attachment.name;
+      img.tabIndex = 0;
+      img.setAttribute("role", "button");
+      img.title = "Open image";
+      img.addEventListener("click", () => openImageViewer(img.src, img.alt));
+      img.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openImageViewer(img.src, img.alt);
+        }
+      });
+      li.append(img);
+    } else if (message.attachment.mime.startsWith("audio/")) {
+      const audio = document.createElement("audio");
+      audio.controls = true;
+      audio.preload = "metadata";
+      audio.src = message.attachment.url;
+      li.append(audio);
+    } else {
+      const link = document.createElement("a");
+      link.href = message.attachment.url;
+      link.download = message.attachment.name;
+      link.textContent = `${message.attachment.name} (${formatSize(message.attachment.size_bytes)})`;
+      li.append(link);
+    }
+  }
+
+  logEl.append(li);
+  if (encryptedBodyElement) {
+    messageBodyElementsById.set(message.id, encryptedBodyElement);
+
+    let effectiveMessage = message;
+    const queuedResponse = cryptoRecoveryResponsesByMessageId.get(message.id);
+    if (queuedResponse) {
+      effectiveMessage =
+        mergeCryptoRecoveryResponse(message, queuedResponse)
+        || (
+          parseCryptoEnvelope(message.body)?.version === 1
+            ? { ...message, body: queuedResponse.ciphertext }
+            : message
+        );
+      if (effectiveMessage !== message) {
+        cryptoRecoveryResponsesByMessageId.delete(message.id);
+      }
+    }
+
+    const recoveredBody = recoveredBodiesByMessageId.get(message.id);
+    if (recoveredBody) {
+      effectiveMessage = { ...effectiveMessage, body: recoveredBody };
+      recoveredBodiesByMessageId.delete(message.id);
+    }
+
+    void displayEncryptedMessage(effectiveMessage, encryptedBodyElement).then((ok) => {
+      if (ok && queuedResponse) {
+        socket?.send(JSON.stringify({
+          type: "crypto_resync_response_ack",
+          peer_id: queuedResponse.sender_id,
+          message_id: message.id,
+          device_id: queuedResponse.device_id,
+        }));
+      }
+    });
+  }
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function attachLocalMediaPreview() {
+  localVideo.srcObject = localMediaStream;
+  localVideo.hidden = !localMediaStream?.getVideoTracks().length;
+  document.getElementById("toggle-microphone").disabled = !localMediaStream?.getAudioTracks().length;
+  document.getElementById("toggle-camera").disabled = !localMediaStream?.getVideoTracks().length;
+  if (!localVideo.hidden) {
+    try {
+      await localVideo.play();
+    } catch {
+      callStatus.textContent = "Camera is on. Click the preview to start local playback.";
+    }
+  }
+}
+
+function mergeCryptoRecoveryResponse(message, response) {
+  const envelope = parseCryptoEnvelope(message?.body);
+  if (
+    !envelope
+    || envelope.version !== 2
+    || envelope.message_type !== "message"
+    || !response?.device_id
+    || typeof response.ciphertext !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    ...message,
+    body: JSON.stringify({
+      ...envelope,
+      ciphertexts: {
+        ...envelope.ciphertexts,
+        [response.device_id]: response.ciphertext,
+      },
+    }),
+  };
+}
+
+function parseCryptoEnvelope(raw) {
+  try {
+    const envelope = JSON.parse(raw);
+
+    if (
+      envelope?.version === 2
+      && envelope.message_type === "message"
+      && typeof envelope.sender_device_id === "string"
+      && envelope.sender_device_id
+      && envelope.ciphertexts
+      && typeof envelope.ciphertexts === "object"
+      && !Array.isArray(envelope.ciphertexts)
+    ) {
+      return envelope;
+    }
+
+    if (
+      envelope?.version === 1
+      && envelope.message_type === "group"
+      && envelope.ciphertexts
+      && typeof envelope.ciphertexts === "object"
+      && !Array.isArray(envelope.ciphertexts)
+    ) {
+      return envelope;
+    }
+
+    if (
+      envelope?.version === 1
+      && ["message", "prekey"].includes(envelope.message_type)
+      && typeof envelope.ciphertext === "string"
+    ) {
+      return envelope;
+    }
+
+    if (
+      envelope?.version === 3
+      && envelope.message_type === "matrix"
+      && typeof envelope.sender_device_id === "string"
+      && envelope.sender_device_id
+      && typeof envelope.room_id === "string"
+      && envelope.room_id
+      && envelope.ciphertext
+      && typeof envelope.ciphertext === "object"
+      && !Array.isArray(envelope.ciphertext)
+    ) {
+      return envelope;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+console.log("[E2E] displayEncryptedMessage loaded");
+
+async function retryVisibleMatrixMessages() {
+  const entries = [...messageBodyElementsById.entries()];
+  for (const [messageId, bodyElement] of entries) {
+    const message = messagesById.get(messageId);
+    if (!message || !parseCryptoEnvelope(message.body)) continue;
+    if (!(bodyElement.textContent || "").startsWith("Could not decrypt Matrix message:")) continue;
+    await displayEncryptedMessage(message, bodyElement, { allowRecovery: false });
+  }
+}
+
+async function displayEncryptedMessage(message, bodyElement, { allowRecovery = true } = {}) {
+  const matrixEnvelope = parseCryptoEnvelope(message.body);
+  if (matrixEnvelope?.version === 3 && matrixEnvelope.message_type === "matrix") {
+    try {
+      await matrixCryptoReady;
+      if (!matrixCrypto) throw new Error("Matrix E2E is not initialized.");
+      const decrypted = await matrixCrypto.decrypt(matrixEnvelope.room_id, {
+        id: message.id,
+        sender_id: message.sender_id,
+        created_at: message.created_at,
+        body: matrixEnvelope,
+      });
+      const payload = decrypted?.content ?? decrypted;
+      bodyElement.textContent =
+        typeof payload?.text === "string" ? payload.text : JSON.stringify(payload);
+
+      if (payload?.file && message.attachment) {
+        try {
+          await renderEncryptedAttachment(message.attachment, payload.file, bodyElement.parentElement);
+        } catch (err) {
+          bodyElement.textContent =
+            `Could not open encrypted attachment: ${err?.message || String(err)}`;
+        }
+      }
+      if (payload?.gif) {
+        try {
+          renderSelectedGif(payload.gif, bodyElement.parentElement);
+        } catch (err) {
+          bodyElement.textContent =
+            `Could not open GIF: ${err?.message || String(err)}`;
+        }
+      }
+      return true;
+    } catch (err) {
+      bodyElement.textContent =
+        `Could not decrypt Matrix message: ${err?.message || String(err)}`;
+      return false;
+    }
+  }
+
+  if (message.sender_id === me?.user_id) {
+    await cryptoReady;
+    const cached = sentPlaintextByCiphertext.get(message.body)
+      || await loadCachedSentPlaintext(message.body);
+    if (cached) sentPlaintextByCiphertext.set(message.body, cached);
+    const payload = parseEncryptedPayload(cached);
+    bodyElement.textContent = payload?.text || "Encrypted message sent from this device";
+    if (payload?.file && message.attachment) {
+      try {
+        await renderEncryptedAttachment(message.attachment, payload.file, bodyElement.parentElement);
+      } catch (err) {
+        bodyElement.textContent = `Could not open encrypted attachment: ${err?.message || String(err)}`;
+      }
+    }
+      if (payload?.gif) {
+        try {
+          renderSelectedGif(payload.gif, bodyElement.parentElement);
+        } catch (err) {
+          bodyElement.textContent =
+            `Could not open GIF: ${err?.message || String(err)}`;
+        }
+      }
+    return true;
+  }
+
+  if (!cryptoEnabled) {
+    bodyElement.textContent = "Encrypted. Set up E2E to read messages.";
+    return false;
+  }
+
+  try {
+    await cryptoReady;
+    if (!cryptoDevice) {
+      throw new Error("Unlock E2E with your recovery key to read messages.");
+    }
+
+    // The whole incoming crypto operation is serialized.
+    // This is important for history because fetching crypto-key before
+    // entering the queue can cause messages to reach the Olm ratchet
+    // in a different order than the history itself.
+    const result = await withCryptoStateLock(async () => {
+      const envelope = parseCryptoEnvelope(message.body);
+
+      if (!envelope) {
+        throw new Error("Invalid encrypted message envelope.");
+      }
+
+      const sender = users.find((item) => item.user_id === message.sender_id)
+        || { user_id: message.sender_id, display_name: message.sender_name };
+
+      let encryptedBody;
+      let senderDeviceId;
+      let senderBundle;
+
+      if (envelope.version === 2 && envelope.message_type === "message") {
+        senderDeviceId = envelope.sender_device_id;
+        encryptedBody = envelope.ciphertexts[cryptoDevice.device_id()];
+
+        if (typeof encryptedBody !== "string") {
+          throw new Error("No encrypted copy was addressed to this device.");
+        }
+
+        const senderDevices = await api(
+          "GET",
+          `/api/users/${encodeURIComponent(message.sender_id)}/crypto-devices`
+        );
+
+        const devices = Array.isArray(senderDevices?.devices)
+          ? senderDevices.devices
+          : [];
+
+        senderBundle = devices.find(
+          (bundle) => bundle?.device_id === senderDeviceId
+        );
+
+        if (!senderBundle) {
+          throw new Error("Sender device was not found.");
+        }
+
+        if (!(await ensurePeerFingerprint(sender, senderBundle))) {
+          throw new Error("Encrypted. Sender device was not verified; message was not decrypted.");
+        }
+      } else if (envelope.version === 1 && envelope.message_type === "group") {
+        const senderBundleResponse = await api(
+          "GET",
+          `/api/users/${encodeURIComponent(message.sender_id)}/crypto-key`
+        );
+        senderBundle = Array.isArray(senderBundleResponse?.devices)
+          ? senderBundleResponse.devices[0]
+          : senderBundleResponse;
+
+        if (!(await ensurePeerFingerprint(sender, senderBundle))) {
+          throw new Error("Encrypted. Device was not verified; message was not decrypted.");
+        }
+
+        senderDeviceId = message.sender_id;
+        encryptedBody = envelope.ciphertexts[me.user_id];
+
+        if (typeof encryptedBody !== "string") {
+          throw new Error("No encrypted copy was addressed to this account.");
+        }
+      } else {
+        const senderBundleResponse = await api(
+          "GET",
+          `/api/users/${encodeURIComponent(message.sender_id)}/crypto-key`
+        );
+        const senderDevices = Array.isArray(senderBundleResponse?.devices)
+          ? senderBundleResponse.devices
+          : [senderBundleResponse];
+
+        if (!senderDevices.length || !senderDevices[0]) {
+          throw new Error("Sender E2E device was not found.");
+        }
+
+        // Historical v1 sessions were keyed by the sender account id, not
+        // the sender device id. Keep that identity so old messages remain
+        // decryptable after the Matrix migration.
+        senderBundle = senderDevices[0];
+        if (!(await ensurePeerFingerprint(sender, senderBundle))) {
+          throw new Error("Encrypted. Device was not verified; message was not decrypted.");
+        }
+
+        senderDeviceId = message.sender_id;
+        encryptedBody = message.body;
+      }
+
+      console.log("[E2E] incoming", {
+        sender: message.sender_id,
+        senderDevice: senderDeviceId,
+        type: envelope.message_type,
+        hasSession: cryptoDevice.has_session(senderDeviceId),
+        sessionCount: cryptoDevice.session_count(senderDeviceId),
+      });
+
+      const sessionCountBefore = cryptoDevice.session_count(senderDeviceId);
+
+      console.log("[E2E] decrypt start", {
+        sender: message.sender_id,
+        senderDevice: senderDeviceId,
+        type: envelope.message_type,
+        sessionCountBefore,
+      });
+
+      let plaintext;
+
+      try {
+        plaintext = cryptoDevice.decrypt(
+          senderDeviceId,
+          encryptedBody,
+          JSON.stringify(senderBundle),
+          senderBundle.fingerprint,
+        );
+
+        cryptoRecoveryPending.delete(message.id);
+        console.log("[E2E] decrypt success", {
+          sender: message.sender_id,
+          senderDevice: senderDeviceId,
+          type: envelope.message_type,
+          sessionCountAfter: cryptoDevice.session_count(senderDeviceId),
+        });
+      } catch (err) {
+        console.error("[E2E] decrypt FAILED", {
+          sender: message.sender_id,
+          senderDevice: senderDeviceId,
+          type: envelope.message_type,
+          sessionCountAfter: cryptoDevice.session_count(senderDeviceId),
+          error: err?.message || String(err),
+        });
+
+        const recoveryCheck = {
+          envelopeVersion: envelope.version,
+          messageType: envelope.message_type,
+          socketState: socket?.readyState ?? null,
+          socketOpen: socket?.readyState === WebSocket.OPEN,
+        };
+        console.log("[E2E] recovery check", recoveryCheck);
+
+        if (
+          allowRecovery
+          && (
+            (
+              envelope.version === 1
+              && ["message", "prekey"].includes(envelope.message_type)
+            )
+            || (
+              envelope.version === 2
+              && envelope.message_type === "message"
+            )
+          )
+          && socket?.readyState === WebSocket.OPEN
+        ) {
+          const recoveryDevice = cryptoDevice.device_id();
+          const lastRecovery = cryptoRecoveryLastAttempt.get(message.id) || 0;
+          const recoveryPending = cryptoRecoveryPending.has(message.id);
+          const recoveryCooldownMs = 30000;
+          const recoveryAllowed = Date.now() - lastRecovery >= recoveryCooldownMs;
+
+          if (recoveryPending) {
+            console.log("[E2E] automatic session recovery already pending", {
+              message: message.id,
+              sender: message.sender_id,
+            });
+          } else if (recoveryAllowed) {
+            cryptoRecoveryLastAttempt.set(message.id, Date.now());
+            cryptoRecoveryPending.set(message.id, {
+              senderId: message.sender_id,
+              senderDeviceId,
+              deviceId: recoveryDevice,
+              message: { ...message },
+            });
+            socket.send(JSON.stringify({
+              type: "crypto_resync",
+              peer_id: message.sender_id,
+              message_id: message.id,
+              body: message.body,
+              device_id: recoveryDevice,
+              attachment_id: message.attachment?.id || null,
+            }));
+            console.log("[E2E] requested automatic session recovery", {
+              message: message.id,
+              sender: message.sender_id,
+              senderDevice: senderDeviceId,
+              device: recoveryDevice,
+            });
+          } else {
+            console.log("[E2E] automatic session recovery throttled", {
+              message: message.id,
+              sender: message.sender_id,
+              senderDevice: senderDeviceId,
+              cooldownMs: recoveryCooldownMs,
+              remainingMs: recoveryCooldownMs - (Date.now() - lastRecovery),
+            });
+          }
+        }
+        throw err;
+      }
+
+      await persistCryptoState();
+
+      return plaintext;
+    });
+
+    const payload = parseEncryptedPayload(result);
+    bodyElement.textContent = payload?.text ?? result;
+
+    if (payload?.file && message.attachment) {
+      try {
+        await renderEncryptedAttachment(
+          message.attachment,
+          payload.file,
+          bodyElement.parentElement
+        );
+          if (payload?.gif) {
+        try {
+          renderSelectedGif(payload.gif, bodyElement.parentElement);
+        } catch (err) {
+          bodyElement.textContent =
+            `Could not open GIF: ${err?.message || String(err)}`;
+        }
+      }
+  } catch (err) {
+        bodyElement.textContent =
+          `Could not open encrypted attachment: ${err?.message || String(err)}`;
+      }
+    }
+  } catch (err) {
+    bodyElement.textContent = `Could not decrypt message: ${err?.message || String(err)}`;
+    return false;
+  }
+  return true;
+}
+
+async function handleCryptoResyncResponse(response) {
+  console.log("[E2E] recovery response received", {
+    sender: response?.sender_id,
+    message: response?.message_id,
+    device: response?.device_id,
+    hasCiphertext: typeof response?.ciphertext === "string",
+    ciphertextLength: typeof response?.ciphertext === "string" ? response.ciphertext.length : 0,
+  });
+
+  if (
+    !response?.sender_id
+    || !response?.message_id
+    || !response?.device_id
+    || typeof response?.ciphertext !== "string"
+  ) {
+    console.warn("[E2E] recovery response ignored: malformed");
+    return;
+  }
+
+  const pending = cryptoRecoveryPending.get(response.message_id);
+  if (!pending) {
+    const knownMessage = messagesById.get(response.message_id);
+    const currentEnvelope = knownMessage ? parseCryptoEnvelope(knownMessage.body) : null;
+
+    if (
+      (
+        (
+          currentEnvelope?.version === 1
+          && ["message", "prekey"].includes(currentEnvelope.message_type)
+        )
+        || (
+          currentEnvelope?.version === 2
+          && currentEnvelope.message_type === "message"
+        )
+      )
+      && typeof response.device_id === "string"
+    ) {
+      cryptoRecoveryResponsesByMessageId.set(response.message_id, {
+        sender_id: response.sender_id,
+        device_id: response.device_id,
+        ciphertext: response.ciphertext,
+      });
+      const bodyElement = messageBodyElementsById.get(response.message_id);
+      if (bodyElement) {
+        const recoveredMessage =
+          currentEnvelope?.version === 1
+            ? { ...knownMessage, body: response.ciphertext }
+            : mergeCryptoRecoveryResponse(knownMessage, response);
+        if (!recoveredMessage) return;
+        const ok = await displayEncryptedMessage(
+          recoveredMessage,
+          bodyElement,
+          { allowRecovery: false },
+        );
+        if (ok) {
+          cryptoRecoveryResponsesByMessageId.delete(response.message_id);
+          socket?.send(JSON.stringify({
+            type: "crypto_resync_response_ack",
+            peer_id: response.sender_id,
+            message_id: response.message_id,
+            device_id: response.device_id,
+          }));
+        }
+      }
+      return;
+    }
+
+    console.warn("[E2E] recovery response stored: no matching history message", {
+      message: response.message_id,
+    });
+    cryptoRecoveryResponsesByMessageId.set(response.message_id, {
+      sender_id: response.sender_id,
+      device_id: response.device_id,
+      ciphertext: response.ciphertext,
+    });
+    return;
+  }
+
+  if (
+    pending.senderId !== response.sender_id
+    || pending.deviceId !== response.device_id
+  ) {
+    console.warn("[E2E] recovery response ignored: request binding mismatch", {
+      message: response.message_id,
+      expectedSender: pending.senderId,
+      actualSender: response.sender_id,
+      expectedDevice: pending.deviceId,
+      actualDevice: response.device_id,
+    });
+    return;
+  }
+
+  cryptoRecoveryPending.delete(response.message_id);
+
+  let originalEnvelope = parseCryptoEnvelope(pending.message.body);
+  const validV2Original =
+    originalEnvelope?.version === 2
+    && originalEnvelope.message_type === "message"
+    && originalEnvelope.sender_device_id === pending.senderDeviceId;
+  const validV1Original =
+    originalEnvelope?.version === 1
+    && ["message", "prekey"].includes(originalEnvelope.message_type)
+    && pending.senderDeviceId === pending.senderId;
+
+  if (!validV2Original && !validV1Original) {
+    console.warn("[E2E] recovery response ignored: original message binding is invalid", {
+      message: response.message_id,
+    });
+    return;
+  }
+
+  try {
+    const recoveredCipherEnvelope = JSON.parse(response.ciphertext);
+    if (
+      recoveredCipherEnvelope?.version !== 1
+      || !["message", "prekey"].includes(recoveredCipherEnvelope?.message_type)
+      || typeof recoveredCipherEnvelope?.ciphertext !== "string"
+    ) {
+      throw new Error("Recovery response was not a valid v1 ciphertext.");
+    }
+  } catch (err) {
+    console.warn("[E2E] recovery response ignored: invalid v1 ciphertext", {
+      message: response.message_id,
+      error: err?.message || String(err),
+    });
+    return;
+  }
+
+  let recoveredMessage;
+
+  if (
+    originalEnvelope.version === 1
+    && ["message", "prekey"].includes(originalEnvelope.message_type)
+  ) {
+    recoveredMessage = {
+      ...pending.message,
+      body: response.ciphertext,
+    };
+  } else {
+    originalEnvelope = {
+      ...originalEnvelope,
+      ciphertexts: {
+        ...originalEnvelope.ciphertexts,
+        [response.device_id]: response.ciphertext,
+      },
+    };
+
+    recoveredMessage = {
+      ...pending.message,
+      body: JSON.stringify(originalEnvelope),
+    };
+  }
+  const bodyElement = messageBodyElementsById.get(response.message_id);
+
+  if (!bodyElement) {
+    cryptoRecoveryResponsesByMessageId.set(response.message_id, {
+      sender_id: response.sender_id,
+      device_id: response.device_id,
+      ciphertext: recoveredMessage.body,
+      legacyBody: originalEnvelope.version === 1,
+    });
+    console.log("[E2E] recovery response stored until message is rendered", {
+      message: response.message_id,
+    });
+    return;
+  }
+
+  try {
+    const ok = await displayEncryptedMessage(
+      recoveredMessage,
+      bodyElement,
+      { allowRecovery: false },
+    );
+    if (ok) {
+      socket?.send(JSON.stringify({
+        type: "crypto_resync_response_ack",
+        peer_id: response.sender_id,
+        message_id: response.message_id,
+        device_id: response.device_id,
+      }));
+    }
+    console.log("[E2E] recovery response decrypted", {
+      message: response.message_id,
+      device: response.device_id,
+      ok,
+    });
+  } catch (err) {
+    console.error("[E2E] recovery response decrypt failed", {
+      message: response.message_id,
+      error: err?.message || String(err),
+    });
+  }
+}
+
+async function handleCryptoResyncRequest(request) {
+  console.log("[E2E] recovery request received", {
+    requester: request?.requester_id,
+    message: request?.message_id,
+    device: request?.device_id,
+    hasBody: typeof request?.body === "string",
+    bodyLength: typeof request?.body === "string" ? request.body.length : 0,
+  });
+
+  if (!me || !request?.requester_id || request.requester_id === me.user_id) {
+    console.warn("[E2E] recovery request ignored", {
+      hasUser: Boolean(me),
+      requester: request?.requester_id,
+      ownUser: me?.user_id,
+    });
+    return false;
+  }
+
+  try {
+    // Queued recovery requests can arrive immediately after reconnect,
+    // before the local E2E device has finished unlocking. Wait instead of
+    // dropping the request.
+    await cryptoReady;
+    if (!cryptoEnabled || !cryptoDevice) {
+      console.warn("[E2E] recovery request ignored: E2E device is unavailable", {
+        cryptoEnabled,
+        hasCryptoDevice: Boolean(cryptoDevice),
+      });
+      return false;
+    }
+
+    await withCryptoStateLock(async () => {
+      console.log("[E2E] recovery: looking up cached plaintext");
+
+      const cached = sentPlaintextByCiphertext.get(request.body)
+        || await loadCachedSentPlaintext(request.body);
+
+      if (!cached) {
+        console.warn("[E2E] recovery requested, but original plaintext is not cached locally");
+        return;
+      }
+
+      console.log("[E2E] recovery: plaintext cache found");
+
+      const original = parseCryptoEnvelope(request.body);
+      if (
+        !original
+        || (
+          original.version === 1
+            ? !["message", "prekey"].includes(original.message_type)
+            : !(original.version === 2 && original.message_type === "message")
+        )
+      ) {
+        console.warn("[E2E] recovery: original envelope is invalid or unsupported");
+        return;
+      }
+
+      const devicesResponse = await api(
+        "GET",
+        `/api/users/${encodeURIComponent(request.requester_id)}/crypto-devices`
+      );
+      const devices = Array.isArray(devicesResponse?.devices) ? devicesResponse.devices : [];
+      const target = devices.find((device) => device?.device_id === request.device_id);
+
+      console.log("[E2E] recovery: target device lookup", {
+        device: request.device_id,
+        found: Boolean(target),
+        deviceCount: devices.length,
+      });
+
+      if (!target) throw new Error("The recovering device is no longer registered.");
+
+      const peer = users.find((item) => item.user_id === request.requester_id)
+        || { user_id: request.requester_id, display_name: request.requester_id };
+
+      if (!(await ensurePeerFingerprint(peer, target))) {
+        throw new Error("The recovering device is not verified.");
+      }
+
+      if (
+        original?.version === 1
+        && ["message", "prekey"].includes(original.message_type)
+      ) {
+        // Legacy v1 used the peer account id as the Olm session key.
+        const legacySessionId = request.requester_id;
+        console.log("[E2E] recovery: establishing fresh legacy v1 session");
+        const devicesResponse = await api(
+          "GET",
+          `/api/users/${encodeURIComponent(request.requester_id)}/crypto-key`
+        );
+        const requesterDevices = Array.isArray(devicesResponse?.devices)
+          ? devicesResponse.devices
+          : [];
+
+        const requesterBundle = requesterDevices.find(
+          (device) => device?.device_id === request.device_id
+        ) || requesterDevices[0];
+
+        if (!requesterBundle) {
+          throw new Error("The recovering device has no E2E bundle.");
+        }
+
+        if (!(await ensurePeerFingerprint(peer, requesterBundle))) {
+          throw new Error(`Device ${request.device_id} could not be verified.`);
+        }
+
+        const claimedBundle = requesterDevices.length
+          ? await claimPeerOneTimeKey(request.requester_id, requesterBundle.device_id)
+          : requesterBundle;
+
+        if (!(await ensurePeerFingerprint(peer, claimedBundle))) {
+          throw new Error(`Device ${request.device_id} could not be verified.`);
+        }
+
+        cryptoDevice.establish_session(
+          legacySessionId,
+          JSON.stringify(claimedBundle),
+          claimedBundle.fingerprint,
+        );
+
+        const recoveryCipher = cryptoDevice.encrypt(legacySessionId, cached);
+        const recoveryCipherEnvelope = JSON.parse(recoveryCipher);
+        if (
+          recoveryCipherEnvelope?.version !== 1
+          || !["message", "prekey"].includes(recoveryCipherEnvelope.message_type)
+        ) {
+          throw new Error("automatic legacy recovery did not produce a v1 ciphertext");
+        }
+
+        await persistCryptoState();
+
+        socket?.send(JSON.stringify({
+          type: "crypto_resync_response",
+          peer_id: request.requester_id,
+          message_id: request.message_id,
+          device_id: request.device_id,
+          ciphertext: recoveryCipher,
+        }));
+
+        console.log("[E2E] recovery: legacy v1 ciphertext sent", {
+          peer: request.requester_id,
+          message: request.message_id,
+          session: legacySessionId,
+          sessionCount: cryptoDevice.session_count(legacySessionId),
+        });
+        return;
+      }
+
+      console.log("[E2E] recovery: claiming one-time key");
+
+      const claimedBundle = await claimPeerOneTimeKey(request.requester_id, target.device_id);
+
+      console.log("[E2E] recovery: one-time key claimed", {
+        device: claimedBundle?.device_id,
+        hasOneTimeKey: Array.isArray(claimedBundle?.one_time_keys)
+          && claimedBundle.one_time_keys.length > 0,
+      });
+
+      if (!(await ensurePeerFingerprint(peer, claimedBundle))) {
+        throw new Error(`Device ${target.device_id} could not be verified.`);
+      }
+
+      cryptoDevice.establish_session(
+        target.device_id,
+        JSON.stringify(claimedBundle),
+        claimedBundle.fingerprint,
+      );
+
+      console.log("[E2E] recovery: new outbound session established", {
+        device: target.device_id,
+        sessionCount: cryptoDevice.session_count(target.device_id),
+      });
+
+      const recoveryCipher = cryptoDevice.encrypt(target.device_id, cached);
+      const recoveryCipherEnvelope = JSON.parse(recoveryCipher);
+      if (recoveryCipherEnvelope?.message_type !== "prekey") {
+        throw new Error("automatic recovery did not produce a pre-key message");
+      }
+
+      await persistCryptoState();
+
+      socket?.send(JSON.stringify({
+        type: "crypto_resync_response",
+        peer_id: request.requester_id,
+        message_id: request.message_id,
+        device_id: request.device_id,
+        ciphertext: recoveryCipher,
+      }));
+
+      console.log("[E2E] recovery: pre-key response sent", {
+        peer: request.requester_id,
+        message: request.message_id,
+        device: target.device_id,
+        sessionCount: cryptoDevice.session_count(target.device_id),
+      });
+    });
+  } catch (err) {
+    console.error("[E2E] automatic session recovery failed", {
+      error: err?.message || String(err),
+      stack: err?.stack || null,
+    });
+  }
+}
+
+function parseEncryptedPayload(raw) {
+  if (typeof raw !== "string") return null;
+  try {
+    const payload = JSON.parse(raw);
+    if (payload && typeof payload.text === "string") return payload;
+  } catch {
+    return { text: raw, file: null };
+  }
+  return null;
+}
+
+async function encryptAttachment(file) {
+  const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt"]);
+  const rawKey = await crypto.subtle.exportKey("raw", key);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, await file.arrayBuffer());
+  return {
+    file: new File([ciphertext], `${file.name}.encrypted`, { type: "application/octet-stream" }),
+    metadata: {
+      key: bytesToBase64(new Uint8Array(rawKey)),
+      iv: bytesToBase64(iv),
+      name: file.name,
+      mime: file.type || "application/octet-stream",
+      size: file.size,
+    },
+  };
+}
+
+const GIF_FAVORITES_DB = "larptrix-local-media";
+const GIF_FAVORITES_STORE = "gifs";
+
+function openGifFavoritesDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(GIF_FAVORITES_DB, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(GIF_FAVORITES_STORE)) {
+        db.createObjectStore(GIF_FAVORITES_STORE, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Could not open GIF favorites."));
+  });
+}
+
+async function saveGifFavorite(blob, name) {
+  const db = await openGifFavoritesDb();
+  const item = { id: crypto.randomUUID(), name: name || "saved.gif", mime: blob.type || "image/gif", blob, createdAt: Date.now() };
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(GIF_FAVORITES_STORE, "readwrite");
+    tx.objectStore(GIF_FAVORITES_STORE).put(item);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error || new Error("Could not save GIF."));
+  });
+  db.close();
+}
+
+async function listGifFavorites() {
+  const db = await openGifFavoritesDb();
+  const items = await new Promise((resolve, reject) => {
+    const tx = db.transaction(GIF_FAVORITES_STORE, "readonly");
+    const request = tx.objectStore(GIF_FAVORITES_STORE).getAll();
+    request.onsuccess = () => resolve(request.result || []);
+    request.onerror = () => reject(request.error || new Error("Could not load saved GIFs."));
+  });
+  db.close();
+  return items.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+async function deleteGifFavorite(id) {
+  const db = await openGifFavoritesDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(GIF_FAVORITES_STORE, "readwrite");
+    tx.objectStore(GIF_FAVORITES_STORE).delete(id);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error || new Error("Could not remove GIF."));
+  });
+  db.close();
+}
+
+async function addGifToFavorites(blob, name, container) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "ghost gif-save-button";
+  button.textContent = "♡ Save GIF";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await saveGifFavorite(blob, name);
+      button.textContent = "♥ Saved";
+    } catch (err) {
+      button.disabled = false;
+      button.textContent = err?.message || "Save failed";
+    }
+  });
+  container.append(button);
+}
+
+async function renderGifFavorites() {
+  if (!gifResults || !gifEmpty) return;
+  gifResults.replaceChildren();
+  try {
+    const favorites = await listGifFavorites();
+    gifEmpty.hidden = favorites.length > 0;
+    for (const favorite of favorites) {
+      const item = document.createElement("article");
+      item.className = "gif-favorite";
+      const image = document.createElement("img");
+      image.src = URL.createObjectURL(favorite.blob);
+      image.alt = favorite.name;
+      image.loading = "lazy";
+      image.className = "gif-favorite-image";
+
+      const actions = document.createElement("div");
+      actions.className = "gif-favorite-actions";
+      const send = document.createElement("button");
+      send.type = "button";
+      send.textContent = "Send";
+      send.addEventListener("click", () => {
+        queueAttachment(new File([favorite.blob], favorite.name || "saved.gif", {
+          type: favorite.mime || favorite.blob.type || "image/gif",
+        }));
+        gifDialog.close();
+      });
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "ghost";
+      remove.textContent = "Remove";
+      remove.addEventListener("click", async () => {
+        await deleteGifFavorite(favorite.id);
+        void renderGifFavorites();
+      });
+      actions.append(send, remove);
+      item.append(image, actions);
+      gifResults.append(item);
+    }
+  } catch (err) {
+    gifEmpty.hidden = false;
+    gifEmpty.textContent = err?.message || "Could not load saved GIFs.";
+  }
+}
+
+async function renderEncryptedAttachment(attachment, metadata, container) {
+  const response = await fetch(attachment.url, { credentials: "same-origin" });
+  if (!response.ok) throw new Error("Encrypted attachment could not be loaded.");
+  const ciphertext = await response.arrayBuffer();
+  const key = await crypto.subtle.importKey("raw", base64ToBytes(metadata.key), "AES-GCM", false, ["decrypt"]);
+  const plaintext = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: base64ToBytes(metadata.iv) },
+    key,
+    ciphertext,
+  );
+  const blob = new Blob([plaintext], { type: metadata.mime });
+  const url = URL.createObjectURL(blob);
+  if (metadata.mime === "image/gif") {
+    const image = document.createElement("img");
+    image.className = "photo";
+    image.src = url;
+    image.alt = metadata.name;
+    image.tabIndex = 0;
+    image.setAttribute("role", "button");
+    image.addEventListener("click", () => openImageViewer(url, metadata.name));
+    container.append(image);
+    void addGifToFavorites(blob, metadata.name, container);
+  } else if (metadata.mime.startsWith("image/")) {
+    const image = document.createElement("img");
+    image.className = "photo";
+    image.src = url;
+    image.alt = metadata.name;
+    image.tabIndex = 0;
+    image.setAttribute("role", "button");
+    image.addEventListener("click", () => openImageViewer(url, metadata.name));
+    container.append(image);
+  } else if (metadata.mime.startsWith("audio/")) {
+    const audio = document.createElement("audio");
+    audio.controls = true;
+    audio.preload = "metadata";
+    audio.src = url;
+    container.append(audio);
+  } else {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = metadata.name;
+    link.textContent = `${metadata.name} (${formatSize(metadata.size)})`;
+    container.append(link);
+  }
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function base64ToBytes(value) {
+  return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+}
+
+function queueAttachment(file) {
+  if (!file) return;
+  pendingAttachment = file;
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
+  previewUrl = URL.createObjectURL(file);
+  attachmentPreview.replaceChildren();
+  if (file.type.startsWith("image/")) {
+    const image = document.createElement("img");
+    image.src = previewUrl;
+    image.alt = "Selected image preview";
+    attachmentPreview.append(image);
+  } else if (file.type.startsWith("audio/")) {
+    const audio = document.createElement("audio");
+    audio.controls = true;
+    audio.src = previewUrl;
+    attachmentPreview.append(audio);
+  }
+  const details = document.createElement("span");
+  details.textContent = `${file.name} · ${formatSize(file.size)}`;
+  attachmentPreview.append(details);
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "ghost";
+  remove.textContent = "Remove";
+  remove.addEventListener("click", clearAttachment);
+  attachmentPreview.append(remove);
+  attachmentPreview.hidden = false;
+}
+
+function browserLocale() {
+  const locale = (navigator.language || "en-US").replace("-", "_").trim();
+  return locale.length <= 16 ? locale : "en_US";
+}
+
+function browserCountry() {
+  const parts = browserLocale().split("_");
+  const country = parts[1] || "US";
+  return /^[A-Za-z]{2}$/.test(country) ? country.toUpperCase() : "US";
+}
+
+function renderSelectedGif(gif, container) {
+  if (!gif || typeof gif.url !== "string") {
+    throw new Error("This GIF has an invalid media URL.");
+  }
+
+  const mediaUrl = new URL(gif.url);
+  if (
+    mediaUrl.protocol !== "https:"
+    || mediaUrl.hostname.toLowerCase() !== "static.klipy.com"
+  ) {
+    throw new Error("This GIF did not come from KLIPY.");
+  }
+
+  const figure = document.createElement("figure");
+  figure.className = "gif-attachment";
+
+  const image = document.createElement("img");
+  image.src = gif.url;
+  image.alt = typeof gif.title === "string" && gif.title ? gif.title : "KLIPY GIF";
+  image.loading = "lazy";
+  image.decoding = "async";
+  image.referrerPolicy = "no-referrer";
+  figure.append(image);
+
+  if (typeof gif.item_url === "string") {
+    try {
+      const itemUrl = new URL(gif.item_url);
+      if (
+        itemUrl.protocol === "https:"
+        && (itemUrl.hostname.toLowerCase() === "klipy.com"
+          || itemUrl.hostname.toLowerCase().endsWith(".klipy.com"))
+      ) {
+        const link = document.createElement("a");
+        link.href = gif.item_url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = "View on KLIPY";
+        figure.append(link);
+      }
+    } catch {}
+  }
+
+  container.append(figure);
+}
+
+function clearAttachment() {
+  pendingAttachment = null;
+  pendingGif = null;
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
+  previewUrl = null;
+  attachmentPreview.replaceChildren();
+  attachmentPreview.hidden = true;
+  photoInput.value = "";
+  fileInput.value = "";
+  audioFileInput.value = "";
+}
+
+async function toggleRecording() {
+  if (recorder && recorder.state === "recording") {
+    recorder.stop();
+    recordAudioButton.textContent = "Record";
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    appendSystem("Audio recording is not supported by this browser.");
+    return;
+  }
+  try {
+    recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus"]
+      .find((type) => MediaRecorder.isTypeSupported(type));
+    recorder = new MediaRecorder(recordingStream, mimeType ? { mimeType } : undefined);
+    recordedChunks = [];
+    recorder.addEventListener("dataavailable", (event) => {
+      if (event.data.size) recordedChunks.push(event.data);
+    });
+    recorder.addEventListener("stop", () => {
+      const blob = new Blob(recordedChunks, { type: recorder.mimeType || "audio/webm" });
+      const ext = blob.type.includes("ogg") ? "ogg" : "webm";
+      queueAttachment(new File([blob], `voice-message.${ext}`, { type: blob.type }));
+      recordingStream.getTracks().forEach((track) => track.stop());
+      recordingStream = null;
+    }, { once: true });
+    recorder.start();
+    recordAudioButton.textContent = "Stop recording";
+  } catch (err) {
+    appendSystem(err.message || "Could not access the microphone.");
+    recordingStream?.getTracks().forEach((track) => track.stop());
+    recordingStream = null;
+  }
+}
+
+function formatSize(size) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function appendSystem(text) {
+  const li = document.createElement("li");
+  li.textContent = text;
+  logEl.append(li);
+}
+
+function openImageViewer(src, alt) {
+  imageViewerImage.src = src;
+  imageViewerImage.alt = alt;
+  imageViewer.showModal();
+}
+
+function updateOwnProfileCard(profile) {
+  profileCardName.textContent = profile.display_name || "";
+  profileCardHandle.textContent = profile.username ? `@${profile.username}` : "";
+  profileCardActivity.textContent = profile.activity || "No activity";
+}
+
+async function setMyActivity(activity) {
+  try {
+    const result = await api("POST", "/api/me/activity", { activity });
+    profileCardActivity.textContent = result.activity || "No activity";
+  } catch {
+    return;
+  }
+}
+
+function updateMusicActivity(trackName, playing) {
+  if (!musicActivityEnabled || customActivity) return;
+  void setMyActivity(playing ? `Listening to ${trackName}` : "");
+}
+
+window.larptixMusicStatus = {
+  update: updateMusicActivity,
+  refresh() {
+    if (!musicActivityEnabled || customActivity) return;
+    const player = document.getElementById("music-audio");
+    const name = document.getElementById("music-player-name")?.textContent?.trim();
+    if (player && name) updateMusicActivity(name, !player.paused);
+  },
+};
+
+function chatWallpaperKey(id) {
+  return `larptrix_chat_wallpaper_${me.user_id}_${id}`;
+}
+
+function applyChatWallpaper(id) {
+  const wallpaper = localStorage.getItem(chatWallpaperKey(id));
+  logEl.style.backgroundImage = wallpaper ? `url("${wallpaper}")` : "";
+}
+
+async function saveChatWallpaper(file, id) {
+  if (!file.type.startsWith("image/")) return;
+  try {
+    const image = await createImageBitmap(file);
+    const scale = Math.min(1, 1600 / image.width, 1000 / image.height);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.width * scale));
+    canvas.height = Math.max(1, Math.round(image.height * scale));
+    canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+    image.close();
+    localStorage.setItem(chatWallpaperKey(id), canvas.toDataURL("image/jpeg", 0.78));
+    applyChatWallpaper(id);
+  } catch {
+    appendSystem("Could not save this chat background. Try a smaller image.");
+  }
+}
+
+async function showPeerProfile(id) {
+  try {
+    const profile = await api("GET", `/api/users/${encodeURIComponent(id)}/profile`);
+    const avatar = document.getElementById("peer-profile-avatar");
+    avatar.hidden = !profile.avatar_url;
+    if (profile.avatar_url) avatar.src = profile.avatar_url;
+    avatar.alt = `${profile.display_name} profile photo`;
+    document.getElementById("peer-profile-name").textContent = profile.display_name;
+    document.getElementById("peer-profile-username").textContent = profile.username ? `@${profile.username}` : "";
+    document.getElementById("peer-profile-about").textContent = profile.about || "No profile description";
+    document.getElementById("peer-profile-activity").textContent = profile.activity || "No activity";
+    peerProfileDialog.showModal();
+  } catch (err) {
+    appendSystem(err.message || "Could not load profile.");
+  }
+}
+
+async function api(method, path, body) {
+  const options = { method, credentials: "same-origin", headers: {} };
+  if (body !== undefined && method !== "GET") {
+    options.headers["Content-Type"] = "application/json";
+    options.body = JSON.stringify(body);
+  }
+  const response = await fetch(path, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data.error || response.statusText);
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+
+async function uploadFile(path, file) {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await fetch(path, {
+    method: "POST",
+    credentials: "same-origin",
+    body: form,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || response.statusText);
+  return data;
+}
