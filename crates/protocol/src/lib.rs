@@ -10,7 +10,9 @@ pub enum ClientMessage {
     /// Keep a browser WebSocket connection active through idle network timeouts.
     Ping,
     /// Load history with one person.
-    Open { peer_id: String },
+    Open {
+        peer_id: String,
+    },
     /// Send text and/or a previously uploaded attachment.
     Send {
         peer_id: String,
@@ -24,7 +26,9 @@ pub enum ClientMessage {
         peer_id: String,
         message_id: String,
     },
-    SetPresence { status: String },
+    SetPresence {
+        status: String,
+    },
     /// Relay ephemeral WebRTC signaling data to one chat peer.
     CallSignal {
         peer_id: String,

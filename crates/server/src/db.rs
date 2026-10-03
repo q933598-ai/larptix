@@ -1213,7 +1213,10 @@ impl Database {
             return Err(DbError::BadRequest("invalid channel posting policy"));
         }
         let conn = self.conn.lock().expect("db lock");
-        conn.execute("UPDATE groups SET post_policy = ?1 WHERE id = ?2 AND is_channel = 1", params![policy, group_id])?;
+        conn.execute(
+            "UPDATE groups SET post_policy = ?1 WHERE id = ?2 AND is_channel = 1",
+            params![policy, group_id],
+        )?;
         Ok(())
     }
     pub fn remove_channel_admin(&self, group_id: &str, user_id: &str) -> Result<(), DbError> {
@@ -1224,7 +1227,6 @@ impl Database {
         )?;
         Ok(())
     }
-
 
     pub fn add_group_member(&self, group_id: &str, user_id: &str) -> Result<(), DbError> {
         let conn = self.conn.lock().expect("db lock");
@@ -1242,7 +1244,11 @@ impl Database {
         Ok(())
     }
 
-    pub fn set_profile_banner(&self, user_id: &str, attachment_id: Option<&str>) -> rusqlite::Result<Option<String>> {
+    pub fn set_profile_banner(
+        &self,
+        user_id: &str,
+        attachment_id: Option<&str>,
+    ) -> rusqlite::Result<Option<String>> {
         let conn = self.conn.lock().expect("db lock");
         let old = conn
             .query_row(
@@ -1347,7 +1353,8 @@ impl Database {
             params![group.id, creator_id],
         )?;
         drop(conn);
-        self.group(&group.id)?.ok_or_else(|| DbError::BadRequest("channel disappeared"))
+        self.group(&group.id)?
+            .ok_or_else(|| DbError::BadRequest("channel disappeared"))
     }
 
     pub fn groups_for_user(&self, user_id: &str) -> rusqlite::Result<Vec<GroupRow>> {
@@ -1380,9 +1387,18 @@ impl Database {
                 .query_map([&id], |admin| admin.get(0))?
                 .collect::<rusqlite::Result<Vec<String>>>()?;
             for admin in extra {
-                if !admin_ids.contains(&admin) { admin_ids.push(admin); }
+                if !admin_ids.contains(&admin) {
+                    admin_ids.push(admin);
+                }
             }
-            groups.push(GroupRow { id, name, member_ids, is_channel, admin_ids, post_policy });
+            groups.push(GroupRow {
+                id,
+                name,
+                member_ids,
+                is_channel,
+                admin_ids,
+                post_policy,
+            });
         }
         Ok(groups)
     }
@@ -1393,13 +1409,15 @@ impl Database {
             .query_row(
                 "SELECT id, name, is_channel, created_by, post_policy FROM groups WHERE id = ?1",
                 [group_id],
-                |row| Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)? != 0,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                )),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)? != 0,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
             )
             .optional()?;
         let Some((id, name, is_channel, creator_id, post_policy)) = group else {
@@ -1415,9 +1433,18 @@ impl Database {
             .query_map([&id], |admin| admin.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
         for admin in extra {
-            if !admin_ids.contains(&admin) { admin_ids.push(admin); }
+            if !admin_ids.contains(&admin) {
+                admin_ids.push(admin);
+            }
         }
-        Ok(Some(GroupRow { id, name, member_ids, is_channel, admin_ids, post_policy }))
+        Ok(Some(GroupRow {
+            id,
+            name,
+            member_ids,
+            is_channel,
+            admin_ids,
+            post_policy,
+        }))
     }
 
     pub fn is_group_member(&self, group_id: &str, user_id: &str) -> rusqlite::Result<bool> {
@@ -1702,7 +1729,8 @@ impl Database {
         if !group.member_ids.iter().any(|member| member == sender_id) {
             return Err(DbError::BadRequest("not a member of this group"));
         }
-        if group.is_channel && group.post_policy == "admins"
+        if group.is_channel
+            && group.post_policy == "admins"
             && !group.admin_ids.iter().any(|admin| admin == sender_id)
         {
             return Err(DbError::BadRequest("only channel admins can post"));
@@ -1764,7 +1792,9 @@ impl Database {
         message_id: &str,
     ) -> Result<bool, DbError> {
         if requester_id.is_empty() || conversation_id.is_empty() || message_id.is_empty() {
-            return Err(DbError::BadRequest("message deletion is missing required identifiers"));
+            return Err(DbError::BadRequest(
+                "message deletion is missing required identifiers",
+            ));
         }
 
         let conn = self.conn.lock().expect("db lock");
@@ -2103,7 +2133,9 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             |row| row.get(0),
         )?;
         if exists == 0 {
-            conn.execute_batch(&format!("ALTER TABLE groups ADD COLUMN {column} {definition};"))?;
+            conn.execute_batch(&format!(
+                "ALTER TABLE groups ADD COLUMN {column} {definition};"
+            ))?;
         }
     }
     let has_file_name: i64 = conn.query_row(

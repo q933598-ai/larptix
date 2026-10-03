@@ -49,8 +49,14 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/groups", get(list_groups).post(create_group))
         .route("/api/groups/{id}/members", post(add_group_member))
         .route("/api/channels", post(create_channel))
-        .route("/api/channels/{id}/admins", post(add_channel_admin).delete(remove_channel_admin))
-        .route("/api/channels/{id}/settings", patch(update_channel_settings))
+        .route(
+            "/api/channels/{id}/admins",
+            post(add_channel_admin).delete(remove_channel_admin),
+        )
+        .route(
+            "/api/channels/{id}/settings",
+            patch(update_channel_settings),
+        )
         .route("/api/me/access-key", post(create_access_key))
         .route(
             "/api/me/crypto-device",
@@ -1369,13 +1375,22 @@ async fn create_channel(
     let user = require_user(&state, &headers)?;
     let name = sanitize_display_name(&body.name).map_err(ApiError::bad)?;
     if body.member_ids.len() > 31 {
-        return Err(ApiError::bad("a channel can contain at most 31 invited members"));
+        return Err(ApiError::bad(
+            "a channel can contain at most 31 invited members",
+        ));
     }
     if body.post_policy != "admins" && body.post_policy != "members" {
         return Err(ApiError::bad("invalid channel posting policy"));
     }
-    if state.db.matrix_devices_for_user(&user.id).map_err(ApiError::db)?.is_empty() {
-        return Err(ApiError::bad("finish Matrix E2E device setup before creating a channel"));
+    if state
+        .db
+        .matrix_devices_for_user(&user.id)
+        .map_err(ApiError::db)?
+        .is_empty()
+    {
+        return Err(ApiError::bad(
+            "finish Matrix E2E device setup before creating a channel",
+        ));
     }
     let mut members = body.member_ids;
     members.sort();
@@ -1384,23 +1399,48 @@ async fn create_channel(
         return Err(ApiError::bad("the channel creator is added automatically"));
     }
     for member_id in &members {
-        if state.db.user_by_id(member_id).map_err(ApiError::db)?.is_none() {
+        if state
+            .db
+            .user_by_id(member_id)
+            .map_err(ApiError::db)?
+            .is_none()
+        {
             return Err(ApiError::bad("a selected channel member does not exist"));
         }
-        if state.db.matrix_devices_for_user(member_id).map_err(ApiError::db)?.is_empty() {
-            return Err(ApiError::bad("all channel members must finish Matrix E2E device setup first"));
+        if state
+            .db
+            .matrix_devices_for_user(member_id)
+            .map_err(ApiError::db)?
+            .is_empty()
+        {
+            return Err(ApiError::bad(
+                "all channel members must finish Matrix E2E device setup first",
+            ));
         }
     }
-    let channel = state.db.create_channel(&user.id, &name, &members, &body.post_policy)
+    let channel = state
+        .db
+        .create_channel(&user.id, &name, &members, &body.post_policy)
         .map_err(ApiError::from_db)?;
     for member_id in &channel.member_ids {
-        let groups = state.db.groups_for_user(member_id).map_err(ApiError::db)?
-            .into_iter().map(|item| GroupInfo {
-                group_id: item.id, name: item.name, member_ids: item.member_ids,
-                is_channel: item.is_channel, admin_ids: item.admin_ids, post_policy: item.post_policy,
-            }).collect();
+        let groups = state
+            .db
+            .groups_for_user(member_id)
+            .map_err(ApiError::db)?
+            .into_iter()
+            .map(|item| GroupInfo {
+                group_id: item.id,
+                name: item.name,
+                member_ids: item.member_ids,
+                is_channel: item.is_channel,
+                admin_ids: item.admin_ids,
+                post_policy: item.post_policy,
+            })
+            .collect();
         if let Ok(recipient) = member_id.parse() {
-            state.hub.send_to(recipient, ServerMessage::Groups { groups });
+            state
+                .hub
+                .send_to(recipient, ServerMessage::Groups { groups });
         }
     }
     Ok(Json(group_json(channel)))
@@ -1418,16 +1458,30 @@ async fn add_channel_admin(
     Json(body): Json<AddChannelAdminBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let user = require_user(&state, &headers)?;
-    let channel = state.db.group(&id).map_err(ApiError::db)?
+    let channel = state
+        .db
+        .group(&id)
+        .map_err(ApiError::db)?
         .ok_or_else(|| ApiError::not_found("channel not found"))?;
     if !channel.is_channel || !channel.admin_ids.iter().any(|admin| admin == &user.id) {
         return Err(ApiError::bad("only channel admins can manage admins"));
     }
-    if !channel.member_ids.iter().any(|member| member == &body.user_id) {
-        return Err(ApiError::bad("the new admin must already be a channel member"));
+    if !channel
+        .member_ids
+        .iter()
+        .any(|member| member == &body.user_id)
+    {
+        return Err(ApiError::bad(
+            "the new admin must already be a channel member",
+        ));
     }
-    state.db.add_channel_admin(&id, &body.user_id).map_err(ApiError::from_db)?;
-    Ok(Json(serde_json::json!({ "ok": true, "channel_id": id, "user_id": body.user_id })))
+    state
+        .db
+        .add_channel_admin(&id, &body.user_id)
+        .map_err(ApiError::from_db)?;
+    Ok(Json(
+        serde_json::json!({ "ok": true, "channel_id": id, "user_id": body.user_id }),
+    ))
 }
 
 async fn remove_channel_admin(
@@ -1437,7 +1491,10 @@ async fn remove_channel_admin(
     Json(body): Json<AddChannelAdminBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let user = require_user(&state, &headers)?;
-    let channel = state.db.group(&id).map_err(ApiError::db)?
+    let channel = state
+        .db
+        .group(&id)
+        .map_err(ApiError::db)?
         .ok_or_else(|| ApiError::not_found("channel not found"))?;
     if !channel.is_channel || !channel.admin_ids.iter().any(|admin| admin == &user.id) {
         return Err(ApiError::bad("only channel admins can manage admins"));
@@ -1448,8 +1505,13 @@ async fn remove_channel_admin(
     if body.user_id == user.id && channel.admin_ids.len() <= 1 {
         return Err(ApiError::bad("the channel must keep at least one admin"));
     }
-    state.db.remove_channel_admin(&id, &body.user_id).map_err(ApiError::from_db)?;
-    Ok(Json(serde_json::json!({ "ok": true, "channel_id": id, "user_id": body.user_id })))
+    state
+        .db
+        .remove_channel_admin(&id, &body.user_id)
+        .map_err(ApiError::from_db)?;
+    Ok(Json(
+        serde_json::json!({ "ok": true, "channel_id": id, "user_id": body.user_id }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -1464,13 +1526,23 @@ async fn update_channel_settings(
     Json(body): Json<UpdateChannelSettingsBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let user = require_user(&state, &headers)?;
-    let channel = state.db.group(&id).map_err(ApiError::db)?
+    let channel = state
+        .db
+        .group(&id)
+        .map_err(ApiError::db)?
         .ok_or_else(|| ApiError::not_found("channel not found"))?;
     if !channel.is_channel || !channel.admin_ids.iter().any(|admin| admin == &user.id) {
-        return Err(ApiError::bad("only channel admins can change channel settings"));
+        return Err(ApiError::bad(
+            "only channel admins can change channel settings",
+        ));
     }
-    state.db.set_channel_post_policy(&id, &body.post_policy).map_err(ApiError::from_db)?;
-    Ok(Json(serde_json::json!({ "ok": true, "channel_id": id, "post_policy": body.post_policy })))
+    state
+        .db
+        .set_channel_post_policy(&id, &body.post_policy)
+        .map_err(ApiError::from_db)?;
+    Ok(Json(
+        serde_json::json!({ "ok": true, "channel_id": id, "post_policy": body.post_policy }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -1514,7 +1586,9 @@ async fn add_group_member(
         .map_err(ApiError::db)?
         .is_empty()
     {
-        return Err(ApiError::bad("the user must finish Matrix E2E device setup first"));
+        return Err(ApiError::bad(
+            "the user must finish Matrix E2E device setup first",
+        ));
     }
     let group = state
         .db
@@ -1528,7 +1602,11 @@ async fn add_group_member(
         .db
         .add_group_member(&id, &body.user_id)
         .map_err(ApiError::from_db)?;
-    for member_id in group.member_ids.iter().chain(std::iter::once(&body.user_id)) {
+    for member_id in group
+        .member_ids
+        .iter()
+        .chain(std::iter::once(&body.user_id))
+    {
         if let Ok(recipient) = member_id.parse() {
             let groups = state
                 .db
@@ -1541,10 +1619,14 @@ async fn add_group_member(
                     member_ids: item.member_ids,
                 })
                 .collect();
-            state.hub.send_to(recipient, ServerMessage::Groups { groups });
+            state
+                .hub
+                .send_to(recipient, ServerMessage::Groups { groups });
         }
     }
-    Ok(Json(serde_json::json!({ "ok": true, "group_id": id, "user_id": body.user_id })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "group_id": id, "user_id": body.user_id }),
+    ))
 }
 
 fn group_json(group: crate::db::GroupRow) -> serde_json::Value {
@@ -1602,7 +1684,8 @@ async fn set_profile_banner(
         .map_err(ApiError::db)?;
     if let Some(old_id) = old {
         if let Ok(Some(old_file)) = state.db.attachment(&old_id) {
-            let _ = std::fs::remove_file(upload_path(&state.upload_dir, &old_file.id, &old_file.ext));
+            let _ =
+                std::fs::remove_file(upload_path(&state.upload_dir, &old_file.id, &old_file.ext));
         }
     }
     Ok(Json(serde_json::json!({

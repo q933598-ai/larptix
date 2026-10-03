@@ -48,7 +48,10 @@ pub async fn handle_socket(
     {
         let status = {
             let mut presence = state.presence.lock().expect("presence lock");
-            let status = presence.entry(user.id.clone()).or_insert_with(|| "online".to_string()).clone();
+            let status = presence
+                .entry(user.id.clone())
+                .or_insert_with(|| "online".to_string())
+                .clone();
             for (id, value) in presence.iter() {
                 let _ = tx.send(ServerMessage::Presence {
                     user_id: id.clone(),
@@ -154,7 +157,10 @@ pub async fn handle_socket(
                         send_error(&tx, "bad_send", err);
                     }
                 }
-                Ok(ClientMessage::Delete { peer_id, message_id }) => {
+                Ok(ClientMessage::Delete {
+                    peer_id,
+                    message_id,
+                }) => {
                     if let Err(err) = delete_message(&state, &user, &peer_id, &message_id) {
                         send_error(&tx, "bad_delete", err);
                     }
@@ -231,7 +237,9 @@ pub async fn handle_socket(
             let mut calls = state.group_calls.lock().expect("group call lock");
             let group_ids: Vec<String> = calls.keys().cloned().collect();
             for group_id in group_ids {
-                let Some(call) = calls.get_mut(&group_id) else { continue; };
+                let Some(call) = calls.get_mut(&group_id) else {
+                    continue;
+                };
                 if call.initiator_id == user.id {
                     let ended_call = call.clone();
                     calls.remove(&group_id);
@@ -276,7 +284,11 @@ pub async fn handle_socket(
                 }
             }
         }
-        state.presence.lock().expect("presence lock").remove(&user.id);
+        state
+            .presence
+            .lock()
+            .expect("presence lock")
+            .remove(&user.id);
         state.hub.broadcast(ServerMessage::Presence {
             user_id: user.id.clone(),
             status: "offline".to_string(),
@@ -579,7 +591,14 @@ fn relay_call_signal(
 ) -> Result<(), String> {
     if !matches!(
         kind,
-        "offer" | "answer" | "ice_candidate" | "hangup" | "reject" | "group_invite" | "group_join" | "group_end"
+        "offer"
+            | "answer"
+            | "ice_candidate"
+            | "hangup"
+            | "reject"
+            | "group_invite"
+            | "group_join"
+            | "group_end"
     ) {
         return Err("unsupported call signal".into());
     }
@@ -665,12 +684,14 @@ fn relay_call_signal(
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("audio");
                 let mut calls = state.group_calls.lock().expect("group call lock");
-                let call = calls.entry(peer_id.to_string()).or_insert_with(|| ActiveGroupCall {
-                    call_id: call_id.to_string(),
-                    media: media.to_string(),
-                    initiator_id: user.id.clone(),
-                    participant_ids: vec![user.id.clone()],
-                });
+                let call = calls
+                    .entry(peer_id.to_string())
+                    .or_insert_with(|| ActiveGroupCall {
+                        call_id: call_id.to_string(),
+                        media: media.to_string(),
+                        initiator_id: user.id.clone(),
+                        participant_ids: vec![user.id.clone()],
+                    });
                 if call.call_id != call_id {
                     return Err("another group call is already active".into());
                 }
@@ -824,35 +845,69 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
     Ok(())
 }
 
-fn delete_message(state: &AppState, user: &UserRow, peer_id: &str, message_id: &str) -> Result<(), String> {
-    if message_id.is_empty() { return Err("message id is empty".into()); }
-    let conversation_id = if let Some(group) = state.db.group(peer_id).map_err(|err| err.to_string())? {
-        if !group.member_ids.iter().any(|member| member == &user.id) {
-            return Err("not a member of this group".into());
-        }
-        format!("group_{peer_id}")
-    } else {
-        let peer = state.db.user_by_id(peer_id).map_err(|err| err.to_string())?.ok_or_else(|| "unknown user".to_string())?;
-        if peer.id == user.id { return Err("cannot delete a message from yourself".into()); }
-        let (a, b) = if user.id < peer.id { (user.id.as_str(), peer.id.as_str()) } else { (peer.id.as_str(), user.id.as_str()) };
-        format!("{a}_{b}")
-    };
-    let deleted = state.db.delete_message(&user.id, &conversation_id, message_id).map_err(db_err)?;
-    if !deleted { return Err("message not found or you are not its author".into()); }
+fn delete_message(
+    state: &AppState,
+    user: &UserRow,
+    peer_id: &str,
+    message_id: &str,
+) -> Result<(), String> {
+    if message_id.is_empty() {
+        return Err("message id is empty".into());
+    }
+    let conversation_id =
+        if let Some(group) = state.db.group(peer_id).map_err(|err| err.to_string())? {
+            if !group.member_ids.iter().any(|member| member == &user.id) {
+                return Err("not a member of this group".into());
+            }
+            format!("group_{peer_id}")
+        } else {
+            let peer = state
+                .db
+                .user_by_id(peer_id)
+                .map_err(|err| err.to_string())?
+                .ok_or_else(|| "unknown user".to_string())?;
+            if peer.id == user.id {
+                return Err("cannot delete a message from yourself".into());
+            }
+            let (a, b) = if user.id < peer.id {
+                (user.id.as_str(), peer.id.as_str())
+            } else {
+                (peer.id.as_str(), user.id.as_str())
+            };
+            format!("{a}_{b}")
+        };
+    let deleted = state
+        .db
+        .delete_message(&user.id, &conversation_id, message_id)
+        .map_err(db_err)?;
+    if !deleted {
+        return Err("message not found or you are not its author".into());
+    }
     fanout_deleted(state, &user.id, peer_id, message_id);
     Ok(())
 }
 
 fn fanout_deleted(state: &AppState, requester_id: &str, peer_id: &str, message_id: &str) {
-    let payload = ServerMessage::MessageDeleted { peer_id: peer_id.to_string(), message_id: message_id.to_string() };
-    if let Ok(requester) = Uuid::parse_str(requester_id) { state.hub.send_to(requester, payload.clone()); }
+    let payload = ServerMessage::MessageDeleted {
+        peer_id: peer_id.to_string(),
+        message_id: message_id.to_string(),
+    };
+    if let Ok(requester) = Uuid::parse_str(requester_id) {
+        state.hub.send_to(requester, payload.clone());
+    }
     if let Ok(Some(group)) = state.db.group(peer_id) {
         for member_id in group.member_ids {
-            if member_id == requester_id { continue; }
-            if let Ok(member) = Uuid::parse_str(&member_id) { state.hub.send_to(member, payload.clone()); }
+            if member_id == requester_id {
+                continue;
+            }
+            if let Ok(member) = Uuid::parse_str(&member_id) {
+                state.hub.send_to(member, payload.clone());
+            }
         }
     } else if peer_id != requester_id {
-        if let Ok(recipient) = Uuid::parse_str(peer_id) { state.hub.send_to(recipient, payload); }
+        if let Ok(recipient) = Uuid::parse_str(peer_id) {
+            state.hub.send_to(recipient, payload);
+        }
     }
 }
 fn send_dm(
