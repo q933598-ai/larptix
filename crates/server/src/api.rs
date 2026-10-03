@@ -47,6 +47,7 @@ pub fn router() -> Router<Arc<AppState>> {
                 .layer(DefaultBodyLimit::max(MAX_ATTACHMENT_BYTES + 64 * 1024)),
         )
         .route("/api/groups", get(list_groups).post(create_group))
+        .route("/api/groups/{id}/members", post(add_group_member))
         .route("/api/me/access-key", post(create_access_key))
         .route(
             "/api/me/crypto-device",
@@ -92,6 +93,11 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/me/avatar",
             post(set_avatar).layer(DefaultBodyLimit::max(MAX_IMAGE_BYTES + 64 * 1024)),
         )
+        .route(
+            "/api/me/banner",
+            post(set_profile_banner).layer(DefaultBodyLimit::max(MAX_IMAGE_BYTES + 64 * 1024)),
+        )
+        .route("/api/users/{id}/banner", get(user_banner))
 }
 
 #[derive(Deserialize)]
@@ -1196,6 +1202,7 @@ async fn get_user_profile(
         "about": about,
         "activity": activity,
         "avatar_url": avatar_id.map(|_| avatar_url(&id)),
+        "banner_url": state.db.profile_banner(&id).map_err(ApiError::db)?.map(|_| format!("/api/users/{}/banner", id)),
         "music": music,
     })))
 }
@@ -1335,6 +1342,90 @@ async fn create_group(
     Ok(Json(group_json(group)))
 }
 
+#[derive(Deserialize)]
+pub struct AddGroupMemberBody {
+    pub user_id: String,
+}
+
+async fn add_group_member(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<AddGroupMemberBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    if body.user_id == user.id {
+        return Err(ApiError::bad("you are already in this group"));
+    }
+    let creator = state
+        .db
+        .group_creator_id(&id)
+        .map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::not_found("group not found"))?;
+    if creator != user.id {
+        return Err(ApiError::forbidden("only the group creator can add members"));
+    }
+    if state
+        .db
+        .user_by_id(&body.user_id)
+        .map_err(ApiError::db)?
+        .is_none()
+    {
+        return Err(ApiError::bad("user not found"));
+    }
+    if state
+        .db
+        .matrix_devices_for_user(&body.user_id)
+        .map_err(ApiError::db)?
+        .is_empty()
+    {
+        return Err(ApiError::bad("the user must finish Matrix E2E device setup first"));
+    }
+    let group = state
+        .db
+        .group(&id)
+        .map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::not_found("group not found"))?;
+    if group.member_ids.len() >= 32 {
+        return Err(ApiError::bad("groups can contain at most 32 members"));
+    }
+    state
+        .db
+        .add_group_member(&id, &body.user_id)
+        .map_err(ApiError::from_db)?;
+    for member_id in &group.member_ids {
+        if let Ok(recipient) = member_id.parse() {
+            let groups = state
+                .db
+                .groups_for_user(member_id)
+                .map_err(ApiError::db)?
+                .into_iter()
+                .map(|item| GroupInfo {
+                    group_id: item.id,
+                    name: item.name,
+                    member_ids: item.member_ids,
+                })
+                .collect();
+            state.hub.send_to(recipient, ServerMessage::Groups { groups });
+        }
+    }
+    if let Ok(recipient) = body.user_id.parse() {
+        let groups = state
+            .db
+            .groups_for_user(&body.user_id)
+            .map_err(ApiError::db)?
+            .into_iter()
+            .map(|item| GroupInfo {
+                group_id: item.id,
+                name: item.name,
+                member_ids: item.member_ids,
+            })
+            .collect();
+        state.hub.send_to(recipient, ServerMessage::Groups { groups });
+    }
+    Ok(Json(serde_json::json!({ "ok": true, "group_id": id, "user_id": body.user_id })))
+}
+
 fn group_json(group: crate::db::GroupRow) -> serde_json::Value {
     serde_json::json!({
         "group_id": group.id,
@@ -1372,6 +1463,41 @@ async fn upload(
         name: saved.name,
         size_bytes: saved.size_bytes,
     }))
+}
+
+async fn set_profile_banner(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    multipart: Multipart,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let saved = save_image(&state, &user.id, multipart).await?;
+    let old = state
+        .db
+        .set_profile_banner(&user.id, Some(&saved.id))
+        .map_err(ApiError::db)?;
+    if let Some(old_id) = old {
+        if let Ok(Some(old_file)) = state.db.attachment(&old_id) {
+            let _ = std::fs::remove_file(upload_path(&state.upload_dir, &old_file.id, &old_file.ext));
+        }
+    }
+    Ok(Json(serde_json::json!({
+        "banner_url": format!("/api/users/{}/banner", user.id),
+    })))
+}
+
+async fn user_banner(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    require_user(&state, &headers)?;
+    let attachment_id = state
+        .db
+        .profile_banner(&id)
+        .map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::not_found("no profile banner"))?;
+    file_response(&state, &attachment_id)
 }
 
 async fn set_avatar(
@@ -1448,481 +1574,3 @@ fn file_response(state: &AppState, id: &str) -> Result<Response, ApiError> {
     };
     response.headers_mut().insert(
         header::CONTENT_DISPOSITION,
-        HeaderValue::from_static(disposition),
-    );
-    response.headers_mut().insert(
-        "x-content-type-options",
-        HeaderValue::from_static("nosniff"),
-    );
-    Ok(response)
-}
-
-struct SavedAttachment {
-    id: String,
-    mime: String,
-    name: String,
-    size_bytes: i64,
-}
-
-async fn save_attachment(
-    state: &AppState,
-    owner_id: &str,
-    mut multipart: Multipart,
-) -> Result<SavedAttachment, ApiError> {
-    let field = multipart
-        .next_field()
-        .await
-        .map_err(|_| ApiError::bad("invalid upload"))?
-        .ok_or_else(|| ApiError::bad("missing file"))?;
-    let name = safe_filename(field.file_name());
-    let bytes = field
-        .bytes()
-        .await
-        .map_err(|_| ApiError::bad("invalid upload"))?;
-    if bytes.len() > MAX_ATTACHMENT_BYTES {
-        return Err(ApiError::bad("file is too large (25 MiB maximum)"));
-    }
-    let kind = detect_image(&bytes).or_else(|| detect_audio(&bytes));
-    let (mime, ext) = kind
-        .map(|kind| (kind.mime, kind.ext.to_string()))
-        .unwrap_or(("application/octet-stream", safe_extension(&name)));
-    let size_bytes = bytes.len() as i64;
-    let id = state
-        .db
-        .insert_attachment(owner_id, mime, &ext, &name, size_bytes, now_ms())
-        .map_err(ApiError::db)?;
-    write_upload(&state.upload_dir, &id, &ext, &bytes).map_err(ApiError::internal)?;
-    Ok(SavedAttachment {
-        id,
-        mime: mime.to_string(),
-        name,
-        size_bytes,
-    })
-}
-
-async fn save_image(
-    state: &AppState,
-    owner_id: &str,
-    mut multipart: Multipart,
-) -> Result<SavedAttachment, ApiError> {
-    let field = multipart
-        .next_field()
-        .await
-        .map_err(|_| ApiError::bad("invalid upload"))?
-        .ok_or_else(|| ApiError::bad("missing file"))?;
-    let name = safe_filename(field.file_name());
-    let bytes = field
-        .bytes()
-        .await
-        .map_err(|_| ApiError::bad("invalid upload"))?;
-    if bytes.len() > MAX_IMAGE_BYTES {
-        return Err(ApiError::bad("image is too large"));
-    }
-    let kind = detect_image(&bytes).ok_or_else(|| ApiError::bad("only jpeg, png, gif, webp"))?;
-    let size_bytes = bytes.len() as i64;
-    let created_at = now_ms();
-    let id = state
-        .db
-        .insert_attachment(owner_id, kind.mime, kind.ext, &name, size_bytes, created_at)
-        .map_err(ApiError::db)?;
-    write_upload(&state.upload_dir, &id, kind.ext, &bytes).map_err(ApiError::internal)?;
-    Ok(SavedAttachment {
-        id,
-        mime: kind.mime.to_string(),
-        name,
-        size_bytes,
-    })
-}
-
-async fn save_audio(
-    state: &AppState,
-    owner_id: &str,
-    mut multipart: Multipart,
-) -> Result<SavedAttachment, ApiError> {
-    let field = multipart
-        .next_field()
-        .await
-        .map_err(|_| ApiError::bad("invalid upload"))?
-        .ok_or_else(|| ApiError::bad("missing file"))?;
-    let name = safe_filename(field.file_name());
-    let bytes = field
-        .bytes()
-        .await
-        .map_err(|_| ApiError::bad("invalid upload"))?;
-    if bytes.len() > MAX_ATTACHMENT_BYTES {
-        return Err(ApiError::bad("file is too large (25 MiB maximum)"));
-    }
-    let kind = detect_audio(&bytes).ok_or_else(|| ApiError::bad("unsupported audio format"))?;
-    let size_bytes = bytes.len() as i64;
-    let id = state
-        .db
-        .insert_attachment(owner_id, kind.mime, kind.ext, &name, size_bytes, now_ms())
-        .map_err(ApiError::db)?;
-    write_upload(&state.upload_dir, &id, kind.ext, &bytes).map_err(ApiError::internal)?;
-    Ok(SavedAttachment {
-        id,
-        mime: kind.mime.to_string(),
-        name,
-        size_bytes,
-    })
-}
-
-pub fn require_user(state: &AppState, headers: &HeaderMap) -> Result<UserRow, ApiError> {
-    let token = session_token(headers).ok_or_else(|| ApiError::unauthorized("not signed in"))?;
-    state
-        .db
-        .user_by_session(&token, now_ms())
-        .map_err(ApiError::db)?
-        .ok_or_else(|| ApiError::unauthorized("not signed in"))
-}
-
-pub fn session_token(headers: &HeaderMap) -> Option<String> {
-    let cookie = headers.get(header::COOKIE)?.to_str().ok()?;
-    cookie.split(';').find_map(|part| {
-        let (name, value) = part.trim().split_once('=')?;
-        (name == COOKIE_NAME).then(|| value.to_string())
-    })
-}
-
-fn cookie_response(state: &AppState, user: UserRow) -> Result<Response, ApiError> {
-    let mut info = public_me(&user);
-    if let Some((_, username, _, _)) = state.db.profile_fields(&user.id).map_err(ApiError::db)? {
-        info.username = username;
-    }
-    let response = Json(info).into_response();
-    session_response(state, &user, response)
-}
-
-fn session_response(
-    state: &AppState,
-    user: &UserRow,
-    mut response: Response,
-) -> Result<Response, ApiError> {
-    let token = new_session_token();
-    let expires_at = now_ms() + SESSION_MS;
-    state
-        .db
-        .create_session(&token, &user.id, expires_at)
-        .map_err(ApiError::db)?;
-    let secure = std::env::var("LARPTRIX_COOKIE_SECURE")
-        .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "yes"));
-    let cookie = session_cookie(&token, SESSION_MS / 1000, secure);
-    response.headers_mut().insert(
-        header::SET_COOKIE,
-        HeaderValue::from_str(&cookie).map_err(|_| ApiError::internal("cookie"))?,
-    );
-    Ok(response)
-}
-
-fn session_cookie(token: &str, max_age: i64, secure: bool) -> String {
-    let secure_flag = if secure { "; Secure" } else { "" };
-    format!("{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}{secure_flag}")
-}
-
-fn public_me(user: &UserRow) -> UserInfo {
-    UserInfo {
-        user_id: user.id.clone(),
-        display_name: user.display_name.clone(),
-        username: String::new(),
-        email: (!user.email.ends_with("@key.larptrix.invalid")).then(|| user.email.clone()),
-        online: true,
-        avatar_url: user.avatar_id.as_ref().map(|_| avatar_url(&user.id)),
-        activity: None,
-        is_group: false,
-        e2e_enabled: false,
-        group_member_ids: Vec::new(),
-    }
-}
-
-#[derive(Debug)]
-pub struct ApiError {
-    status: StatusCode,
-    message: String,
-}
-
-impl ApiError {
-    fn bad(message: impl ToString) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            message: message.to_string(),
-        }
-    }
-
-    fn unauthorized(message: impl ToString) -> Self {
-        Self {
-            status: StatusCode::UNAUTHORIZED,
-            message: message.to_string(),
-        }
-    }
-
-    fn not_found(message: impl ToString) -> Self {
-        Self {
-            status: StatusCode::NOT_FOUND,
-            message: message.to_string(),
-        }
-    }
-
-    fn service_unavailable(message: impl ToString) -> Self {
-        Self {
-            status: StatusCode::SERVICE_UNAVAILABLE,
-            message: message.to_string(),
-        }
-    }
-
-    fn internal(message: impl ToString) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: message.to_string(),
-        }
-    }
-
-    fn db(err: rusqlite::Error) -> Self {
-        tracing::error!("db: {err}");
-        Self::internal("database error")
-    }
-
-    fn from_db(err: DbError) -> Self {
-        match err {
-            DbError::EmailTaken => Self {
-                status: StatusCode::CONFLICT,
-                message: "email already registered".into(),
-            },
-            DbError::UsernameTaken => Self {
-                status: StatusCode::CONFLICT,
-                message: "username is already taken".into(),
-            },
-            DbError::BadRequest(msg) => Self::bad(msg),
-            DbError::Sqlite(err) => Self::db(err),
-        }
-    }
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        let body = Json(serde_json::json!({ "error": self.message }));
-        (self.status, body).into_response()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        create_access_key, login, parse_ice_servers, put_crypto_device, register,
-        register_password, sanitize_username, session_cookie, CryptoDeviceBody, LoginBody,
-        PasswordRegisterBody, RegisterBody,
-    };
-    use crate::db::Database;
-    use crate::hub::Hub;
-    use crate::AppState;
-    use axum::body::to_bytes;
-    use axum::extract::State;
-    use axum::http::{header, HeaderMap, HeaderValue};
-    use axum::Json;
-    use std::path::Path;
-    use std::sync::Arc;
-
-    #[test]
-    fn secure_cookie_flag_can_be_enabled_for_tls_deployments() {
-        let cookie = session_cookie("session-token", 3600, true);
-        assert!(cookie.contains("HttpOnly"));
-        assert!(cookie.contains("SameSite=Lax"));
-        assert!(cookie.ends_with("Secure"));
-    }
-
-    #[test]
-    fn usernames_are_normalized_and_restricted_to_safe_characters() {
-        assert_eq!(sanitize_username(" @Alice_42 ").unwrap(), "alice_42");
-        assert_eq!(sanitize_username("").unwrap(), "");
-        assert!(sanitize_username("ab").is_err());
-        assert!(sanitize_username("alice.name").is_err());
-    }
-
-    #[test]
-    fn rtc_config_defaults_to_stun_and_rejects_invalid_values() {
-        let default = parse_ice_servers(None).unwrap();
-        assert_eq!(default[0]["urls"], "stun:stun.l.google.com:19302");
-        assert!(parse_ice_servers(Some("not-json")).is_err());
-        assert!(parse_ice_servers(Some("{} ")).is_err());
-        assert_eq!(
-            parse_ice_servers(Some("[]")).unwrap(),
-            serde_json::json!([])
-        );
-    }
-
-    #[tokio::test]
-    async fn registration_and_key_login_work_without_email() {
-        let state = Arc::new(AppState {
-            db: Database::open(Path::new(":memory:")).unwrap(),
-            hub: Hub::new(),
-            upload_dir: Path::new("data/uploads").to_path_buf(),
-        });
-        let response = register(
-            State(state.clone()),
-            Json(RegisterBody {
-                display_name: "Key User".into(),
-                username: "key_user".into(),
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
-        assert!(!response
-            .headers()
-            .contains_key(axum::http::header::SET_COOKIE));
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(result["access_key"].is_string());
-        let access_key = result["access_key"].as_str().unwrap().to_string();
-        assert_eq!(access_key.len(), 71);
-        assert!(result["user"]["email"].is_null());
-        let user_id = result["user"]["user_id"].as_str().unwrap();
-
-        let response = login(
-            State(state),
-            Json(LoginBody {
-                access_key: Some(access_key),
-                email: None,
-                password: None,
-            }),
-        )
-        .await
-        .unwrap();
-        assert!(response
-            .headers()
-            .contains_key(axum::http::header::SET_COOKIE));
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let user: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(user["user_id"], user_id);
-        assert!(user["email"].is_null());
-    }
-
-    #[tokio::test]
-    async fn password_registration_creates_a_session_and_hashes_the_password() {
-        let state = Arc::new(AppState {
-            db: Database::open(Path::new(":memory:")).unwrap(),
-            hub: Hub::new(),
-            upload_dir: Path::new("data/uploads").to_path_buf(),
-        });
-        let response = register_password(
-            State(state.clone()),
-            Json(PasswordRegisterBody {
-                display_name: "Password User".into(),
-                username: "password_user".into(),
-                email: "Password@Example.test".into(),
-                password: "a-strong-test-password".into(),
-            }),
-        )
-        .await
-        .unwrap();
-        assert!(response
-            .headers()
-            .contains_key(axum::http::header::SET_COOKIE));
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let user: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(user["email"], "password@example.test");
-        let stored = state
-            .db
-            .user_by_email("password@example.test")
-            .unwrap()
-            .unwrap();
-        assert_ne!(stored.password_hash, "a-strong-test-password");
-        assert!(crate::auth::verify_password(
-            "a-strong-test-password",
-            &stored.password_hash
-        ));
-    }
-
-    #[tokio::test]
-    async fn first_e2e_setup_preserves_history_without_a_delete_confirmation() {
-        let state = Arc::new(AppState {
-            db: Database::open(Path::new(":memory:")).unwrap(),
-            hub: Hub::new(),
-            upload_dir: Path::new("data/uploads").to_path_buf(),
-        });
-        let user = state
-            .db
-            .create_key_user("E2E User", "e2e_user", "hash", crate::now_ms())
-            .unwrap();
-        state
-            .db
-            .create_session("e2e-session", &user.id, crate::now_ms() + 60_000)
-            .unwrap();
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::COOKIE,
-            HeaderValue::from_static("larptrix_session=e2e-session"),
-        );
-        let response = put_crypto_device(
-            State(state.clone()),
-            headers,
-            Json(CryptoDeviceBody {
-                bundle_json:
-                    r#"{"version":2,"device_id":"test-device-1","fingerprint":"fingerprint"}"#
-                        .into(),
-                encrypted_state: "encrypted-state".into(),
-                clear_old_history: false,
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(response.0["old_history_deleted"], false);
-        assert!(state.db.crypto_device("test-device-1").unwrap().is_some());
-    }
-
-    #[tokio::test]
-    async fn legacy_account_can_issue_and_use_key_without_losing_password() {
-        let state = Arc::new(AppState {
-            db: Database::open(Path::new(":memory:")).unwrap(),
-            hub: Hub::new(),
-            upload_dir: Path::new("data/uploads").to_path_buf(),
-        });
-        let old_user = state
-            .db
-            .create_user(
-                "legacy@example.test",
-                "existing-password-hash",
-                "Legacy User",
-                "legacy_user",
-                crate::now_ms(),
-            )
-            .unwrap();
-        let token = "legacy-session-token";
-        state
-            .db
-            .create_session(token, &old_user.id, crate::now_ms() + 60_000)
-            .unwrap();
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::COOKIE,
-            HeaderValue::from_str(&format!("larptrix_session={token}")).unwrap(),
-        );
-
-        let response = create_access_key(State(state.clone()), headers)
-            .await
-            .unwrap();
-        let result = response.0;
-        let access_key = result["access_key"].as_str().unwrap().to_string();
-        let unchanged_user = state
-            .db
-            .user_by_email("legacy@example.test")
-            .unwrap()
-            .unwrap();
-        assert_eq!(unchanged_user.id, old_user.id);
-        assert_eq!(unchanged_user.password_hash, "existing-password-hash");
-
-        let response = login(
-            State(state),
-            Json(LoginBody {
-                access_key: Some(access_key),
-                email: None,
-                password: None,
-            }),
-        )
-        .await
-        .unwrap();
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let user: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(user["user_id"], old_user.id);
-        assert_eq!(user["email"], "legacy@example.test");
-    }
-}
