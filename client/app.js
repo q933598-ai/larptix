@@ -223,6 +223,7 @@ const iceCandidatesBeforeOffer = new Map();
 let groupCallId = null;
 let groupCallGroupId = null;
 let groupCallMemberIds = [];
+const groupCallJoinedMembers = new Set();
 const groupPeerConnections = new Map();
 const groupPendingIceCandidates = new Map();
 
@@ -1528,6 +1529,7 @@ async function startGroupCall(kind) {
 async function establishGroupOffers() {
   const onlineMembers = groupCallMemberIds
     .filter((id) => id !== me.user_id)
+    .filter((id) => groupCallJoinedMembers.has(id))
     .filter((id) => users.some((user) => user.user_id === id && user.online));
 
   for (const remoteId of onlineMembers) {
@@ -1617,6 +1619,10 @@ async function acceptGroupInvite(signal) {
   groupCallMemberIds = [...group.group_member_ids];
   callPeerId = groupId;
   callMediaKind = payload.media === "video" ? "video" : "audio";
+  groupCallJoinedMembers.clear();
+  groupCallJoinedMembers.add(me.user_id);
+  groupCallJoinedMembers.add(signal.sender_id);
+
 
   try {
     localMediaStream = await acquireCallMedia(callMediaKind);
@@ -1628,6 +1634,14 @@ async function acceptGroupInvite(signal) {
     document.getElementById("toggle-screen-share").hidden = true;
     await attachLocalMediaPreview();
     callStatus.textContent = "Joining group call…" + callMediaNotice;
+    for (const memberId of groupCallMemberIds) {
+      if (memberId !== me.user_id) {
+        sendGroupCallSignal(memberId, "group_join", {
+          group_id: groupCallGroupId,
+          call_id: groupCallId,
+        });
+      }
+    }
     await establishGroupOffers();
   } catch (err) {
     appendSystem("Could not join group call: " + (err.message || "Check camera and microphone permissions."));
@@ -1658,6 +1672,12 @@ async function handleGroupCallSignal(signal) {
   }
 
   if (groupCallId !== callId || groupCallGroupId !== groupId) return;
+
+  if (signal.kind === "group_join") {
+    groupCallJoinedMembers.add(signal.sender_id);
+    await establishGroupOffers();
+    return;
+  }
 
   if (signal.kind === "offer") {
     let connection = groupPeerConnections.get(signal.sender_id);
