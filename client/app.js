@@ -308,6 +308,246 @@ let groupCallWindowDragOffsetX = 0;
 let groupCallWindowDragOffsetY = 0;
 const groupPendingIceCandidates = new Map();
 
+const THEME_KEY = "larptrix_theme";
+const CUSTOM_THEME_KEY = "larptrix_custom_theme";
+const PRESENCE_KEY = "larptrix_presence";
+const CALL_SOUND_KEY = "larptrix_call_sounds";
+const MESSAGE_SOUND_KEY = "larptrix_message_sounds";
+const NOISE_SUPPRESSION_KEY = "larptrix_noise_suppression";
+const SAVED_MESSAGES_KEY = "larptrix_saved_messages_v1";
+
+function readStoredBool(key, fallback = true) {
+  const value = localStorage.getItem(key);
+  return value === null ? fallback : value === "1";
+}
+
+function applyTheme(name = localStorage.getItem(THEME_KEY) || "larptrix") {
+  const root = document.documentElement;
+  root.dataset.theme = name;
+  if (name === "custom") {
+    try {
+      const custom = JSON.parse(localStorage.getItem(CUSTOM_THEME_KEY) || "null");
+      for (const [key, value] of Object.entries(custom || {})) {
+        if (typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)) root.style.setProperty("--" + key, value);
+      }
+    } catch {}
+  } else {
+    for (const key of ["bg", "panel", "panel-2", "panel-3", "line", "line-bright", "text", "muted", "accent", "accent-strong", "me", "danger"]) {
+      root.style.removeProperty("--" + key);
+    }
+  }
+  localStorage.setItem(THEME_KEY, name);
+}
+
+function loadThemeEditor() {
+  let custom = null;
+  try { custom = JSON.parse(localStorage.getItem(CUSTOM_THEME_KEY) || "null"); } catch {}
+  custom = custom || {
+    bg: "#050b08", panel: "#08130e", "panel-2": "#0b1912", text: "#d7f3df", muted: "#6f9b7e",
+    accent: "#35d47a", me: "#0d3020",
+  };
+  themeBg.value = custom.bg || "#050b08";
+  themePanel.value = custom.panel || "#08130e";
+  themeText.value = custom.text || "#d7f3df";
+  themeMuted.value = custom.muted || "#6f9b7e";
+  themeAccent.value = custom.accent || "#35d47a";
+  themeMe.value = custom.me || "#0d3020";
+}
+
+function saveCustomTheme() {
+  const custom = {
+    bg: themeBg.value,
+    panel: themePanel.value,
+    "panel-2": themePanel.value,
+    "panel-3": themePanel.value,
+    line: mixThemeColor(themePanel.value, themeText.value, 0.16),
+    "line-bright": mixThemeColor(themePanel.value, themeAccent.value, 0.34),
+    text: themeText.value,
+    muted: themeMuted.value,
+    accent: themeAccent.value,
+    "accent-strong": themeAccent.value,
+    me: themeMe.value,
+    danger: "#ef6d73",
+  };
+  localStorage.setItem(CUSTOM_THEME_KEY, JSON.stringify(custom));
+  localStorage.setItem(THEME_KEY, "custom");
+  applyTheme("custom");
+  settingsTheme.value = "custom";
+}
+
+function mixThemeColor(a, b, amount) {
+  const parse = (value) => [1, 3, 5].map((i) => parseInt(value.slice(i, i + 2), 16));
+  const ca = parse(a);
+  const cb = parse(b);
+  return "#" + ca.map((v, i) => Math.round(v + (cb[i] - v) * amount).toString(16).padStart(2, "0")).join("");
+}
+
+function getPresence(user) {
+  if (!user) return "offline";
+  const status = presenceByUserId.get(user.user_id);
+  if (!user.online) return "offline";
+  return status === "dnd" || status === "invisible" || status === "online" ? status : "online";
+}
+
+function renderPresenceStatus(status) {
+  const value = status || "offline";
+  statusEl.textContent = value === "dnd" ? "Do Not Disturb" : value === "invisible" ? "Invisible" : value;
+  statusEl.classList.toggle("online", value === "online");
+  statusEl.classList.toggle("dnd", value === "dnd");
+}
+
+function setPresence(status) {
+  const value = ["online", "dnd", "invisible"].includes(status) ? status : "online";
+  localStorage.setItem(PRESENCE_KEY, value);
+  presenceByUserId.set(me?.user_id || "", value);
+  renderPresenceStatus(value);
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: "set_presence", status: value }));
+  }
+}
+
+function playIncomingMessageSound() {
+  if (!readStoredBool(MESSAGE_SOUND_KEY, true) || localStorage.getItem(PRESENCE_KEY) === "dnd") return;
+  try {
+    const context = new AudioContext();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.frequency.value = 880;
+    oscillator.type = "sine";
+    gain.gain.setValueAtTime(0.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.07, context.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.11);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.12);
+    setTimeout(() => context.close().catch(() => {}), 250);
+  } catch {}
+}
+
+function startCallRingtone() {
+  if (!readStoredBool(CALL_SOUND_KEY, true) || localStorage.getItem(PRESENCE_KEY) === "dnd") return;
+  if (!callRingtone) return;
+  callRingtone.currentTime = 0;
+  callRingtone.loop = true;
+  callRingtone.play().catch(() => {});
+}
+
+function stopCallRingtone() {
+  if (!callRingtone) return;
+  callRingtone.pause();
+  callRingtone.currentTime = 0;
+}
+
+async function getSavedMessages() {
+  if (!cryptoRecoveryKey) return [];
+  try {
+    const raw = localStorage.getItem(SAVED_MESSAGES_KEY);
+    if (!raw) return [];
+    const record = JSON.parse(raw);
+    const key = await sentPlaintextCacheKey();
+    if (!key || !record?.iv || !record?.ciphertext) return [];
+    const plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: new Uint8Array(record.iv) },
+      key,
+      new Uint8Array(record.ciphertext),
+    );
+    const parsed = JSON.parse(new TextDecoder().decode(plaintext));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function setSavedMessages(items) {
+  if (!cryptoRecoveryKey) return;
+  const key = await sentPlaintextCacheKey();
+  if (!key) return;
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    new TextEncoder().encode(JSON.stringify(items)),
+  );
+  localStorage.setItem(SAVED_MESSAGES_KEY, JSON.stringify({
+    iv: Array.from(iv),
+    ciphertext: Array.from(new Uint8Array(encrypted)),
+  }));
+}
+
+async function toggleSavedMessage(message, textValue) {
+  if (!cryptoRecoveryKey) {
+    appendSystem("Unlock E2E before saving messages.");
+    return;
+  }
+  if (!textValue || textValue === "Encrypted message" || textValue.startsWith("Could not decrypt")) {
+    appendSystem("Wait for the message to decrypt before saving it.");
+    return;
+  }
+  const items = await getSavedMessages();
+  const index = items.findIndex((item) => item.id === message.id);
+  if (index >= 0) {
+    items.splice(index, 1);
+  } else {
+    const peer = message.sender_id === me?.user_id ? message.recipient_id : message.sender_id;
+    items.unshift({
+      id: message.id,
+      peer_id: peer,
+      sender_id: message.sender_id,
+      sender_name: message.sender_name,
+      text: textValue,
+      created_at: message.created_at,
+    });
+  }
+  await setSavedMessages(items.slice(0, 500));
+  await renderSavedMessages();
+}
+
+async function renderSavedMessages() {
+  if (!savedMessagesList || !savedMessagesEmpty) return;
+  const items = await getSavedMessages();
+  savedMessagesList.replaceChildren();
+  savedMessagesEmpty.hidden = items.length > 0;
+  for (const item of items) {
+    const row = document.createElement("article");
+    row.className = "saved-message-row";
+    const meta = document.createElement("span");
+    meta.className = "saved-message-meta";
+    meta.textContent = item.sender_name + " · " + new Date(item.created_at).toLocaleString();
+    const text = document.createElement("p");
+    text.textContent = item.text;
+    const actions = document.createElement("div");
+    actions.className = "saved-message-actions";
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "ghost";
+    open.textContent = "Open chat";
+    open.addEventListener("click", () => {
+      savedMessagesDialog?.close();
+      if (item.peer_id) openChat(item.peer_id);
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ghost";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", async () => {
+      const next = (await getSavedMessages()).filter((entry) => entry.id !== item.id);
+      await setSavedMessages(next);
+      await renderSavedMessages();
+    });
+    actions.append(open, remove);
+    row.append(meta, text, actions);
+    savedMessagesList.append(row);
+  }
+}
+
+function openSavedMessages() {
+  closeAppMenu();
+  void renderSavedMessages();
+  savedMessagesDialog?.showModal();
+}
+
+applyTheme();
+
 function closeAppMenu() {
   appMenu.hidden = true;
   menuBackdrop.hidden = true;
