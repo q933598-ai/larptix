@@ -3613,7 +3613,7 @@ async function renderGifFavorites() {
   }
 }
 
-function renderEncryptedAttachment(attachment, metadata, container) {
+async function renderEncryptedAttachment(attachment, metadata, container) {
   const response = await fetch(attachment.url, { credentials: "same-origin" });
   if (!response.ok) throw new Error("Encrypted attachment could not be loaded.");
   const ciphertext = await response.arrayBuffer();
