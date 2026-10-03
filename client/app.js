@@ -555,6 +555,7 @@ function showBrowserNotification(title, body, tag) {
       notification.close?.();
     };
   } catch {}
+}
 
 function startCallRingtone() {
   if (!readStoredBool(CALL_SOUND_KEY, true) || localStorage.getItem(PRESENCE_KEY) === "dnd") return;
