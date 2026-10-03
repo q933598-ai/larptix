@@ -495,6 +495,7 @@ fn send_dm(
         &body,
         attachment_id.as_deref(),
         attachment_is_ciphertext,
+        server_name,
     )?;
     let message = state
         .db
@@ -1195,7 +1196,7 @@ mod call_signal_tests {
         .to_string();
 
         assert!(validate_e2e_message_with_state(
-            &state, &alice.id, &bob.id, true, true, &envelope, None, true,
+            &state, &alice.id, &bob.id, true, true, &envelope, None, true, "localhost",
         )
         .is_ok());
     }
@@ -1244,7 +1245,7 @@ mod call_signal_tests {
         .to_string();
 
         assert!(validate_e2e_message_with_state(
-            &state, &alice.id, &bob.id, true, true, &envelope, None, true,
+            &state, &alice.id, &bob.id, true, true, &envelope, None, true, "localhost",
         )
         .is_err());
     }
@@ -1304,7 +1305,7 @@ mod call_signal_tests {
         .to_string();
 
         assert!(validate_e2e_message_with_state(
-            &state, &alice.id, &bob.id, true, true, &envelope, None, true,
+            &state, &alice.id, &bob.id, true, true, &envelope, None, true, "localhost",
         )
         .is_err());
     }
@@ -1349,7 +1350,7 @@ mod call_signal_tests {
         .to_string();
 
         assert!(validate_e2e_message_with_state(
-            &state, &alice.id, &bob.id, true, true, &envelope, None, true,
+            &state, &alice.id, &bob.id, true, true, &envelope, None, true, "localhost",
         )
         .is_err());
     }
@@ -1396,7 +1397,7 @@ mod call_signal_tests {
         .to_string();
 
         assert!(validate_e2e_message_with_state(
-            &state, &alice.id, &bob.id, true, true, &envelope, None, true,
+            &state, &alice.id, &bob.id, true, true, &envelope, None, true, "localhost",
         )
         .is_err());
     }
@@ -1441,6 +1442,7 @@ mod call_signal_tests {
             "hello bob",
             None,
             true,
+            "localhost",
         )
         .is_err());
     }
