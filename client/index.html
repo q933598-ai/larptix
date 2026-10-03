@@ -142,7 +142,20 @@
                 <option value="30">30</option>
                 <option value="60" selected>60</option>
                 <option value="120">120</option>
+                <option value="144">144</option>
               </select>
+            </label>
+            <label class="call-select">
+              <span>Share audio</span>
+              <select id="screen-audio-mode" aria-label="Screen sharing audio">
+                <option value="none" selected>Off</option>
+                <option value="system">Whole system</option>
+                <option value="window">Selected window</option>
+              </select>
+            </label>
+            <label class="call-select call-volume-select">
+              <span>Viewer volume</span>
+              <input id="call-audio-volume" type="range" min="0" max="1" value="1" step="0.01" aria-label="Screen and call audio volume" />
             </label>
             <button id="toggle-screen-share" type="button" class="ghost">Share screen</button>
             <button id="group-call-invite" type="button" class="ghost" hidden>＋ Invite</button>
@@ -507,6 +520,29 @@
         <div class="profile-actions">
           <button id="create-group-cancel" type="button" class="ghost">Cancel</button>
           <button type="submit">Create group</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="create-channel-dialog">
+      <form id="create-channel-form">
+        <h2>Create channel</h2>
+        <p class="settings-help">Channels use the same E2E-protected group transport. Choose who can publish.</p>
+        <label for="channel-name">Channel name</label>
+        <input id="channel-name" type="text" maxlength="32" required />
+        <label for="channel-post-policy">Who can post</label>
+        <select id="channel-post-policy">
+          <option value="admins" selected>Admins only</option>
+          <option value="members">All members</option>
+        </select>
+        <fieldset>
+          <legend>Initial members</legend>
+          <div id="channel-member-list"></div>
+        </fieldset>
+        <p id="channel-create-error" class="error" hidden></p>
+        <div class="profile-actions">
+          <button id="create-channel-cancel" type="button" class="ghost">Cancel</button>
+          <button type="submit">Create channel</button>
         </div>
       </form>
     </dialog>

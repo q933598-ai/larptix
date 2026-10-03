@@ -100,7 +100,9 @@ const screenFrameRate = document.getElementById("screen-framerate");
 const chatBackgroundInput = document.getElementById("chat-background");
 const peerProfileDialog = document.getElementById("peer-profile-dialog");
 const createGroupDialog = document.getElementById("create-group-dialog");
+const createChannelDialog = document.getElementById("create-channel-dialog");
 const groupMemberList = document.getElementById("group-member-list");
+const channelMemberList = document.getElementById("channel-member-list");
 const userSearchInput = document.getElementById("user-search");
 const emojiPicker = document.getElementById("emoji-picker");
 const menuOpenButton = document.getElementById("menu-open");
@@ -1135,7 +1137,11 @@ menuNewGroup.addEventListener("click", () => {
   closeAppMenu();
 });
 menuNewChannel?.addEventListener("click", () => {
-  appendSystem("Channels are planned for the next protocol milestone.");
+  renderChannelMemberChoices();
+  document.getElementById("channel-create-error").hidden = true;
+  document.getElementById("channel-name").value = "";
+  document.getElementById("channel-post-policy").value = "admins";
+  createChannelDialog?.showModal();
   closeAppMenu();
 });
 menuAbout?.addEventListener("click", () => {
@@ -1199,6 +1205,15 @@ document.getElementById("settings-reset-layout").addEventListener("click", reset
 settingsWallpaperTint?.addEventListener("change", () => {
   localStorage.setItem("larptrix_wallpaper_tint", settingsWallpaperTint.value);
   if (peerId) applyChatWallpaper(peerId);
+});
+document.getElementById("screen-audio-mode")?.addEventListener("change", () => {
+  if (screenMediaStream) appendSystem("Screen sharing audio settings apply to the next share. Stop and start sharing again to change them.");
+});
+document.getElementById("call-audio-volume")?.addEventListener("input", (event) => {
+  const volume = Number(event.target.value);
+  if (remoteAudio) remoteAudio.volume = volume;
+  document.querySelectorAll("#group-remotes audio[data-kind=\"audio\"]").forEach((audio) => { audio.volume = volume; });
+  localStorage.setItem("larptrix_call_audio_volume", String(volume));
 });
 settingsTheme.addEventListener("change", () => {
   customThemeEditor.hidden = settingsTheme.value !== "custom";
@@ -1312,6 +1327,8 @@ forgetE2eDeviceButton.addEventListener("click", async () => {
 
 document.getElementById("create-group-cancel").addEventListener("click", () => createGroupDialog.close());
 document.getElementById("create-group-form").addEventListener("submit", createGroup);
+document.getElementById("create-channel-cancel")?.addEventListener("click", () => createChannelDialog.close());
+document.getElementById("create-channel-form")?.addEventListener("submit", createChannel);
 userSearchInput.addEventListener("input", renderUsers);
 document.getElementById("emoji-picker-toggle").addEventListener("click", () => {
   emojiPicker.hidden = !emojiPicker.hidden;
@@ -1610,6 +1627,12 @@ groupCallJoin?.addEventListener("click", () => void joinActiveGroupCall());
 document.getElementById("accept-call").addEventListener("click", acceptIncomingCall);
 document.getElementById("reject-call").addEventListener("click", rejectIncomingCall);
 document.getElementById("end-call").addEventListener("click", () => endCall(true));
+const savedCallVolume = Number(localStorage.getItem("larptrix_call_audio_volume"));
+if (Number.isFinite(savedCallVolume)) {
+  remoteAudio.volume = Math.min(1, Math.max(0, savedCallVolume));
+  const volumeControl = document.getElementById("call-audio-volume");
+  if (volumeControl) volumeControl.value = String(remoteAudio.volume);
+}
 enableCallAudio.addEventListener("click", () => {
   remoteAudio.play().then(() => {
     enableCallAudio.hidden = true;
@@ -2305,6 +2328,9 @@ function connect() {
           display_name: group.name,
           online: true,
           is_group: true,
+          is_channel: Boolean(group.is_channel),
+          admin_ids: Array.isArray(group.admin_ids) ? group.admin_ids : [],
+          post_policy: group.post_policy || (group.is_channel ? "admins" : "members"),
           group_member_ids: group.member_ids,
         }));
         renderUsers();
@@ -2406,8 +2432,90 @@ function renderGroupMembersDialog(group) {
   if (!groupMembersList || !group) return;
   const memberIds = Array.isArray(group.group_member_ids) ? group.group_member_ids : [];
   groupMembersTitle.textContent = group.display_name;
-  groupMembersHelp.textContent = `${memberIds.length} member(s). Members with an active connection can be invited to the current call.`;
+  groupMembersHelp.textContent = group.is_channel ? memberIds.length + " member(s) · " + (group.post_policy === "admins" ? "admins can post" : "all members can post") : memberIds.length + " member(s). Members with an active connection can be invited to the current call.";
   groupMembersList.replaceChildren();
+
+  if (group.is_channel && group.admin_ids?.includes(me?.user_id)) {
+    const settingsBox = document.createElement("div");
+    settingsBox.className = "channel-admin-settings";
+    const policyLabel = document.createElement("label");
+    policyLabel.textContent = "Who can post";
+    const policy = document.createElement("select");
+    policy.innerHTML = '<option value="admins">Admins only</option><option value="members">All members</option>';
+    policy.value = group.post_policy || "admins";
+    policy.addEventListener("change", async () => {
+      try {
+        await api("PATCH", "/api/channels/" + encodeURIComponent(group.user_id) + "/settings", { post_policy: policy.value });
+        group.post_policy = policy.value;
+        groups = groups.map((item) => item.user_id === group.user_id ? { ...item, post_policy: policy.value } : item);
+      } catch (err) {
+        appendSystem(err.message || "Could not update channel posting settings.");
+        policy.value = group.post_policy || "admins";
+      }
+    });
+    settingsBox.append(policyLabel, policy);
+    const adminTitle = document.createElement("strong");
+    adminTitle.textContent = "Channel admins";
+    settingsBox.append(adminTitle);
+    for (const adminId of (group.admin_ids || [])) {
+      const row = document.createElement("div");
+      row.className = "channel-admin-row";
+      const name = document.createElement("span");
+      const user = users.find((item) => item.user_id === adminId);
+      name.textContent = user?.display_name || "Unknown admin";
+      row.append(name);
+      if (adminId !== (group.admin_ids || [])[0]) {
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "ghost";
+        remove.textContent = "Remove admin";
+        remove.addEventListener("click", async () => {
+          try {
+            await api("DELETE", "/api/channels/" + encodeURIComponent(group.user_id) + "/admins", { user_id: adminId });
+            await loadGroups();
+            const updated = groups.find((item) => item.user_id === group.user_id);
+            if (updated) renderGroupMembersDialog(updated);
+          } catch (err) {
+            appendSystem(err.message || "Could not remove channel admin.");
+          }
+        });
+        row.append(remove);
+      }
+      settingsBox.append(row);
+    }
+    const candidates = memberIds.filter((id) => !(group.admin_ids || []).includes(id));
+    if (candidates.length) {
+      const make = document.createElement("select");
+      make.innerHTML = '<option value="">Make member an admin…</option>';
+      for (const id of candidates) {
+        const option = document.createElement("option");
+        option.value = id;
+        const user = users.find((item) => item.user_id === id);
+        option.textContent = user?.display_name || id;
+        make.append(option);
+      }
+      const addAdmin = document.createElement("button");
+      addAdmin.type = "button";
+      addAdmin.className = "ghost";
+      addAdmin.textContent = "Make admin";
+      addAdmin.addEventListener("click", async () => {
+        if (!make.value) return;
+        addAdmin.disabled = true;
+        try {
+          await api("POST", "/api/channels/" + encodeURIComponent(group.user_id) + "/admins", { user_id: make.value });
+          await loadGroups();
+          const updated = groups.find((item) => item.user_id === group.user_id);
+          if (updated) renderGroupMembersDialog(updated);
+        } catch (err) {
+          appendSystem(err.message || "Could not add channel admin.");
+        } finally {
+          addAdmin.disabled = false;
+        }
+      });
+      settingsBox.append(make, addAdmin);
+    }
+    groupMembersList.append(settingsBox);
+  }
 
   const addBox = document.createElement("div");
   addBox.className = "group-add-member";
@@ -2979,8 +3087,13 @@ function renderGroupRemoteTrack(remoteId, stream, kind) {
 
   const media = tile.querySelector('[data-kind="' + kind + '"]');
   if (media) {
+    if (kind === "audio") {
+      const volume = Number(localStorage.getItem("larptrix_call_audio_volume"));
+      if (Number.isFinite(volume)) media.volume = Math.min(1, Math.max(0, volume));
+    }
     media.srcObject = stream;
     media.play?.().catch(() => {});
+    applyRemoteMuteStates();
   }
 }
 
@@ -3080,6 +3193,8 @@ async function createPeerConnection() {
   });
   connection.addEventListener("track", (event) => {
     if (event.track.kind === "audio") {
+      const volume = Number(localStorage.getItem("larptrix_call_audio_volume"));
+      if (Number.isFinite(volume)) remoteAudio.volume = Math.min(1, Math.max(0, volume));
       remoteAudio.srcObject = new MediaStream([event.track]);
       remoteAudio.play().then(() => {
         enableCallAudio.hidden = true;
@@ -3374,16 +3489,48 @@ async function toggleScreenShare() {
     if (!navigator.mediaDevices?.getDisplayMedia) {
       throw new Error("Screen capture is not supported by this desktop runtime.");
     }
+    const audioMode = document.getElementById("screen-audio-mode")?.value || "none";
+    const captureAudio = audioMode !== "none" && !webkitGtk;
+    const supported = navigator.mediaDevices.getSupportedConstraints?.() || {};
+    const audioConstraints = captureAudio
+      ? {
+          suppressLocalAudioPlayback: true,
+          ...(supported.restrictOwnAudio ? { restrictOwnAudio: true } : {}),
+        }
+      : false;
     screenMediaStream = await navigator.mediaDevices.getDisplayMedia({
       video: {
         width: { ideal: resolution.width, max: resolution.width },
         height: { ideal: resolution.height, max: resolution.height },
         frameRate: { ideal: frameRate, max: frameRate },
       },
-      audio: !webkitGtk,
+      audio: audioConstraints,
+      selfBrowserSurface: "exclude",
+      surfaceSwitching: "include",
+      monitorTypeSurfaces: "include",
+      systemAudio: audioMode === "system" ? "include" : "exclude",
+      windowAudio: audioMode === "window" ? "window" : "exclude",
     });
     const screenTrack = screenMediaStream.getVideoTracks()[0];
+    if (!screenTrack) throw new Error("The selected share source has no video track.");
+    try {
+      await screenTrack.applyConstraints({
+        width: { ideal: resolution.width },
+        height: { ideal: resolution.height },
+        frameRate: { ideal: frameRate },
+      });
+    } catch {}
+    const actual = screenTrack.getSettings?.() || {};
+    const actualWidth = actual.width || resolution.width;
+    const actualHeight = actual.height || resolution.height;
+    const actualFps = actual.frameRate ? Math.round(actual.frameRate) : frameRate;
+    const audioTracks = screenMediaStream.getAudioTracks();
+    callMediaNotice = audioTracks.length
+      ? ` · sharing ${actualWidth}×${actualHeight} @ ${actualFps} fps + audio`
+      : ` · sharing ${actualWidth}×${actualHeight} @ ${actualFps} fps`;
     localScreenVideo.srcObject = screenMediaStream;
+    localScreenVideo.muted = true;
+    localScreenVideo.defaultMuted = true;
     localScreenVideo.hidden = false;
     localScreenVideo.play().catch(() => {});
 
@@ -3469,6 +3616,7 @@ async function stopScreenShare() {
   screenMediaStream.getTracks().forEach((track) => track.stop());
   screenMediaStream = null;
   localScreenVideo.srcObject = null;
+  localScreenVideo.muted = true;
   localScreenVideo.hidden = true;
   document.getElementById("toggle-screen-share").textContent = "Share screen";
   if (callStatus.textContent.startsWith("Sharing ")) callStatus.textContent = "Connected";
@@ -3655,6 +3803,9 @@ async function loadGroups() {
       display_name: group.name,
       online: true,
       is_group: true,
+      is_channel: Boolean(group.is_channel),
+      admin_ids: Array.isArray(group.admin_ids) ? group.admin_ids : [],
+      post_policy: group.post_policy || (group.is_channel ? "admins" : "members"),
       group_member_ids: group.member_ids,
     }));
     renderUsers();
@@ -3696,6 +3847,9 @@ async function createGroup(event) {
       display_name: created.name,
       online: true,
       is_group: true,
+      is_channel: Boolean(created.is_channel),
+      admin_ids: Array.isArray(created.admin_ids) ? created.admin_ids : [me.user_id],
+      post_policy: created.post_policy || "members",
       group_member_ids: created.member_ids,
     };
     groups = [...groups.filter((group) => group.user_id !== newGroup.user_id), newGroup];
@@ -3708,12 +3862,63 @@ async function createGroup(event) {
   }
 }
 
+async function createChannel(event) {
+  event.preventDefault();
+  const error = document.getElementById("channel-create-error");
+  error.hidden = true;
+  const memberIds = [...channelMemberList.querySelectorAll("input:checked")].map((input) => input.value);
+  try {
+    const created = await api("POST", "/api/channels", {
+      name: document.getElementById("channel-name").value.trim(),
+      member_ids: memberIds,
+      post_policy: document.getElementById("channel-post-policy").value,
+    });
+    const newChannel = {
+      user_id: created.group_id,
+      display_name: created.name,
+      online: true,
+      is_group: true,
+      is_channel: true,
+      admin_ids: Array.isArray(created.admin_ids) ? created.admin_ids : [me.user_id],
+      post_policy: created.post_policy || "admins",
+      group_member_ids: created.member_ids,
+    };
+    groups = [...groups.filter((group) => group.user_id !== newChannel.user_id), newChannel];
+    createChannelDialog.close();
+    renderUsers();
+    openChat(created.group_id);
+  } catch (err) {
+    error.textContent = err.message;
+    error.hidden = false;
+  }
+}
+
+function renderChannelMemberChoices() {
+  channelMemberList.replaceChildren();
+  for (const user of users.filter((item) => item.user_id !== me?.user_id && !item.is_group)) {
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = user.user_id;
+    checkbox.disabled = !user.e2e_enabled;
+    const name = document.createElement("span");
+    name.textContent = user.e2e_enabled ? user.display_name + " · E2E ready" : user.display_name + " · E2E required";
+    label.append(checkbox, name);
+    channelMemberList.append(label);
+  }
+}
 function paintAvatar(el, user) {
   el.replaceChildren();
   if (user?.is_saved_chat) {
     el.classList.add("saved-avatar");
     el.classList.remove("emoji-avatar");
     el.textContent = "★";
+    return;
+  }
+  if (user?.is_channel) {
+    el.classList.add("emoji-avatar");
+    el.classList.remove("saved-avatar");
+    el.textContent = "#";
     return;
   }
   el.classList.toggle("emoji-avatar", !user.avatar_url);
@@ -5087,7 +5292,20 @@ function chatWallpaperKey(id) {
 
 function applyChatWallpaper(id) {
   const wallpaper = localStorage.getItem(chatWallpaperKey(id));
-  logEl.style.backgroundImage = wallpaper ? `url("${wallpaper}")` : "";
+  const tint = localStorage.getItem("larptrix_wallpaper_tint") || "theme";
+  if (!wallpaper) {
+    logEl.style.backgroundImage = "";
+    logEl.style.backgroundBlendMode = "";
+    return;
+  }
+  if (tint === "none") {
+    logEl.style.backgroundImage = `url("${wallpaper}")`;
+    logEl.style.backgroundBlendMode = "normal";
+    return;
+  }
+  const accent = "color-mix(in srgb, var(--accent) 18%, transparent)";
+  logEl.style.backgroundImage = `linear-gradient(${accent}, ${accent}), url("${wallpaper}")`;
+  logEl.style.backgroundBlendMode = "normal, normal";
 }
 
 async function saveChatWallpaper(file, id) {

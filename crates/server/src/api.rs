@@ -48,6 +48,15 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/api/groups", get(list_groups).post(create_group))
         .route("/api/groups/{id}/members", post(add_group_member))
+        .route("/api/channels", post(create_channel))
+        .route(
+            "/api/channels/{id}/admins",
+            post(add_channel_admin).delete(remove_channel_admin),
+        )
+        .route(
+            "/api/channels/{id}/settings",
+            patch(update_channel_settings),
+        )
         .route("/api/me/access-key", post(create_access_key))
         .route(
             "/api/me/crypto-device",
@@ -1331,6 +1340,9 @@ async fn create_group(
                 group_id: item.id,
                 name: item.name,
                 member_ids: item.member_ids,
+                is_channel: item.is_channel,
+                admin_ids: item.admin_ids,
+                post_policy: item.post_policy,
             })
             .collect();
         if let Ok(recipient) = member_id.parse() {
@@ -1340,6 +1352,197 @@ async fn create_group(
         }
     }
     Ok(Json(group_json(group)))
+}
+
+#[derive(Deserialize)]
+pub struct CreateChannelBody {
+    pub name: String,
+    #[serde(default)]
+    pub member_ids: Vec<String>,
+    #[serde(default = "default_channel_policy")]
+    pub post_policy: String,
+}
+
+fn default_channel_policy() -> String {
+    "admins".to_string()
+}
+
+async fn create_channel(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<CreateChannelBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let name = sanitize_display_name(&body.name).map_err(ApiError::bad)?;
+    if body.member_ids.len() > 31 {
+        return Err(ApiError::bad(
+            "a channel can contain at most 31 invited members",
+        ));
+    }
+    if body.post_policy != "admins" && body.post_policy != "members" {
+        return Err(ApiError::bad("invalid channel posting policy"));
+    }
+    if state
+        .db
+        .matrix_devices_for_user(&user.id)
+        .map_err(ApiError::db)?
+        .is_empty()
+    {
+        return Err(ApiError::bad(
+            "finish Matrix E2E device setup before creating a channel",
+        ));
+    }
+    let mut members = body.member_ids;
+    members.sort();
+    members.dedup();
+    if members.iter().any(|id| id == &user.id) {
+        return Err(ApiError::bad("the channel creator is added automatically"));
+    }
+    for member_id in &members {
+        if state
+            .db
+            .user_by_id(member_id)
+            .map_err(ApiError::db)?
+            .is_none()
+        {
+            return Err(ApiError::bad("a selected channel member does not exist"));
+        }
+        if state
+            .db
+            .matrix_devices_for_user(member_id)
+            .map_err(ApiError::db)?
+            .is_empty()
+        {
+            return Err(ApiError::bad(
+                "all channel members must finish Matrix E2E device setup first",
+            ));
+        }
+    }
+    let channel = state
+        .db
+        .create_channel(&user.id, &name, &members, &body.post_policy)
+        .map_err(ApiError::from_db)?;
+    for member_id in &channel.member_ids {
+        let groups = state
+            .db
+            .groups_for_user(member_id)
+            .map_err(ApiError::db)?
+            .into_iter()
+            .map(|item| GroupInfo {
+                group_id: item.id,
+                name: item.name,
+                member_ids: item.member_ids,
+                is_channel: item.is_channel,
+                admin_ids: item.admin_ids,
+                post_policy: item.post_policy,
+            })
+            .collect();
+        if let Ok(recipient) = member_id.parse() {
+            state
+                .hub
+                .send_to(recipient, ServerMessage::Groups { groups });
+        }
+    }
+    Ok(Json(group_json(channel)))
+}
+
+#[derive(Deserialize)]
+pub struct AddChannelAdminBody {
+    pub user_id: String,
+}
+
+async fn add_channel_admin(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<AddChannelAdminBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let channel = state
+        .db
+        .group(&id)
+        .map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::not_found("channel not found"))?;
+    if !channel.is_channel || !channel.admin_ids.iter().any(|admin| admin == &user.id) {
+        return Err(ApiError::bad("only channel admins can manage admins"));
+    }
+    if !channel
+        .member_ids
+        .iter()
+        .any(|member| member == &body.user_id)
+    {
+        return Err(ApiError::bad(
+            "the new admin must already be a channel member",
+        ));
+    }
+    state
+        .db
+        .add_channel_admin(&id, &body.user_id)
+        .map_err(ApiError::from_db)?;
+    Ok(Json(
+        serde_json::json!({ "ok": true, "channel_id": id, "user_id": body.user_id }),
+    ))
+}
+
+async fn remove_channel_admin(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<AddChannelAdminBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let channel = state
+        .db
+        .group(&id)
+        .map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::not_found("channel not found"))?;
+    if !channel.is_channel || !channel.admin_ids.iter().any(|admin| admin == &user.id) {
+        return Err(ApiError::bad("only channel admins can manage admins"));
+    }
+    if body.user_id == channel.admin_ids.first().map(String::as_str).unwrap_or("") {
+        return Err(ApiError::bad("the channel creator must remain an admin"));
+    }
+    if body.user_id == user.id && channel.admin_ids.len() <= 1 {
+        return Err(ApiError::bad("the channel must keep at least one admin"));
+    }
+    state
+        .db
+        .remove_channel_admin(&id, &body.user_id)
+        .map_err(ApiError::from_db)?;
+    Ok(Json(
+        serde_json::json!({ "ok": true, "channel_id": id, "user_id": body.user_id }),
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct UpdateChannelSettingsBody {
+    pub post_policy: String,
+}
+
+async fn update_channel_settings(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateChannelSettingsBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let channel = state
+        .db
+        .group(&id)
+        .map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::not_found("channel not found"))?;
+    if !channel.is_channel || !channel.admin_ids.iter().any(|admin| admin == &user.id) {
+        return Err(ApiError::bad(
+            "only channel admins can change channel settings",
+        ));
+    }
+    state
+        .db
+        .set_channel_post_policy(&id, &body.post_policy)
+        .map_err(ApiError::from_db)?;
+    Ok(Json(
+        serde_json::json!({ "ok": true, "channel_id": id, "post_policy": body.post_policy }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -1357,12 +1560,16 @@ async fn add_group_member(
     if body.user_id == user.id {
         return Err(ApiError::bad("you are already in this group"));
     }
-    let creator = state
+    let group = state
         .db
-        .group_creator_id(&id)
+        .group(&id)
         .map_err(ApiError::db)?
         .ok_or_else(|| ApiError::not_found("group not found"))?;
-    if creator != user.id {
+    if group.is_channel {
+        if !group.admin_ids.iter().any(|admin| admin == &user.id) {
+            return Err(ApiError::bad("only channel admins can add members"));
+        }
+    } else if group.admin_ids.first().map(String::as_str) != Some(user.id.as_str()) {
         return Err(ApiError::bad("only the group creator can add members"));
     }
     if state
@@ -1379,7 +1586,9 @@ async fn add_group_member(
         .map_err(ApiError::db)?
         .is_empty()
     {
-        return Err(ApiError::bad("the user must finish Matrix E2E device setup first"));
+        return Err(ApiError::bad(
+            "the user must finish Matrix E2E device setup first",
+        ));
     }
     let group = state
         .db
@@ -1393,7 +1602,11 @@ async fn add_group_member(
         .db
         .add_group_member(&id, &body.user_id)
         .map_err(ApiError::from_db)?;
-    for member_id in group.member_ids.iter().chain(std::iter::once(&body.user_id)) {
+    for member_id in group
+        .member_ids
+        .iter()
+        .chain(std::iter::once(&body.user_id))
+    {
         if let Ok(recipient) = member_id.parse() {
             let groups = state
                 .db
@@ -1404,12 +1617,19 @@ async fn add_group_member(
                     group_id: item.id,
                     name: item.name,
                     member_ids: item.member_ids,
+                    is_channel: item.is_channel,
+                    admin_ids: item.admin_ids,
+                    post_policy: item.post_policy,
                 })
                 .collect();
-            state.hub.send_to(recipient, ServerMessage::Groups { groups });
+            state
+                .hub
+                .send_to(recipient, ServerMessage::Groups { groups });
         }
     }
-    Ok(Json(serde_json::json!({ "ok": true, "group_id": id, "user_id": body.user_id })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "group_id": id, "user_id": body.user_id }),
+    ))
 }
 
 fn group_json(group: crate::db::GroupRow) -> serde_json::Value {
@@ -1417,6 +1637,9 @@ fn group_json(group: crate::db::GroupRow) -> serde_json::Value {
         "group_id": group.id,
         "name": group.name,
         "member_ids": group.member_ids,
+        "is_channel": group.is_channel,
+        "admin_ids": group.admin_ids,
+        "post_policy": group.post_policy,
     })
 }
 
@@ -1464,7 +1687,8 @@ async fn set_profile_banner(
         .map_err(ApiError::db)?;
     if let Some(old_id) = old {
         if let Ok(Some(old_file)) = state.db.attachment(&old_id) {
-            let _ = std::fs::remove_file(upload_path(&state.upload_dir, &old_file.id, &old_file.ext));
+            let _ =
+                std::fs::remove_file(upload_path(&state.upload_dir, &old_file.id, &old_file.ext));
         }
     }
     Ok(Json(serde_json::json!({
@@ -1741,6 +1965,9 @@ fn public_me(user: &UserRow) -> UserInfo {
         avatar_url: user.avatar_id.as_ref().map(|_| avatar_url(&user.id)),
         activity: None,
         is_group: false,
+        is_channel: false,
+        admin_ids: Vec::new(),
+        post_policy: String::new(),
         e2e_enabled: false,
         group_member_ids: Vec::new(),
     }
@@ -1867,6 +2094,8 @@ mod tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("data/uploads").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         });
         let response = register(
             State(state.clone()),
@@ -1914,6 +2143,8 @@ mod tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("data/uploads").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         });
         let response = register_password(
             State(state.clone()),
@@ -1950,6 +2181,8 @@ mod tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("data/uploads").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         });
         let user = state
             .db
@@ -1987,6 +2220,8 @@ mod tests {
             db: Database::open(Path::new(":memory:")).unwrap(),
             hub: Hub::new(),
             upload_dir: Path::new("data/uploads").to_path_buf(),
+            group_calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+            presence: std::sync::Mutex::new(std::collections::HashMap::new()),
         });
         let old_user = state
             .db

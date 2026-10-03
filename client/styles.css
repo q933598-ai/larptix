@@ -2777,12 +2777,12 @@ html[data-theme="catppuccin-latte"] .saved-messages-dialog {
     padding-bottom: 8px;
   }
   .music-library {
-    left: 8px !important;
-    top: 64px !important;
-    right: 8px !important;
-    bottom: 66px !important;
-    width: auto !important;
-    height: auto !important;
+    left: 8px;
+    top: 64px;
+    right: auto;
+    bottom: auto;
+    width: auto;
+    height: auto;
     max-height: none;
   }
   .music-library-drag-area {
@@ -3173,4 +3173,51 @@ html[data-theme="custom"] .music-library {
   .group-add-member {
     flex-direction: column;
   }
+}
+
+/* Profile banner must stay behind the avatar/identity row. */
+.profile-banner { position: relative; z-index: 0; }
+.profile-identity { position: relative; z-index: 2; }
+.profile-identity .avatar,
+.profile-identity > img,
+.avatar-btn { position: relative; z-index: 3; }
+
+/* Emoji picker must escape the horizontally scrollable composer toolbar. */
+.composer-tools {
+  overflow: visible;
+  flex-wrap: wrap;
+}
+.emoji-control { z-index: 20; }
+.emoji-picker {
+  z-index: 200;
+  box-shadow: 0 14px 36px rgb(0 0 0 / 38%);
+}
+
+/* Screen-share controls are compact enough to keep the call window usable. */
+.call-volume-select { min-width: 150px; }
+.call-volume-select input[type="range"] { min-width: 120px; width: 150px; }
+
+/* Let the draggable music window move on mobile too; JS owns its position. */
+@media (max-width: 760px) {
+  #music-library {
+    left: 8px;
+    top: 64px;
+    right: auto;
+    bottom: auto;
+  }
+}
+
+.channel-admin-settings {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+.channel-admin-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
