@@ -2271,6 +2271,9 @@ function signedIn(user, options = {}) {
         "Classic E2E is available, but Matrix crypto could not initialize: " + err.message;
       return false;
     }
+  }).then((ready) => {
+    if (ready) void retryVisibleMatrixMessages({ attempts: 12, delayMs: 300 });
+    return ready;
   });
 }
 
