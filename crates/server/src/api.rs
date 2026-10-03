@@ -2170,6 +2170,7 @@ mod tests {
                 "legacy@example.test",
                 "existing-password-hash",
                 "Legacy User",
+                "legacy_user",
                 crate::now_ms(),
             )
             .unwrap();
