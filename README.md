@@ -110,6 +110,8 @@ To deploy a newer source version, copy it to the VPS again and run
 The named Docker volume `larptrix_larptrix-data` keeps SQLite and uploaded files
 across restarts/rebuilds. Back it up regularly and store backups off the VPS.
 
+GIF search uses `LARPTRIX_KLIPY_API_KEY` on the server. The API key is never exposed to browsers. Selected GIF metadata is included in the existing E2E-encrypted message payload, while KLIPY media is loaded directly from KLIPY's static media URL.
+
 For calls between users behind different NATs, configure reachable STUN/TURN in
 `LARPTRIX_ICE_SERVERS`. Without TURN, messaging works through HTTPS/WebSocket, but
 some peer-to-peer calls may not connect. TURN credentials should be short-lived;
@@ -160,6 +162,7 @@ protocol error; GTK still uses the native Wayland backend. Set
 | `LARPTRIX_DB` | `data/larptrix.db` | SQLite path |
 | `LARPTRIX_CLIENT` | `client` | Static files |
 | `LARPTRIX_UPLOADS` | `data/uploads` | Stored attachments |
+| `LARPTRIX_KLIPY_API_KEY` | unset | Server-side KLIPY GIF search key; required for GIF search |
 
 ## Protocol
 
