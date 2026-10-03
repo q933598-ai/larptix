@@ -100,6 +100,7 @@ pub async fn handle_socket(
         match frame {
             Message::Text(text) => match serde_json::from_str::<ClientMessage>(&text) {
                 Ok(ClientMessage::Ping) => {
+                    tracing::debug!(user_id = %user.id, "websocket heartbeat");
                     let _ = tx.send(ServerMessage::Pong);
                 }
                 Ok(ClientMessage::Open { peer_id }) => {
