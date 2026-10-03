@@ -2781,6 +2781,14 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
             `Could not open encrypted attachment: ${err?.message || String(err)}`;
         }
       }
+      if (payload?.gif) {
+        try {
+          renderSelectedGif(payload.gif, bodyElement.parentElement);
+        } catch (err) {
+          bodyElement.textContent =
+            `Could not open GIF: ${err?.message || String(err)}`;
+        }
+      }
       return true;
     } catch (err) {
       bodyElement.textContent =
@@ -2803,6 +2811,14 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
         bodyElement.textContent = `Could not open encrypted attachment: ${err?.message || String(err)}`;
       }
     }
+      if (payload?.gif) {
+        try {
+          renderSelectedGif(payload.gif, bodyElement.parentElement);
+        } catch (err) {
+          bodyElement.textContent =
+            `Could not open GIF: ${err?.message || String(err)}`;
+        }
+      }
     return true;
   }
 
@@ -3033,7 +3049,15 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
           payload.file,
           bodyElement.parentElement
         );
-      } catch (err) {
+          if (payload?.gif) {
+        try {
+          renderSelectedGif(payload.gif, bodyElement.parentElement);
+        } catch (err) {
+          bodyElement.textContent =
+            `Could not open GIF: ${err?.message || String(err)}`;
+        }
+      }
+  } catch (err) {
         bodyElement.textContent =
           `Could not open encrypted attachment: ${err?.message || String(err)}`;
       }
@@ -3716,7 +3740,6 @@ function clearAttachment() {
   attachmentPreview.replaceChildren();
   attachmentPreview.hidden = true;
   photoInput.value = "";
-  gifInput.value = "";
   fileInput.value = "";
   audioFileInput.value = "";
 }
