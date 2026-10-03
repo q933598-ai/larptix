@@ -494,12 +494,7 @@ fn relay_call_signal(
             .user_by_id(target_id)
             .map_err(|err| err.to_string())?
             .ok_or_else(|| "unknown group call target".to_string())?;
-        if state
-            .hub
-            .online_ids()
-            .iter()
-            .all(|id| id != &target.id)
-        {
+        if state.hub.online_ids().iter().all(|id| id != &target.id) {
             return Err("group call target is offline".into());
         }
 
