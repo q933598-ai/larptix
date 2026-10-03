@@ -6,6 +6,7 @@
   "desktopName": "Larptrix",
   "main": "electron/main.cjs",
   "scripts": {
+    "tauri": "tauri",
     "dev": "electron .",
     "build": "electron-builder --linux AppImage && electron-builder --win zip --x64",
     "build:linux": "electron-builder --linux AppImage",
