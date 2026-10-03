@@ -595,6 +595,7 @@ logoutBtn.addEventListener("click", async () => {
   me = null;
   peerId = null;
   logoutBtn.hidden = true;
+  profileOpen.hidden = true;
   composer.hidden = true;
   closeAppMenu();
   meLabel.textContent = "";
@@ -1862,6 +1863,7 @@ function setStatus(text) {
 
 function renderMe() {
   if (!me) return;
+  profileOpen.hidden = false;
   meLabel.textContent = me.display_name;
   meUsername.textContent = me.username ? `@${me.username}` : "";
   renderMenuAccount();
