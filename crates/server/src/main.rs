@@ -37,6 +37,7 @@ pub struct AppState {
     pub hub: Hub,
     pub upload_dir: PathBuf,
     pub group_calls: Mutex<HashMap<String, ActiveGroupCall>>,
+    pub presence: Mutex<HashMap<String, String>>,
 }
 
 #[tokio::main]
@@ -66,6 +67,7 @@ async fn main() {
         hub: Hub::new(),
         upload_dir,
         group_calls: Mutex::new(HashMap::new()),
+        presence: Mutex::new(HashMap::new()),
     });
 
     let app = Router::new()
