@@ -1976,14 +1976,20 @@ function renderGroupMembersDialog(group) {
 
 function refreshGroupCallParticipants() {
   const group = groups.find((item) => item.user_id === groupCallGroupId && item.is_group);
-  const active = groupCallId && group;
+  const active = Boolean(groupCallId && groupCallGroupId && group);
   groupCallInvite.hidden = !active;
   groupCallCount.hidden = !active;
+  if (groupCallStart && peerId) {
+    const selectedGroup = groups.find((item) => item.user_id === peerId && item.is_group);
+    groupCallStart.hidden = !selectedGroup;
+    groupCallStart.textContent = selectedGroup
+      ? (activeGroupCalls.get(selectedGroup.user_id)?.active ? "Join group call" : "Group call")
+      : "Group call";
+  }
   if (active) {
-    groupCallCount.textContent = `${groupCallJoinedMembers.size}/${group.group_member_ids.length} joined`;
+    groupCallCount.textContent = groupCallJoinedMembers.size + "/" + group.group_member_ids.length + " joined";
   }
 }
-
 function renderGroupCallBanner() {
   const group = groups.find((item) => item.user_id === peerId && item.is_group);
   const state = group ? activeGroupCalls.get(group.user_id) : null;
