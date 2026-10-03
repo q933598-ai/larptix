@@ -499,6 +499,7 @@
     });
 
     wireDragging();
+    applySavedPosition();
     setMode(false);
     window.addEventListener("resize", () => {
       if (!els.library.hidden) {
@@ -516,6 +517,7 @@
 
   function setMode(libraryMode) {
     els.library.hidden = !libraryMode;
+    if (libraryMode) applySavedPosition();
   }
 
   window.larptixMusicLibrary = {

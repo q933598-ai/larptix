@@ -118,6 +118,8 @@
           <div class="call-controls">
             <button id="toggle-microphone" type="button" class="ghost" aria-pressed="false">🎙 Mute mic</button>
             <button id="toggle-camera" type="button" class="ghost">📷 Turn camera off</button>
+            <button id="toggle-call-deafen" type="button" class="ghost" aria-pressed="false">🔊 Deafen</button>
+            <button id="call-settings-open" type="button" class="ghost">⚙ Call settings</button>
             <audio id="remote-audio" autoplay></audio>
             <audio id="call-ringtone" preload="auto" loop><source src="/assets/02439.mp3" type="audio/mpeg" /></audio>
             <button id="enable-call-audio" type="button" class="ghost" hidden>🔊 Enable sound</button>
@@ -130,10 +132,26 @@
             <button id="group-call-invite" type="button" class="ghost" hidden>＋ Invite</button>
             <button id="end-call" type="button">End call</button>
           </div>
+          <div id="call-settings-panel" class="call-settings-panel" hidden>
+            <div class="call-settings-title">Call settings</div>
+            <label class="key-saved-label">
+              <input id="call-noise-suppression" type="checkbox" checked />
+              Noise suppression
+            </label>
+            <p class="settings-help">Applies to your microphone only.</p>
+            <div id="call-participant-settings" class="call-participant-settings"></div>
+          </div>
         </section>
         <ol id="log" class="log" aria-live="polite"></ol>
         <div id="attachment-preview" class="attachment-preview" hidden></div>
         <form id="composer" hidden>
+          <div id="reply-preview" class="reply-preview-bar" hidden>
+            <div>
+              <strong>Replying</strong>
+              <span id="reply-preview-text"></span>
+            </div>
+            <button id="reply-preview-close" type="button" class="ghost" aria-label="Cancel reply">×</button>
+          </div>
           <div class="composer-tools">
             <label class="photo-btn" title="Send a photo">
               <input id="photo" type="file" accept="image/jpeg,image/png,image/gif,image/webp" hidden />
@@ -168,7 +186,8 @@
               <span class="music-library-drag-handle" aria-hidden="true">☷</span>
               <div class="xp-window-title music-window-title">
                 <span aria-hidden="true">♫</span>
-                <strong id="music-window-title">music.exe</strong>
+                <strong id="music-window-title">music.mp3</strong>
+                <button id="music-window-pin" type="button" class="ghost window-pin-button" aria-pressed="false" title="Pin music player above chat">📌</button>
               </div>
               <div>
                 <p class="eyebrow">LOCAL MEDIA</p>
@@ -368,11 +387,12 @@
           <input id="settings-message-sounds" type="checkbox" checked />
           Play incoming message sound
         </label>
-        <label class="key-saved-label">
-          <input id="settings-noise-suppression" type="checkbox" checked />
-          Browser noise suppression
-        </label>
-        <p id="settings-noise-note" class="settings-help">Uses the browser's microphone noise suppression. Krisp SDK can be plugged in when its licensed browser package is installed.</p>
+        <p class="settings-help">Noise suppression is configured inside an active call.</p>
+        <label for="settings-wallpaper-tint">Chat wallpaper tint</label>
+        <select id="settings-wallpaper-tint">
+          <option value="theme">Theme color</option>
+          <option value="none">Original colors</option>
+        </select>
         <button id="settings-reset-layout" type="button" class="ghost">Reset chat list width</button>
         <p id="settings-layout-status" class="settings-help" aria-live="polite"></p>
       </section>
@@ -393,6 +413,18 @@
       </header>
       <p id="gif-empty" class="settings-help">No saved GIFs yet. Save a GIF from any chat message.</p>
       <div id="gif-results" class="gif-results"></div>
+    </dialog>
+
+    <dialog id="forward-message-dialog" class="forward-message-dialog">
+      <header class="settings-header">
+        <div>
+          <p class="eyebrow">MESSAGE</p>
+          <h2>Forward message</h2>
+        </div>
+        <button id="forward-message-close" type="button" class="ghost" aria-label="Close forward dialog">×</button>
+      </header>
+      <p class="settings-help">Choose where to send this decrypted message.</p>
+      <div id="forward-message-list" class="forward-message-list"></div>
     </dialog>
 
     <dialog id="saved-messages-dialog" class="saved-messages-dialog">
