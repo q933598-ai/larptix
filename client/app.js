@@ -180,6 +180,7 @@ const recoveredBodiesByMessageId = new Map();
 const cryptoRecoveryResponsesByMessageId = new Map();
 const messageBodyElementsById = new Map();
 const messagesById = new Map();
+const deletedMessageIds = new Set();
 
 function pinnedChatsKey() {
   return me ? `larptrix_pinned_chats_${me.user_id}` : null;
@@ -735,62 +736,21 @@ composer.addEventListener("submit", async (event) => {
         }
 
         if (peer.is_group) {
-          if (matrixReady) {
-            try {
-              const roomId = matrixCrypto.groupRoomId(peer.user_id);
-              await matrixCrypto.prepareRoom(roomId, peer.group_member_ids);
-              const ciphertext = await matrixCrypto.encrypt(roomId, payload);
-
-              encryptedBody = JSON.stringify({
-                version: 3,
-                message_type: "matrix",
-                sender_device_id: matrixCrypto.deviceId,
-                room_id: roomId,
-                ciphertext,
-              });
-            } catch (err) {
-              console.warn("[E2E] Matrix group encryption failed; using legacy group E2E fallback", err);
-              encryptedBody = null;
-            }
+          if (!matrixReady) {
+            throw new Error("Group E2E requires Matrix crypto. Keep E2E unlocked and try again.");
           }
 
-          if (!encryptedBody) {
-            const ciphertexts = {};
-            for (const memberId of peer.group_member_ids.filter((id) => id !== me.user_id)) {
-              const bundleResponse = await api(
-                "GET",
-                `/api/users/${encodeURIComponent(memberId)}/crypto-key`
-              );
-              const bundle = Array.isArray(bundleResponse?.devices)
-                ? bundleResponse.devices[0]
-                : bundleResponse;
-              const member = users.find((item) => item.user_id === memberId);
+          const roomId = matrixCrypto.groupRoomId(peer.user_id);
+          await matrixCrypto.prepareRoom(roomId, peer.group_member_ids);
+          const ciphertext = await matrixCrypto.encrypt(roomId, payload);
 
-              if (!member || !(await ensurePeerFingerprint(member, bundle))) {
-                throw new Error("Group member device could not be verified.");
-              }
-
-              if (!cryptoDevice.has_session(memberId)) {
-                const claimedBundle = await claimPeerOneTimeKey(memberId, bundle.device_id);
-                if (!(await ensurePeerFingerprint(member, claimedBundle))) {
-                  throw new Error(`Device ${bundle.device_id} could not be verified.`);
-                }
-                cryptoDevice.establish_session(
-                  memberId,
-                  JSON.stringify(claimedBundle),
-                  claimedBundle.fingerprint
-                );
-              }
-
-              ciphertexts[memberId] = cryptoDevice.encrypt(memberId, payload);
-            }
-
-            encryptedBody = JSON.stringify({
-              version: 1,
-              message_type: "group",
-              ciphertexts,
-            });
-          }
+          encryptedBody = JSON.stringify({
+            version: 3,
+            message_type: "matrix",
+            sender_device_id: matrixCrypto.deviceId,
+            room_id: roomId,
+            ciphertext,
+          });
         } else {
           if (matrixReady) {
             const roomId = await matrixCrypto.roomIdForDm(peerId);
@@ -1587,6 +1547,15 @@ function connect() {
         break;
       case "message":
         if (isForOpenChat(msg.message)) appendMessage(msg.message);
+        break;
+      case "message_deleted":
+        deletedMessageIds.add(msg.message_id);
+        messagesById.delete(msg.message_id);
+        messageBodyElementsById.delete(msg.message_id);
+        cryptoRecoveryPending.delete(msg.message_id);
+        recoveredBodiesByMessageId.delete(msg.message_id);
+        cryptoRecoveryResponsesByMessageId.delete(msg.message_id);
+        logEl.querySelector(`[data-message-id="${CSS.escape(msg.message_id)}"]`)?.remove();
         break;
       case "crypto_resync":
         void handleCryptoResyncRequest(msg);
@@ -2755,13 +2724,33 @@ function paintAvatar(el, user) {
 
 function appendMessage(message) {
   messagesById.set(message.id, message);
+  if (deletedMessageIds.has(message.id)) return;
   const li = document.createElement("li");
+  li.dataset.messageId = message.id;
   if (me && message.sender_id === me.user_id) li.classList.add("me");
 
   const meta = document.createElement("div");
   meta.className = "meta";
   meta.textContent = `${message.sender_name} · ${new Date(message.created_at).toLocaleTimeString()}`;
   li.append(meta);
+
+  if (me && message.sender_id === me.user_id) {
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "message-delete-button ghost";
+    deleteButton.textContent = "Delete";
+    deleteButton.title = "Delete this message for everyone";
+    deleteButton.addEventListener("click", () => {
+      if (!window.confirm("Delete this message for everyone?")) return;
+      deleteButton.disabled = true;
+      socket?.send(JSON.stringify({
+        type: "delete",
+        peer_id: message.recipient_id,
+        message_id: message.id,
+      }));
+    });
+    li.append(deleteButton);
+  }
 
   let encryptedBodyElement = null;
   if (message.body) {
