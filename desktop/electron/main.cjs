@@ -92,7 +92,8 @@ async function createMainWindow() {
   persistentSession.setPermissionCheckHandler(
     (_webContents, permission, origin) => {
       return (
-        ["media", "display-capture"].includes(permission) &&
+        (["media", "display-capture"].includes(permission) ||
+          permission === "notifications") &&
         isServerOrigin(origin)
       );
     },
@@ -104,7 +105,8 @@ async function createMainWindow() {
         details.requestingUrl || webContents.getURL();
 
       callback(
-        ["media", "display-capture"].includes(permission) &&
+        (["media", "display-capture"].includes(permission) ||
+          permission === "notifications") &&
           isServerOrigin(requestingUrl),
       );
     },
@@ -182,6 +184,9 @@ async function createMainWindow() {
 
         callback({
           video: sources[choice.response],
+          ...(process.platform === "win32" && request.audioRequested
+            ? { audio: "loopback" }
+            : {}),
         });
       } catch (error) {
         console.error(
