@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::db::{CryptoResyncRequestRow, CryptoResyncResponseRow, DbError, UserRow};
 use crate::hub::Outbound;
 use crate::now_ms;
-use crate::AppState;
+use crate::{ActiveGroupCall, AppState};
 
 pub async fn handle_socket(
     socket: WebSocket,
@@ -61,6 +61,7 @@ pub async fn handle_socket(
         })
         .collect();
     let _ = tx.send(ServerMessage::Groups { groups });
+    send_active_group_calls(&state, &user.id, &tx);
     if let Ok(events) = state.db.matrix_to_device_for_user(&user.id) {
         for event in events {
             let content = serde_json::from_str::<serde_json::Value>(&event.content_json)
@@ -194,6 +195,29 @@ pub async fn handle_socket(
     });
     tracing::info!(user_id = %user.id, "disconnected");
     let _ = writer.await;
+}
+
+fn send_active_group_calls(state: &AppState, user_id: &str, tx: &Outbound) {
+    let calls = state.group_calls.lock().expect("group call lock");
+    for (group_id, call) in calls.iter() {
+        let is_member = state
+            .db
+            .group(group_id)
+            .ok()
+            .flatten()
+            .is_some_and(|group| group.member_ids.iter().any(|id| id == user_id));
+        if !is_member {
+            continue;
+        }
+        let _ = tx.send(ServerMessage::GroupCallState {
+            group_id: group_id.clone(),
+            call_id: call.call_id.clone(),
+            media: call.media.clone(),
+            initiator_id: call.initiator_id.clone(),
+            participant_ids: call.participant_ids.clone(),
+            active: true,
+        });
+    }
 }
 
 fn send_crypto_resync_request(tx: &Outbound, request: CryptoResyncRequestRow) {
@@ -462,7 +486,7 @@ fn relay_call_signal(
 ) -> Result<(), String> {
     if !matches!(
         kind,
-        "offer" | "answer" | "ice_candidate" | "hangup" | "reject" | "group_invite" | "group_join"
+        "offer" | "answer" | "ice_candidate" | "hangup" | "reject" | "group_invite" | "group_join" | "group_end"
     ) {
         return Err("unsupported call signal".into());
     }
@@ -482,6 +506,45 @@ fn relay_call_signal(
             return Err("not a member of this group".into());
         }
 
+        if kind == "group_end" {
+            let call_id = payload
+                .get("call_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "group call signal is missing call id".to_string())?;
+            let should_end = {
+                let calls = state.group_calls.lock().expect("group call lock");
+                calls
+                    .get(peer_id)
+                    .is_some_and(|call| call.call_id == call_id && call.initiator_id == user.id)
+            };
+            if !should_end {
+                return Err("only the active group call initiator can end the call".into());
+            }
+            let media = payload
+                .get("media")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("audio")
+                .to_string();
+            {
+                let mut calls = state.group_calls.lock().expect("group call lock");
+                calls.remove(peer_id);
+            }
+            let ended = ServerMessage::GroupCallState {
+                group_id: peer_id.to_string(),
+                call_id: call_id.to_string(),
+                media,
+                initiator_id: user.id.clone(),
+                participant_ids: Vec::new(),
+                active: false,
+            };
+            for member_id in &group.member_ids {
+                if let Ok(member) = Uuid::parse_str(member_id) {
+                    state.hub.send_to(member, ended.clone());
+                }
+            }
+            return Ok(());
+        }
+
         let object = payload
             .as_object_mut()
             .ok_or_else(|| "group call signal payload must be an object".to_string())?;
@@ -496,6 +559,76 @@ fn relay_call_signal(
         }
         if !group.member_ids.iter().any(|member| member == target_id) {
             return Err("group call target is not a member".into());
+        }
+
+        match kind {
+            "group_invite" => {
+                let call_id = payload
+                    .get("call_id")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| "group call signal is missing call id".to_string())?;
+                let media = payload
+                    .get("media")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("audio");
+                let mut calls = state.group_calls.lock().expect("group call lock");
+                let call = calls.entry(peer_id.to_string()).or_insert_with(|| ActiveGroupCall {
+                    call_id: call_id.to_string(),
+                    media: media.to_string(),
+                    initiator_id: user.id.clone(),
+                    participant_ids: vec![user.id.clone()],
+                });
+                if call.call_id != call_id {
+                    return Err("another group call is already active".into());
+                }
+            }
+            "group_join" => {
+                if let Some(call_id) = payload.get("call_id").and_then(serde_json::Value::as_str) {
+                    let mut calls = state.group_calls.lock().expect("group call lock");
+                    if let Some(call) = calls.get_mut(peer_id) {
+                        if call.call_id != call_id {
+                            return Err("group call id does not match active call".into());
+                        }
+                        if !call.participant_ids.iter().any(|id| id == &user.id) {
+                            call.participant_ids.push(user.id.clone());
+                        }
+                    }
+                }
+            }
+            "hangup" | "reject" => {
+                if let Some(call_id) = payload.get("call_id").and_then(serde_json::Value::as_str) {
+                    let mut calls = state.group_calls.lock().expect("group call lock");
+                    if let Some(call) = calls.get_mut(peer_id) {
+                        if call.call_id == call_id {
+                            call.participant_ids.retain(|id| id != &user.id);
+                            if call.participant_ids.is_empty() {
+                                calls.remove(peer_id);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        let state_snapshot = {
+            let calls = state.group_calls.lock().expect("group call lock");
+            calls.get(peer_id).cloned()
+        };
+        if let Some(call) = state_snapshot {
+            let update = ServerMessage::GroupCallState {
+                group_id: peer_id.to_string(),
+                call_id: call.call_id,
+                media: call.media,
+                initiator_id: call.initiator_id,
+                participant_ids: call.participant_ids,
+                active: true,
+            };
+            for member_id in &group.member_ids {
+                if let Ok(member) = Uuid::parse_str(member_id) {
+                    state.hub.send_to(member, update.clone());
+                }
+            }
         }
 
         let target = state
