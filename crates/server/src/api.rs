@@ -1488,12 +1488,16 @@ async fn add_group_member(
     if body.user_id == user.id {
         return Err(ApiError::bad("you are already in this group"));
     }
-    let creator = state
+    let group = state
         .db
-        .group_creator_id(&id)
+        .group(&id)
         .map_err(ApiError::db)?
         .ok_or_else(|| ApiError::not_found("group not found"))?;
-    if creator != user.id {
+    if group.is_channel {
+        if !group.admin_ids.iter().any(|admin| admin == &user.id) {
+            return Err(ApiError::bad("only channel admins can add members"));
+        }
+    } else if group.admin_ids.first().map(String::as_str) != Some(user.id.as_str()) {
         return Err(ApiError::bad("only the group creator can add members"));
     }
     if state
