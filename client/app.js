@@ -677,10 +677,22 @@ settingsMessageSounds.addEventListener("change", () => localStorage.setItem(MESS
 settingsNoiseSuppression.addEventListener("change", () => localStorage.setItem(NOISE_SUPPRESSION_KEY, settingsNoiseSuppression.checked ? "1" : "0"));
 menuSaved?.addEventListener("click", openSavedMessages);
 savedMessagesClose?.addEventListener("click", () => savedMessagesDialog.close());
-mobileChats?.addEventListener("click", () => { document.getElementById("chat-view-open").click(); });
-mobileSaved?.addEventListener("click", openSavedMessages);
-mobileMusic?.addEventListener("click", () => window.larptixMusicLibrary?.toggle?.());
-mobileSettings?.addEventListener("click", openSettings);
+mobileChats?.addEventListener("click", () => {
+  document.getElementById("chat-view-open").click();
+  document.body.classList.toggle("mobile-people-visible");
+});
+mobileSaved?.addEventListener("click", () => {
+  document.body.classList.remove("mobile-people-visible");
+  openSavedMessages();
+});
+mobileMusic?.addEventListener("click", () => {
+  document.body.classList.remove("mobile-people-visible");
+  window.larptixMusicLibrary?.toggle?.();
+});
+mobileSettings?.addEventListener("click", () => {
+  document.body.classList.remove("mobile-people-visible");
+  openSettings();
+});
 
 tabLogin.addEventListener("click", () => setMode("login"));
 tabRegister.addEventListener("click", () => setMode("register"));
