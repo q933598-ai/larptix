@@ -691,7 +691,8 @@ fn relay_call_signal(
                     if let Some(call) = calls.get_mut(peer_id) {
                         if call.call_id == call_id {
                             call.participant_ids.retain(|id| id != &user.id);
-                            if call.participant_ids.is_empty() {
+                            let empty = call.participant_ids.is_empty();
+                            if empty {
                                 calls.remove(peer_id);
                             }
                         }
