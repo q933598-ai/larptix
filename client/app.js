@@ -71,7 +71,14 @@ const verifyDeviceFingerprint = document.getElementById("verify-device-fingerpri
 const verifyDeviceConfirm = document.getElementById("verify-device-confirm");
 const verifyDeviceContinue = document.getElementById("verify-device-continue");
 const photoInput = document.getElementById("photo");
-const gifInput = document.getElementById("gif");
+const gifOpenButton = document.getElementById("gif-open");
+const gifDialog = document.getElementById("gif-dialog");
+const gifCloseButton = document.getElementById("gif-close");
+const gifSearchForm = document.getElementById("gif-search-form");
+const gifSearchInput = document.getElementById("gif-search");
+const gifSearchStatus = document.getElementById("gif-search-status");
+const gifResults = document.getElementById("gif-results");
+const gifLoadMore = document.getElementById("gif-load-more");
 const fileInput = document.getElementById("file");
 const audioFileInput = document.getElementById("audio-file");
 const attachmentPreview = document.getElementById("attachment-preview");
@@ -129,6 +136,10 @@ let legacyLogin = false;
 let registerWithPassword = false;
 let pendingKeyUser = null;
 let pendingAttachment = null;
+let pendingGif = null;
+let gifSearchNext = null;
+let gifSearchTerm = "";
+let gifSearchRequest = 0;
 let previewUrl = null;
 let recorder = null;
 let recordingStream = null;
@@ -384,6 +395,19 @@ keyContinue.addEventListener("click", async () => {
   }
 });
 document.getElementById("image-viewer-close").addEventListener("click", () => imageViewer.close());
+gifOpenButton.addEventListener("click", () => {
+  gifSearchStatus.textContent = "";
+  gifDialog.showModal();
+  gifSearchInput.focus();
+});
+gifCloseButton.addEventListener("click", () => gifDialog.close());
+gifSearchForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void searchKlipyGifs(true);
+});
+gifLoadMore.addEventListener("click", () => {
+  void searchKlipyGifs(false);
+});
 imageViewer.addEventListener("click", (event) => {
   if (event.target === imageViewer) imageViewer.close();
 });
@@ -623,11 +647,12 @@ composer.addEventListener("submit", async (event) => {
   if (!peerId || !socket || socket.readyState !== WebSocket.OPEN) return;
   const body = bodyInput.value.trim();
   const file = pendingAttachment;
+  const gif = pendingGif;
   if (cryptoEnabled) {
     try {
       await cryptoReady;
       if (!cryptoDevice) throw new Error("Unlock E2E with your separate recovery key before sending messages.");
-      if (!body && !file) return;
+      if (!body && !file && !gif) return;
       const peer = [...users, ...groups].find((item) => item.user_id === peerId);
       if (!peer) throw new Error("Chat peer is not in the current list.");
       let attachment_id = null;
@@ -638,7 +663,7 @@ composer.addEventListener("submit", async (event) => {
         attachment_id = uploaded.id;
         encryptedFile = encrypted.metadata;
       }
-      const payload = JSON.stringify({ text: body, file: encryptedFile });
+      const payload = JSON.stringify({ text: body, file: encryptedFile, gif });
       let encryptedBody;
 
       await withCryptoStateLock(async () => {
@@ -747,7 +772,6 @@ composer.addEventListener("submit", async (event) => {
 });
 
 photoInput.addEventListener("change", () => queueAttachment(photoInput.files[0]));
-gifInput.addEventListener("change", () => queueAttachment(gifInput.files[0]));
 fileInput.addEventListener("change", () => queueAttachment(fileInput.files[0]));
 audioFileInput.addEventListener("change", () => queueAttachment(audioFileInput.files[0]));
 recordAudioButton.addEventListener("click", toggleRecording);
@@ -2220,6 +2244,14 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
             `Could not open encrypted attachment: ${err?.message || String(err)}`;
         }
       }
+      if (payload?.gif) {
+        try {
+          renderSelectedGif(payload.gif, bodyElement.parentElement);
+        } catch (err) {
+          bodyElement.textContent =
+            `Could not open GIF: ${err?.message || String(err)}`;
+        }
+      }
       return true;
     } catch (err) {
       bodyElement.textContent =
@@ -2240,6 +2272,13 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
         await renderEncryptedAttachment(message.attachment, payload.file, bodyElement.parentElement);
       } catch (err) {
         bodyElement.textContent = `Could not open encrypted attachment: ${err?.message || String(err)}`;
+      }
+    }
+    if (payload?.gif) {
+      try {
+        renderSelectedGif(payload.gif, bodyElement.parentElement);
+      } catch (err) {
+        bodyElement.textContent = `Could not open GIF: ${err?.message || String(err)}`;
       }
     }
     return true;
@@ -2475,6 +2514,14 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
       } catch (err) {
         bodyElement.textContent =
           `Could not open encrypted attachment: ${err?.message || String(err)}`;
+      }
+    }
+    if (payload?.gif) {
+      try {
+        renderSelectedGif(payload.gif, bodyElement.parentElement);
+      } catch (err) {
+        bodyElement.textContent =
+          `Could not open GIF: ${err?.message || String(err)}`;
       }
     }
   } catch (err) {
@@ -2985,14 +3032,177 @@ function queueAttachment(file) {
   attachmentPreview.hidden = false;
 }
 
+function browserLocale() {
+  const locale = (navigator.language || "en-US").replace("-", "_").trim();
+  return locale.length <= 16 ? locale : "en_US";
+}
+
+function browserCountry() {
+  const parts = browserLocale().split("_");
+  const country = parts[1] || "US";
+  return /^[A-Za-z]{2}$/.test(country) ? country.toUpperCase() : "US";
+}
+
+function queueKlipyGif(gif) {
+  pendingAttachment = null;
+  pendingGif = {
+    id: gif.id,
+    title: gif.title || "GIF",
+    url: gif.url,
+    preview_url: gif.preview_url || gif.url,
+    item_url: gif.item_url || "https://klipy.com/",
+    search_term: gif.search_term || gifSearchTerm,
+  };
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
+  previewUrl = null;
+  photoInput.value = "";
+  fileInput.value = "";
+  audioFileInput.value = "";
+  attachmentPreview.replaceChildren();
+
+  const image = document.createElement("img");
+  image.src = pendingGif.preview_url;
+  image.alt = pendingGif.title;
+  image.className = "gif-preview";
+  image.loading = "lazy";
+
+  const details = document.createElement("span");
+  details.textContent = pendingGif.title;
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "ghost";
+  remove.textContent = "Remove";
+  remove.addEventListener("click", clearAttachment);
+
+  attachmentPreview.append(image, details, remove);
+  attachmentPreview.hidden = false;
+  gifDialog.close();
+
+  void api("POST", "/api/gifs/share", {
+    id: pendingGif.id,
+    q: pendingGif.search_term,
+    country: browserCountry(),
+    locale: browserLocale(),
+  }).catch((err) => {
+    console.warn("[GIF] share registration failed", err?.message || err);
+  });
+}
+
+async function searchKlipyGifs(reset = true) {
+  const requestId = ++gifSearchRequest;
+  const query = gifSearchInput.value.trim();
+  if (!query) {
+    gifSearchStatus.textContent = "Enter something to search.";
+    gifResults.replaceChildren();
+    gifLoadMore.hidden = true;
+    return;
+  }
+
+  if (reset) {
+    gifSearchTerm = query;
+    gifSearchNext = null;
+    gifResults.replaceChildren();
+  }
+
+  gifSearchStatus.textContent = reset ? "Searching…" : "Loading more…";
+
+  const params = new URLSearchParams({
+    q: gifSearchTerm,
+    limit: "24",
+    country: browserCountry(),
+    locale: browserLocale(),
+  });
+  if (gifSearchNext) params.set("pos", gifSearchNext);
+
+  try {
+    const response = await api("GET", "/api/gifs/search?" + params.toString());
+    if (requestId !== gifSearchRequest) return;
+    renderKlipyGifResults(response.results || []);
+    gifSearchNext = response.next || null;
+    gifLoadMore.hidden = !gifSearchNext;
+    gifSearchStatus.textContent =
+      response.results?.length ? "Select a GIF to add it to your message." : "No GIFs found.";
+  } catch (err) {
+    if (requestId !== gifSearchRequest) return;
+    gifSearchStatus.textContent = err.message || "GIF search failed.";
+    gifLoadMore.hidden = true;
+  }
+}
+
+function renderKlipyGifResults(results) {
+  if (!results.length) return;
+  for (const gif of results) {
+    if (!gif?.id || !gif?.url) continue;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "gif-result";
+    button.title = gif.title || "GIF";
+
+    const image = document.createElement("img");
+    image.src = gif.preview_url || gif.url;
+    image.alt = gif.title || "KLIPY GIF";
+    image.loading = "lazy";
+
+    button.append(image);
+    button.addEventListener("click", () => queueKlipyGif(gif));
+    gifResults.append(button);
+  }
+}
+
+function renderSelectedGif(gif, container) {
+  if (!gif || typeof gif.url !== "string") {
+    throw new Error("This GIF has an invalid media URL.");
+  }
+
+  const mediaUrl = new URL(gif.url);
+  if (
+    mediaUrl.protocol !== "https:"
+    || mediaUrl.hostname.toLowerCase() !== "static.klipy.com"
+  ) {
+    throw new Error("This GIF did not come from KLIPY.");
+  }
+
+  const figure = document.createElement("figure");
+  figure.className = "gif-attachment";
+
+  const image = document.createElement("img");
+  image.src = gif.url;
+  image.alt = typeof gif.title === "string" && gif.title ? gif.title : "KLIPY GIF";
+  image.loading = "lazy";
+  image.decoding = "async";
+  image.referrerPolicy = "no-referrer";
+
+  figure.append(image);
+
+  if (typeof gif.item_url === "string") {
+    const itemUrl = new URL(gif.item_url);
+    if (
+      itemUrl.protocol === "https:"
+      && (itemUrl.hostname.toLowerCase() === "klipy.com"
+        || itemUrl.hostname.toLowerCase().endsWith(".klipy.com"))
+    ) {
+      const link = document.createElement("a");
+      link.href = gif.item_url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = "View on KLIPY";
+      figure.append(link);
+    }
+  }
+
+  container.append(figure);
+}
+
 function clearAttachment() {
   pendingAttachment = null;
+  pendingGif = null;
   if (previewUrl) URL.revokeObjectURL(previewUrl);
   previewUrl = null;
   attachmentPreview.replaceChildren();
   attachmentPreview.hidden = true;
   photoInput.value = "";
-  gifInput.value = "";
+
   fileInput.value = "";
   audioFileInput.value = "";
 }
