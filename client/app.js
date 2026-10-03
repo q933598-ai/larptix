@@ -121,6 +121,14 @@ const settingsUsername = document.getElementById("settings-username");
 const settingsE2eStatus = document.getElementById("settings-e2e-status");
 const settingsE2eFingerprint = document.getElementById("settings-e2e-fingerprint");
 const settingsLayoutStatus = document.getElementById("settings-layout-status");
+const groupMembersOpen = document.getElementById("group-members-open");
+const groupMembersDialog = document.getElementById("group-members-dialog");
+const groupMembersClose = document.getElementById("group-members-close");
+const groupMembersTitle = document.getElementById("group-members-title");
+const groupMembersHelp = document.getElementById("group-members-help");
+const groupMembersList = document.getElementById("group-members-list");
+const groupCallInvite = document.getElementById("group-call-invite");
+const groupCallCount = document.getElementById("group-call-count");
 
 
 let socket = null;
@@ -874,6 +882,9 @@ audioFileInput.addEventListener("change", () => queueAttachment(audioFileInput.f
 recordAudioButton.addEventListener("click", toggleRecording);
 document.getElementById("start-audio-call").addEventListener("click", () => startCall("audio"));
 document.getElementById("start-video-call").addEventListener("click", () => startCall("video"));
+groupMembersOpen?.addEventListener("click", openGroupMembers);
+groupMembersClose?.addEventListener("click", () => groupMembersDialog.close());
+groupCallInvite?.addEventListener("click", openGroupMembers);
 document.getElementById("accept-call").addEventListener("click", acceptIncomingCall);
 document.getElementById("reject-call").addEventListener("click", rejectIncomingCall);
 document.getElementById("end-call").addEventListener("click", () => endCall(true));
@@ -1617,6 +1628,80 @@ function connect() {
   });
 }
 
+function renderGroupMembersDialog(group) {
+  if (!groupMembersList || !group) return;
+  const memberIds = Array.isArray(group.group_member_ids) ? group.group_member_ids : [];
+  groupMembersTitle.textContent = group.display_name;
+  groupMembersHelp.textContent = `${memberIds.length} member(s). Members with an active connection can be invited to the current call.`;
+  groupMembersList.replaceChildren();
+
+  for (const memberId of memberIds) {
+    const user = users.find((item) => item.user_id === memberId);
+    const joined = groupCallId && groupCallGroupId === group.user_id && groupCallJoinedMembers.has(memberId);
+    const online = Boolean(user?.online);
+    const row = document.createElement("div");
+    row.className = "group-member-row";
+
+    const avatar = document.createElement("span");
+    avatar.className = "avatar";
+    paintAvatar(avatar, user || { user_id: memberId, display_name: "?" });
+
+    const copy = document.createElement("div");
+    copy.className = "group-member-copy";
+    const name = document.createElement("strong");
+    name.textContent = user?.display_name || "Unknown member";
+    const meta = document.createElement("span");
+    meta.textContent = user?.username ? `@${user.username} · ${online ? "Online" : "Offline"}` : (online ? "Online" : "Offline");
+    copy.append(name, meta);
+
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = "ghost group-member-action";
+    if (memberId === me?.user_id) {
+      action.textContent = "You";
+      action.disabled = true;
+    } else if (joined) {
+      action.textContent = "In call";
+      action.disabled = true;
+    } else if (groupCallId && groupCallGroupId === group.user_id && online) {
+      action.textContent = "Invite";
+      action.addEventListener("click", () => {
+        sendGroupCallSignal(memberId, "group_invite", {
+          group_id: group.user_id,
+          call_id: groupCallId,
+          media: callMediaKind,
+        });
+        action.textContent = "Invited";
+        action.disabled = true;
+      });
+    } else {
+      action.textContent = online ? "Available" : "Offline";
+      action.disabled = true;
+    }
+
+    row.append(avatar, copy, action);
+    groupMembersList.append(row);
+  }
+}
+
+function refreshGroupCallParticipants() {
+  const group = groups.find((item) => item.user_id === groupCallGroupId && item.is_group);
+  const active = groupCallId && group;
+  groupCallInvite.hidden = !active;
+  groupCallCount.hidden = !active;
+  if (active) {
+    groupCallCount.textContent = `${groupCallJoinedMembers.size}/${group.group_member_ids.length} joined`;
+  }
+}
+
+function openGroupMembers() {
+  const group = groups.find((item) => item.user_id === peerId && item.is_group)
+    || groups.find((item) => item.user_id === groupCallGroupId && item.is_group);
+  if (!group) return;
+  renderGroupMembersDialog(group);
+  groupMembersDialog.showModal();
+}
+
 function openChat(id) {
   // Switching chats must not terminate an active call.
   // Calls live independently from the currently opened chat.
@@ -1628,6 +1713,7 @@ function openChat(id) {
   document.getElementById("start-video-call").hidden = false;
   document.getElementById("start-audio-call").textContent = selected?.is_group ? "Group call" : "Call";
   document.getElementById("start-video-call").textContent = selected?.is_group ? "Group video" : "Video";
+  groupMembersOpen.hidden = !selected?.is_group;
   applyChatWallpaper(id);
   chatTitlebar.hidden = false;
   renderUsers();
@@ -1662,6 +1748,7 @@ async function startGroupCall(kind) {
   groupCallJoinedMembers.clear();
   groupCallJoinedMembers.add(me.user_id);
   callPeerId = group.user_id;
+  refreshGroupCallParticipants();
   callMediaKind = kind;
 
   try {
@@ -1673,6 +1760,7 @@ async function startGroupCall(kind) {
     document.getElementById("group-remotes").hidden = false;
     await attachLocalMediaPreview();
     callStatus.textContent = "Starting group " + (kind === "video" ? "video " : "") + "call…" + callMediaNotice;
+    refreshGroupCallParticipants();
 
     for (const remoteId of onlineMembers) {
       sendGroupCallSignal(remoteId, "group_invite", {
@@ -1837,6 +1925,7 @@ async function handleGroupCallSignal(signal) {
   if (signal.kind === "group_join") {
     const alreadyKnown = groupCallJoinedMembers.has(signal.sender_id);
     groupCallJoinedMembers.add(signal.sender_id);
+    refreshGroupCallParticipants();
     if (!alreadyKnown) {
       sendGroupCallSignal(signal.sender_id, "group_join", {
         group_id: groupId,
@@ -1899,6 +1988,8 @@ async function handleGroupCallSignal(signal) {
   }
 
   if (signal.kind === "hangup" || signal.kind === "reject") {
+    groupCallJoinedMembers.delete(signal.sender_id);
+    refreshGroupCallParticipants();
     removeGroupPeer(signal.sender_id);
     if (signal.kind === "reject") {
       const name = users.find((user) => user.user_id === signal.sender_id)?.display_name || "Participant";
@@ -2448,6 +2539,7 @@ function endCall(notifyPeer) {
     groupPeerConnections.clear();
     groupPendingIceCandidates.clear();
     groupCallJoinedMembers.clear();
+    refreshGroupCallParticipants();
     groupCallId = null;
     groupCallGroupId = null;
     groupCallMemberIds = [];
