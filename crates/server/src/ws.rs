@@ -629,6 +629,15 @@ fn validate_group_e2e_message(
     Ok(())
 }
 
+fn matrix_room_server_name() -> String {
+    let domain = std::env::var("DOMAIN").unwrap_or_default();
+    let domain = domain.trim().trim_end_matches('.');
+    if !domain.is_empty() && !domain.contains('/') && !domain.contains(':') {
+        return domain.to_string();
+    }
+    "localhost".into()
+}
+
 fn matrix_dm_room_id(server_name: &str, sender_user_id: &str, recipient_user_id: &str) -> String {
     use sha2::{Digest, Sha256};
 
@@ -686,7 +695,7 @@ fn validate_e2e_message_with_state(
             .filter(|value| !value.is_empty())
             .ok_or_else(|| "Matrix encrypted message is missing room id".to_string())?;
 
-        let server_name = std::env::var("DOMAIN").unwrap_or_else(|_| "localhost".into());
+        let server_name = matrix_room_server_name();
         let expected_room_id = matrix_dm_room_id(
             &server_name,
             sender_user_id,
