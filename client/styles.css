@@ -4678,3 +4678,23 @@ html[data-theme="custom"] .music-library {
 .chat.file-drop-active .log::after {
   content: "Drop files to attach";
 }
+
+
+/* Chat list: only the conversation that is currently open gets the active background. */
+.people li > button {
+  background: transparent;
+}
+.people li:not(.chat-active) > button,
+.people li:not(.chat-active) > button.active {
+  background: transparent;
+  box-shadow: none;
+}
+.people li:not(.chat-active) > button:hover {
+  background: var(--panel-3);
+}
+.people li.chat-active > button,
+.people li.chat-active > button.active,
+.people li.chat-active > button:hover {
+  background: var(--me);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
