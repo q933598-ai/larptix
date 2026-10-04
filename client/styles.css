@@ -4132,3 +4132,120 @@ html[data-theme="custom"] .music-library {
     border-radius: 0;
   }
 }
+
+
+/* Music library window: full-width XP-style titlebar and a clean standalone surface. */
+#music-library .music-window-titlebar,
+#music-library .music-library-drag-area {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  width: 100%;
+  min-height: 40px;
+  margin: 0;
+  padding: 4px 6px;
+  gap: 8px;
+  background: linear-gradient(180deg, #3f83d9 0%, #1954a6 52%, #154487 100%);
+  color: #fff;
+  border: 0;
+  border-bottom: 1px solid #10366d;
+  border-radius: 0;
+  box-shadow: inset 0 1px rgb(255 255 255 / 34%);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#music-library .music-window-titlebar:active,
+#music-library .music-library-drag-area:active,
+#music-library .music-library-drag-area.dragging {
+  cursor: grabbing;
+}
+
+#music-library .music-window-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 0;
+  padding: 0 5px;
+  gap: 7px;
+  background: transparent;
+  color: #fff;
+  box-shadow: none;
+  border: 0;
+  border-radius: 0;
+}
+
+#music-library .music-window-title span {
+  flex: 0 0 auto;
+  color: #fff;
+}
+
+#music-library .music-window-title strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #fff;
+  font: 600 .78rem "Segoe UI", sans-serif;
+}
+
+#music-library .music-window-caption {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  justify-self: center;
+  color: rgb(255 255 255 / 78%);
+  font: .68rem "Segoe UI", sans-serif;
+}
+
+#music-library .music-library-actions {
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  gap: 4px;
+}
+
+#music-library .music-library-actions > button,
+#music-library .music-library-actions .music-upload-button {
+  min-width: 28px;
+  width: auto;
+  height: 27px;
+  min-height: 27px;
+  padding: 0 8px;
+  border: 1px solid rgb(255 255 255 / 28%);
+  border-radius: 4px;
+  background: linear-gradient(180deg, rgb(255 255 255 / 24%), rgb(255 255 255 / 9%));
+  color: #fff;
+  font: 500 .68rem "Segoe UI", sans-serif;
+  box-shadow: inset 0 1px rgb(255 255 255 / 18%);
+}
+
+#music-library .music-library-actions > button:hover,
+#music-library .music-library-actions .music-upload-button:hover {
+  border-color: rgb(255 255 255 / 52%);
+  background: linear-gradient(180deg, rgb(255 255 255 / 32%), rgb(255 255 255 / 14%));
+}
+
+#music-library .music-window-close {
+  width: 30px;
+  min-width: 30px;
+  padding: 0;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+#music-library .music-library-toolbar {
+  border-bottom: 1px solid var(--line);
+}
+
+#music-library .music-library-content {
+  padding-bottom: 10px;
+}
+
+/* The compact playback dock is hidden while the library window is open by JS. */
+#music-library {
+  z-index: 180;
+}
