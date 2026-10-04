@@ -61,13 +61,14 @@
 
       <aside class="people">
         <div class="people-heading">
-          <h2>People</h2>
+          <h2>Friends</h2>
           
         </div>
         <input id="user-search" class="user-search" type="search" placeholder="Find by name or @username" autocomplete="off" />
         <nav class="side-nav" aria-label="Larptix sections">
           <button id="chat-view-open" type="button" class="side-nav-button active">▣ <span>Chats</span></button>
         </nav>
+        <p class="friends-search-hint">Search for people to add them to your friends.</p>
         <ul id="users"></ul>
       </aside>
 
@@ -253,7 +254,7 @@
           </div>
 
           <footer id="music-player" class="music-player" hidden>
-            <div class="music-player-track">
+            <div class="music-player-track music-player-drag-area" title="Drag music player">
               <div id="music-player-cover" class="music-player-cover">♫</div>
               <div class="music-player-copy">
                 <strong id="music-player-name">Nothing playing</strong>
@@ -423,10 +424,22 @@
           <input id="settings-outgoing-call-sounds" type="checkbox" checked />
           Play outgoing call sound
         </label>
+        <label for="settings-call-ringtone" class="settings-file-label">Call ringtone</label>
+        <input id="settings-call-ringtone" type="file" accept="audio/*" />
+        <div class="settings-inline-actions">
+          <button id="settings-call-ringtone-reset" type="button" class="ghost">Use default ringtone</button>
+          <span id="settings-call-ringtone-status" class="settings-help">Default ringtone</span>
+        </div>
         <label class="key-saved-label">
           <input id="settings-message-sounds" type="checkbox" checked />
           Play incoming message sound
         </label>
+        <label for="settings-message-policy">Who can message me</label>
+        <select id="settings-message-policy">
+          <option value="everyone">Everyone</option>
+          <option value="friends">Friends only</option>
+        </select>
+        <p class="settings-help">Friends only blocks direct messages from people who are not on your friends list.</p>
         <label class="key-saved-label">
           <input id="settings-browser-notifications" type="checkbox" />
           Browser notifications
