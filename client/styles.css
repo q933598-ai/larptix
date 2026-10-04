@@ -3372,3 +3372,263 @@ html[data-theme="custom"] .music-library {
     width: min(760px, calc(100vw - 24px));
   }
 }
+
+
+/* Mobile layout stabilization */
+@media (max-width: 760px) {
+  html,
+  body {
+    min-height: 100dvh;
+  }
+
+  .shell {
+    height: 100dvh;
+    min-height: 0;
+    grid-template-rows: 56px minmax(0, 1fr);
+    padding-bottom: calc(58px + env(safe-area-inset-bottom));
+  }
+
+  .top {
+    min-width: 0;
+    padding: 7px 10px;
+  }
+
+  .brand {
+    min-width: 0;
+  }
+
+  .brand > div:last-child {
+    min-width: 0;
+  }
+
+  .brand .tag {
+    display: none;
+  }
+
+  .top-right {
+    min-width: 0;
+    gap: 6px;
+  }
+
+  .top-right .me-label {
+    max-width: 30vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .top-right .status {
+    max-width: 74px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .chat-titlebar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    padding: 7px 10px;
+  }
+
+  .chat-titlebar .peer-name {
+    min-width: 0;
+    padding: 3px 0;
+  }
+
+  .chat-titlebar .call-actions {
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 2px;
+    scrollbar-width: thin;
+  }
+
+  .chat-titlebar .call-actions > * {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .chat-titlebar .call-actions button,
+  .chat-titlebar .call-actions .photo-btn {
+    min-height: 38px;
+    padding: 7px 10px;
+  }
+
+  .log {
+    padding: 12px 10px;
+  }
+
+  .log li {
+    max-width: 100%;
+    margin-bottom: 8px;
+    padding: 9px 10px;
+  }
+
+  #composer {
+    grid-template-columns: minmax(0, 1fr) 46px;
+    grid-template-rows: auto 46px;
+    gap: 6px;
+    padding: 7px 8px;
+  }
+
+  .composer-tools {
+    padding-bottom: 1px;
+  }
+
+  .composer-tools .photo-btn,
+  .composer-tools button {
+    min-height: 38px;
+    padding: 7px 10px;
+    flex: 0 0 auto;
+  }
+
+  #composer input[type="text"] {
+    min-height: 46px;
+    height: 46px;
+    font-size: 16px;
+  }
+
+  .send-button {
+    width: 46px;
+    height: 46px;
+  }
+
+  .mobile-nav {
+    bottom: 0;
+    height: calc(58px + env(safe-area-inset-bottom));
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .mobile-nav button {
+    min-height: 58px;
+  }
+
+  .call-stage {
+    left: 8px;
+    right: 8px;
+    bottom: calc(66px + env(safe-area-inset-bottom));
+    width: calc(100vw - 16px);
+    max-height: calc(82dvh - 66px);
+    min-width: 0;
+  }
+
+  .call-stage .call-dock-heading {
+    gap: 7px;
+  }
+
+  .call-stage .xp-window-title {
+    max-width: 38%;
+    overflow: hidden;
+  }
+
+  .call-stage .xp-window-title strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .call-stage .call-heading-copy {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .call-stage .call-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .call-stage .call-controls > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .call-stage .call-controls > button,
+  .call-stage .call-controls > .call-select,
+  .call-stage .call-controls > .call-volume-select {
+    min-height: 40px;
+  }
+
+  .call-stage .call-controls select,
+  .call-stage .call-controls input[type="range"] {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .call-stage .call-videos {
+    min-height: 0;
+    max-height: 40dvh;
+    aspect-ratio: 16 / 10;
+  }
+
+  #local-video,
+  #local-screen-video {
+    width: min(32%, 160px);
+    right: 8px;
+    left: auto;
+    bottom: 8px;
+  }
+
+  #local-screen-video {
+    left: 8px;
+    right: auto;
+  }
+}
+
+@media (max-width: 480px) {
+  .menu-button {
+    width: 36px;
+    height: 36px;
+    flex-basis: 36px;
+  }
+
+  h1 {
+    font-size: 1rem;
+  }
+
+  .top-right .me-label {
+    display: none;
+  }
+
+  .chat-titlebar .peer-name {
+    font-size: .9rem;
+  }
+
+  .chat-titlebar .call-actions button,
+  .chat-titlebar .call-actions .photo-btn {
+    min-height: 36px;
+    padding: 6px 9px;
+    font-size: .76rem;
+  }
+
+  #composer {
+    grid-template-columns: minmax(0, 1fr) 44px;
+    grid-template-rows: auto 44px;
+  }
+
+  #composer input[type="text"],
+  .send-button {
+    height: 44px;
+    min-height: 44px;
+  }
+
+  .call-stage {
+    bottom: calc(66px + env(safe-area-inset-bottom));
+    padding: 8px;
+  }
+
+  .call-stage .call-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .call-stage .call-security-note {
+    font-size: .7rem;
+  }
+
+  .call-stage .call-videos {
+    max-height: 34dvh;
+  }
+}
