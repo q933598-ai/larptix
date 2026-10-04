@@ -1040,17 +1040,18 @@ function updateCallPlaceholder({ force = false } = {}) {
     || users.find((item) => item.user_id === remoteId)
     || (pendingIncomingCall?.sender_id
       ? users.find((item) => item.user_id === pendingIncomingCall.sender_id)
-      : null)
-    || { user_id: remoteId || "remote", display_name: "Larptrix user" };
+      : null);
+
+  const remotePlaceholder = callPlaceholderRemoteAvatar?.closest(".call-placeholder-user");
+  const showRemotePlaceholder = Boolean(groupCallId || (remoteId && directCallRemoteVisible && peerConnection));
+  if (remotePlaceholder) remotePlaceholder.hidden = !showRemotePlaceholder;
 
   callPlaceholderLocalName.textContent = me?.display_name || "You";
-  callPlaceholderRemoteName.textContent = remoteUser.display_name || "Larptrix user";
-  const remotePlaceholder = callPlaceholderRemoteAvatar?.closest(".call-placeholder-user");
-  if (remotePlaceholder) {
-    remotePlaceholder.hidden = Boolean(!groupCallId && !directCallRemoteVisible);
-  }
+  callPlaceholderRemoteName.textContent = remoteUser?.display_name || "";
   paintAvatar(callPlaceholderLocalAvatar, me || { user_id: "local", display_name: "You" });
-  paintAvatar(callPlaceholderRemoteAvatar, remoteUser);
+  if (showRemotePlaceholder && remoteUser) {
+    paintAvatar(callPlaceholderRemoteAvatar, remoteUser);
+  }
   callPlaceholderRemoteName.classList.remove("call-no-answer");
   renderDirectCallParticipants();
 
