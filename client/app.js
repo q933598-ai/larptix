@@ -911,6 +911,7 @@ function updateCallPlaceholder({ force = false } = {}) {
   callPlaceholderRemoteName.textContent = remoteUser.display_name || "Larptrix user";
   paintAvatar(callPlaceholderLocalAvatar, me || { user_id: "local", display_name: "You" });
   paintAvatar(callPlaceholderRemoteAvatar, remoteUser);
+  callPlaceholderRemoteName.classList.remove("call-no-answer");
 
   const hasRemoteVideo = Boolean(
     remoteVideo?.srcObject instanceof MediaStream
@@ -4654,6 +4655,19 @@ async function handleCallSignal(signal) {
     incomingCallDialog.showModal();
     return;
   }
+  if (
+    (signal.kind === "hangup" || signal.kind === "reject")
+    && pendingIncomingCall?.sender_id === signal.sender_id
+  ) {
+    clearTimeout(incomingCallTimeout);
+    incomingCallTimeout = null;
+    pendingIncomingCall = null;
+    stopCallRingtone();
+    renderDirectCallAvatarStack();
+    updateDirectCallButtons(peerId);
+    return;
+  }
+
   if (signal.kind === "ice_candidate" && !peerConnection) {
     if (pendingIncomingCall && signal.sender_id === callPeerId) {
       pendingIceCandidates.push(signal.payload);
@@ -5899,7 +5913,8 @@ async function stopSpeakingMonitor(key) {
   if (monitor.raf) cancelAnimationFrame(monitor.raf);
   try { monitor.source?.disconnect(); } catch {}
   try { monitor.analyser?.disconnect(); } catch {}
-  monitor.audioContext?.close?.().catch?.(() => {});
+  const closeResult = monitor.audioContext?.close?.();
+  closeResult?.catch?.(() => {});
   monitor.element?.classList.remove("speaking");
   speakingMonitors.delete(key);
 }
