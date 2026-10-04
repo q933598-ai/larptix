@@ -834,6 +834,7 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
                 online: group.member_ids.iter().any(|id| online.contains(id)),
                 avatar_url: group
                     .avatar_id
+                    .as_ref()
                     .map(|_| format!("/api/groups/{}/avatar", group.id)),
                 activity: None,
                 is_group: true,
@@ -847,9 +848,11 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
                 group_description: group.description,
                 group_avatar_url: group
                     .avatar_id
+                    .as_ref()
                     .map(|_| format!("/api/groups/{}/avatar", group.id)),
                 group_banner_url: group
                     .banner_id
+                    .as_ref()
                     .map(|_| format!("/api/groups/{}/banner", group.id)),
                 subscriber_count: group.member_ids.len(),
             },
