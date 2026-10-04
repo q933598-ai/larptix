@@ -135,6 +135,7 @@
               </div>
             </div>
             <div id="group-remotes" class="group-remotes" hidden></div>
+            <div id="direct-call-participants" class="direct-call-participants" hidden aria-label="Call participants"></div>
           </div>
           <div class="call-controls">
             <button id="toggle-microphone" type="button" class="ghost" aria-pressed="false">🎙 Mute mic</button>
@@ -182,11 +183,31 @@
           </div>
           <div id="call-settings-panel" class="call-settings-panel" hidden>
             <div class="call-settings-title">Call settings</div>
+            <div class="call-settings-devices">
+              <label class="call-settings-device">
+                <span>Microphone</span>
+                <select id="call-settings-microphone">
+                  <option value="">Default microphone</option>
+                </select>
+              </label>
+              <label class="call-settings-device">
+                <span>Speakers</span>
+                <select id="call-settings-speakers">
+                  <option value="">Default speakers</option>
+                </select>
+              </label>
+              <label class="call-settings-device">
+                <span>Camera</span>
+                <select id="call-settings-camera">
+                  <option value="">Default camera</option>
+                </select>
+              </label>
+            </div>
             <label class="key-saved-label">
               <input id="call-noise-suppression" type="checkbox" checked />
               Noise suppression
             </label>
-            <p class="settings-help">Applies to your microphone only.</p>
+            <p class="settings-help">Device changes apply immediately during the current call.</p>
             <div id="call-participant-settings" class="call-participant-settings"></div>
           </div>
         </section>
@@ -351,9 +372,16 @@
           <input id="profile-username" type="text" maxlength="24" placeholder="username" autocomplete="username" />
           <label for="profile-about">About</label>
           <textarea id="profile-about" rows="3" maxlength="160" placeholder="A little about you"></textarea>
-          <label for="profile-tags">Tags</label>
-          <input id="profile-tags" type="text" maxlength="192" placeholder="gamer, developer, linux" />
-          <p class="settings-help">Up to 8 tags, separated by commas.</p>
+          <label for="profile-tag-select">Active profile tag</label>
+          <div class="profile-tag-editor">
+            <select id="profile-tag-select" aria-label="Active profile tag">
+              <option value="">No active tag</option>
+            </select>
+            <input id="profile-tag-new" type="text" maxlength="24" placeholder="Create a new tag…" />
+            <button id="profile-tag-add" type="button" class="ghost">Create tag</button>
+          </div>
+          <p class="settings-help">Only one tag is shown publicly at a time. You can create and keep multiple tags here.</p>
+          <input id="profile-tags" type="hidden" value="" />
         </section>
         <section class="profile-section">
           <h3>Call devices</h3>
