@@ -677,7 +677,7 @@ function renderNotificationSettings() {
     "Permission has not been requested yet.";
 }
 
-async function showBrowserNotification(title, body, tag) {
+async function showBrowserNotification(title, body, tag, iconUrl = null) {
   if (!browserNotificationsEnabled()) return;
   if (document.visibilityState === "visible" && document.hasFocus()) return;
   const native = getTauriNotificationApi();
@@ -687,7 +687,11 @@ async function showBrowserNotification(title, body, tag) {
   }
   if (typeof Notification !== "function" || Notification.permission !== "granted") return;
   try {
-    const notification = new Notification(title, { body, tag });
+    const notification = new Notification(title, {
+      body,
+      tag,
+      ...(iconUrl ? { icon: iconUrl } : {}),
+    });
     notification.onclick = () => {
       try {
         window.focus();
@@ -1180,9 +1184,7 @@ function appendSavedMessage(item) {
   });
   actions.append(reply, remove);
   li.append(actions);
-  renderMessageReactions(message, li);
   logEl.append(li);
-  if (channelViewObserver && groups.some((item) => item.user_id === peerId && item.is_channel)) {
     channelViewObserver.observe(li);
   }
 }
@@ -2499,6 +2501,22 @@ document.getElementById("toggle-camera").addEventListener("click", toggleCamera)
 document.getElementById("toggle-screen-share").addEventListener("click", toggleScreenShare);
 document.getElementById("toggle-call-fullscreen").addEventListener("click", async () => {
   try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+      return;
+    }
+
+    // During screen sharing, fullscreen the actual shared video rather than
+    // the floating call window. This removes the call controls from over the
+    // demo and matches Discord-style screen-share fullscreen behavior.
+    const screenTarget = screenMediaStream
+      ? localScreenVideo
+      : (callStage.classList.contains("screen-sharing") ? remoteVideo : null);
+    if (screenTarget && !screenTarget.hidden) {
+      await screenTarget.requestFullscreen();
+      return;
+    }
+
     if (globalThis.larptrixDesktop?.toggleFullscreen) {
       const fullscreen = await globalThis.larptrixDesktop.toggleFullscreen();
       callStage.classList.toggle("native-window-fullscreen", Boolean(fullscreen));
@@ -2510,8 +2528,7 @@ document.getElementById("toggle-call-fullscreen").addEventListener("click", asyn
       callStage.classList.toggle("native-window-fullscreen", Boolean(fullscreen));
       return;
     }
-    if (document.fullscreenElement) await document.exitFullscreen();
-    else await document.getElementById("call-videos").requestFullscreen();
+    await document.getElementById("call-videos").requestFullscreen();
   } catch (err) {
     appendSystem(err.message || "Fullscreen is not available in this app.");
   }
@@ -3404,7 +3421,13 @@ function connect() {
         if (isForOpenChat(msg.message)) appendMessage(msg.message);
         if (msg.message?.sender_id !== me?.user_id) {
           playIncomingMessageSound();
-          showBrowserNotification(msg.message.sender_name || "Larptrix", "New message", "message-" + msg.message.sender_id);
+          const sender = users.find((user) => user.user_id === msg.message.sender_id);
+          showBrowserNotification(
+            msg.message.sender_name || "Larptrix",
+            "New message",
+            "message-" + msg.message.sender_id,
+            sender?.avatar_url || null,
+          );
         }
         break;
       case "presence":
@@ -4006,7 +4029,12 @@ async function handleGroupCallSignal(signal) {
     incomingCallKind.textContent = (callMediaKind === "video" ? "Group video" : "Group") + " call · " + group.display_name;
     document.getElementById("accept-call").textContent = "Join";
     startCallRingtone();
-    showBrowserNotification(incomingCallTitle.textContent || "Incoming group call", incomingCallKind.textContent || "Group call", "group-call-" + groupId);
+    showBrowserNotification(
+      incomingCallTitle.textContent || "Incoming group call",
+      incomingCallKind.textContent || "Group call",
+      "group-call-" + groupId,
+      group.group_avatar_url || group.avatar_url || null,
+    );
     incomingCallDialog.showModal();
     return;
   }
@@ -4470,10 +4498,11 @@ async function flushIceCandidates() {
 }
 
 function callAudioConstraints() {
+  const supported = navigator.mediaDevices?.getSupportedConstraints?.() || {};
   return {
-    echoCancellation: true,
-    noiseSuppression: readStoredBool(NOISE_SUPPRESSION_KEY, true),
-    autoGainControl: true,
+    ...(supported.echoCancellation ? { echoCancellation: true } : {}),
+    ...(supported.noiseSuppression ? { noiseSuppression: readStoredBool(NOISE_SUPPRESSION_KEY, true) } : {}),
+    ...(supported.autoGainControl ? { autoGainControl: true } : {}),
   };
 }
 
@@ -4494,8 +4523,15 @@ async function acquireCallMedia(kind) {
     : [false];
   const attempts = [];
   if (hasMicrophone) {
+    // Prefer the browser's native audio profile first. Some Linux/PipeWire
+    // devices reject processing constraints even though plain microphone
+    // capture works perfectly.
+    for (const video of videoAttempts) attempts.push({ audio: true, video });
     for (const video of videoAttempts) attempts.push({ audio: callAudioConstraints(), video });
-    if (kind === "video") attempts.push({ audio: callAudioConstraints(), video: false });
+    if (kind === "video") {
+      attempts.push({ audio: true, video: false });
+      attempts.push({ audio: callAudioConstraints(), video: false });
+    }
   }
   if (kind === "video") {
     for (const video of videoAttempts) attempts.push({ audio: false, video });
@@ -4578,19 +4614,25 @@ async function toggleScreenShare() {
           ...(supported.restrictOwnAudio ? { restrictOwnAudio: true } : {}),
         }
       : false;
-    screenMediaStream = await navigator.mediaDevices.getDisplayMedia({
-      video: {
-        width: { ideal: resolution.width, max: resolution.width },
-        height: { ideal: resolution.height, max: resolution.height },
-        frameRate: { ideal: frameRate, max: frameRate },
-      },
-      audio: audioConstraints,
-      selfBrowserSurface: "exclude",
-      surfaceSwitching: "include",
-      monitorTypeSurfaces: "include",
-      systemAudio: audioMode === "system" ? "include" : "exclude",
-      windowAudio: audioMode === "window" ? "window" : "exclude",
-    });
+    // Firefox rejects several Chromium-specific display-capture
+    // constraints with "Invalid capture constraints". Keep its request
+    // deliberately minimal and apply quality after the source is selected.
+    const displayConstraints = firefox
+      ? { video: true, audio: false }
+      : {
+          video: {
+            width: { ideal: resolution.width },
+            height: { ideal: resolution.height },
+            frameRate: { ideal: frameRate },
+          },
+          audio: audioConstraints,
+          selfBrowserSurface: "exclude",
+          surfaceSwitching: "include",
+          monitorTypeSurfaces: "include",
+          ...(audioMode === "system" ? { systemAudio: "include" } : {}),
+          ...(audioMode === "window" ? { windowAudio: "window" } : {}),
+        };
+    screenMediaStream = await navigator.mediaDevices.getDisplayMedia(displayConstraints);
     const screenTrack = screenMediaStream.getVideoTracks()[0];
     if (!screenTrack) throw new Error("The selected share source has no video track.");
     try {
@@ -4975,10 +5017,18 @@ async function loadGroups() {
       post_policy: group.post_policy || (group.is_channel ? "admins" : "members"),
       group_member_ids: Array.isArray(group.member_ids) ? group.member_ids : [],
       group_description: group.description || "",
-      group_avatar_url: group.avatar_url || null,
-      group_banner_url: group.banner_url || null,
-      avatar_url: group.avatar_url || null,
-      banner_url: group.banner_url || null,
+      group_avatar_url: group.avatar_url
+        ? group.avatar_url + (group.avatar_url.includes("?") ? "&" : "?") + "v=" + Date.now()
+        : null,
+      group_banner_url: group.banner_url
+        ? group.banner_url + (group.banner_url.includes("?") ? "&" : "?") + "v=" + Date.now()
+        : null,
+      avatar_url: group.avatar_url
+        ? group.avatar_url + (group.avatar_url.includes("?") ? "&" : "?") + "v=" + Date.now()
+        : null,
+      banner_url: group.banner_url
+        ? group.banner_url + (group.banner_url.includes("?") ? "&" : "?") + "v=" + Date.now()
+        : null,
       subscriber_count: Number(group.subscriber_count || group.member_ids?.length || 0),
     }));
     renderUsers();
@@ -5207,10 +5257,33 @@ function appendMessage(message) {
   li.dataset.messageId = message.id;
   if (me && message.sender_id === me.user_id) li.classList.add("me");
 
+  const senderUser = message.sender_id === me?.user_id
+    ? me
+    : users.find((user) => user.user_id === message.sender_id)
+      || groups.find((group) => group.user_id === message.sender_id)
+      || { user_id: message.sender_id, display_name: message.sender_name || "Larptrix user" };
+
+  const messageAvatar = document.createElement("span");
+  messageAvatar.className = "avatar message-avatar";
+  paintAvatar(messageAvatar, senderUser);
+
   const meta = document.createElement("div");
   meta.className = "meta";
   meta.textContent = (message.sender_name || "Larptrix user") + " · " + new Date(message.created_at).toLocaleTimeString();
-  li.append(meta);
+
+  const previousRow = logEl.lastElementChild;
+  const previousMessage = previousRow?.dataset?.messageId
+    ? messagesById.get(previousRow.dataset.messageId)
+    : null;
+  const groupedWithPrevious = Boolean(
+    previousMessage
+      && previousMessage.sender_id === message.sender_id
+      && Math.abs(Number(message.created_at) - Number(previousMessage.created_at)) <= 120000
+      && !previousRow.classList.contains("e2e-reset-notice")
+  );
+  if (groupedWithPrevious) li.classList.add("message-grouped");
+
+  li.append(messageAvatar, meta);
 
   let encryptedBodyElement = null;
   let messageBodyForSave = null;
