@@ -7,7 +7,6 @@ services:
     environment:
       LARPTRIX_COOKIE_SECURE: "1"
       LARPTRIX_ICE_SERVERS: ${LARPTRIX_ICE_SERVERS:-}
-      SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
     volumes:
       - larptrix-data:/app/data
     expose:
