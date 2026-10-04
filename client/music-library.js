@@ -524,15 +524,6 @@
         els.library.style.bottom = "auto";
         savePosition(position.x, position.y);
       }
-      if (!els.player.hidden) {
-        const rect = els.player.getBoundingClientRect();
-        const position = clampPlayerPosition(rect.left, rect.top);
-        els.player.style.left = position.x + "px";
-        els.player.style.top = position.y + "px";
-        els.player.style.right = "auto";
-        els.player.style.bottom = "auto";
-        savePlayerPosition(position.x, position.y);
-      }
     });
     void refresh();
   }
