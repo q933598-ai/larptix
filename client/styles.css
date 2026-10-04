@@ -5599,6 +5599,18 @@ html[data-theme="catppuccin-mocha"] .call-stage .call-dock-heading > .ghost {
   font-size: 1.5rem;
 }
 
+.direct-call-join {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  z-index: 10;
+  min-width: 120px;
+  min-height: 40px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+}
+
 .call-settings-devices {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
