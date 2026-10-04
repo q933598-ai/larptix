@@ -338,7 +338,7 @@
           <div class="profile-identity-copy">
             <h2 id="profile-card-name"></h2>
             <p id="profile-card-handle"></p>
-            <p id="profile-card-activity" class="profile-activity"></p>
+            <div id="profile-card-activity" class="profile-card-activities"></div>
           </div>
           <button id="profile-close" type="button" class="ghost profile-dismiss" aria-label="Close profile">×</button>
         </div>
@@ -372,12 +372,30 @@
         </section>
         <section class="profile-section">
           <h3>Status</h3>
-          <label for="profile-activity">Custom status</label>
-          <input id="profile-activity" type="text" maxlength="120" placeholder="What are you doing?" />
+          <div id="profile-custom-activities" class="profile-status-editor"></div>
+          <div class="profile-status-add-row">
+            <input id="profile-new-activity" type="text" maxlength="120" placeholder="Add a status, e.g. 🎮 Playing Minecraft" />
+            <button id="profile-add-activity" type="button" class="ghost">＋</button>
+          </div>
           <label class="key-saved-label">
             <input id="show-music-activity" type="checkbox" checked />
-            Show what I'm listening to as my status
+            Show Larptrix Music Library as a status
           </label>
+          <label class="key-saved-label">
+            <input id="show-spotify-activity" type="checkbox" checked />
+            Show Spotify listening as a status
+          </label>
+          <div class="spotify-status-card">
+            <div class="spotify-status-copy">
+              <strong>Spotify</strong>
+              <span id="spotify-status">Not connected</span>
+            </div>
+            <div class="spotify-status-actions">
+              <button id="spotify-connect" type="button" class="ghost">Connect</button>
+              <button id="spotify-disconnect" type="button" class="ghost" hidden>Disconnect</button>
+            </div>
+          </div>
+          <p class="settings-help">You can have up to 3 custom statuses plus live music and Spotify statuses.</p>
         </section>
         <section class="profile-section">
           <h3>Account</h3>
