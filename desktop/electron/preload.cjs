@@ -8,5 +8,6 @@ contextBridge.exposeInMainWorld("larptrixDesktop", {
   appVersion: () => ipcRenderer.invoke("larptrix:app-version"),
   checkForUpdate: () => ipcRenderer.invoke("larptrix:update-check"),
   installUpdate: () => ipcRenderer.invoke("larptrix:update-install"),
+  toggleFullscreen: () => ipcRenderer.invoke("larptrix:toggle-fullscreen"),
   openReleases: () => ipcRenderer.invoke("larptrix:open-releases"),
 });
