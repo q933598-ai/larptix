@@ -1788,7 +1788,6 @@ profileOpen.addEventListener("click", async () => {
     renderNotificationSettings();
     resetE2eKeysButton.hidden = !cryptoEnabled;
     resetE2eHelp.hidden = true;
-    await populateCallDeviceSelects();
     profileDialog.showModal();
   } catch (err) {
     profileError.textContent = err.message;
@@ -4883,10 +4882,10 @@ async function acquireCallMedia(kind) {
     const micId = selectedCallDeviceId("audioinput");
     const audioConstraint = micId ? { deviceId: { exact: micId } } : true;
     for (const video of videoAttempts) attempts.push({ audio: audioConstraint, video });
-    const micId = selectedCallDeviceId("audioinput");
+
     const baseAudio = callAudioConstraints();
-    const audioConstraint = micId ? { ...baseAudio, deviceId: { exact: micId } } : baseAudio;
-    for (const video of videoAttempts) attempts.push({ audio: audioConstraint, video });
+    const processedAudioConstraint = micId ? { ...baseAudio, deviceId: { exact: micId } } : baseAudio;
+    for (const video of videoAttempts) attempts.push({ audio: processedAudioConstraint, video });
     if (kind === "video") {
       attempts.push({ audio: true, video: false });
       attempts.push({ audio: callAudioConstraints(), video: false });
