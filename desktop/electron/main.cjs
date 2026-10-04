@@ -512,6 +512,12 @@ async function createMainWindow() {
   scheduleDesktopUpdates();
 }
 
+ipcMain.handle("larptrix:toggle-fullscreen", () => {
+  if (!windowRef || windowRef.isDestroyed()) return false;
+  const next = !windowRef.isFullScreen();
+  windowRef.setFullScreen(next);
+  return next;
+});
 ipcMain.handle("larptrix:app-version", () => app.getVersion());
 ipcMain.handle("larptrix:open-releases", async () => {
   await shell.openExternal(`https://github.com/${UPDATE_REPOSITORY}/releases/latest`);
