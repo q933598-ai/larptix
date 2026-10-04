@@ -1290,6 +1290,10 @@ impl Database {
                 post_policy: String::new(),
                 e2e_enabled,
                 group_member_ids: Vec::new(),
+                group_description: String::new(),
+                group_avatar_url: None,
+                group_banner_url: None,
+                subscriber_count: 0,
                 friend_status: "none".to_string(),
                 message_policy,
             })
@@ -2450,7 +2454,7 @@ impl Database {
                  FROM message_attachments ma
                  JOIN attachments a ON a.id = ma.attachment_id
                  WHERE ma.message_id = ?1
-                 ORDER BY ma.attachment_id",
+                 ORDER BY ma.position",
             )?;
             let rows = stmt.query_map([&message.id], |row| {
                 let id: String = row.get(0)?;
