@@ -2465,6 +2465,33 @@ mod tests {
     }
 
     #[test]
+    fn friendships_and_message_privacy_work() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
+        let bob = db.create_key_user("Bob", "bob", "hash-b", 1).unwrap();
+
+        assert_eq!(db.friend_status(&alice.id, &bob.id).unwrap(), "none");
+        assert_eq!(
+            db.send_friend_request(&alice.id, &bob.id).unwrap(),
+            "pending_outgoing"
+        );
+        assert_eq!(
+            db.friend_status(&bob.id, &alice.id).unwrap(),
+            "pending_incoming"
+        );
+        db.accept_friend_request(&bob.id, &alice.id).unwrap();
+        assert!(db.are_friends(&alice.id, &bob.id).unwrap());
+        assert_eq!(db.friend_ids(&alice.id).unwrap(), vec![bob.id.clone()]);
+
+        db.set_message_policy(&bob.id, "friends").unwrap();
+        assert_eq!(db.message_policy(&bob.id).unwrap(), "friends");
+        assert!(db.set_message_policy(&bob.id, "invalid").is_err());
+
+        db.remove_friendship(&alice.id, &bob.id).unwrap();
+        assert!(!db.are_friends(&alice.id, &bob.id).unwrap());
+    }
+
+    #[test]
     fn profile_fields_persist_and_usernames_are_unique_without_case_sensitivity() {
         let db = Database::open(Path::new(":memory:")).unwrap();
         let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
