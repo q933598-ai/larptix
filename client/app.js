@@ -4315,10 +4315,11 @@ function renderDirectCallTopbar(id = peerId) {
   const callButton = document.getElementById("start-audio-call");
   const videoButton = document.getElementById("start-video-call");
   const selected = getChatEntries().find((item) => item.user_id === id);
+  // A normal chat is not a call state. Only use an explicit call peer.
   const remoteId = callPeerId
     || pendingIncomingCall?.sender_id
     || lastDirectCallJoinPeerId
-    || (id && id !== me?.user_id ? id : null);
+    || null;
   const active = Boolean(
     remoteId
       && !callStage?.hidden
