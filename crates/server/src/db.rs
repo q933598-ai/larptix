@@ -1056,12 +1056,186 @@ impl Database {
         .optional()
     }
 
+    pub fn friend_status(&self, user_id: &str, other_id: &str) -> rusqlite::Result<String> {
+        if user_id == other_id {
+            return Ok("self".to_string());
+        }
+        let conn = self.conn.lock().expect("db lock");
+        let direct: Option<String> = conn
+            .query_row(
+                "SELECT status FROM friendships WHERE requester_id = ?1 AND addressee_id = ?2",
+                params![user_id, other_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(status) = direct {
+            return Ok(if status == "accepted" {
+                "accepted".to_string()
+            } else {
+                "pending_outgoing".to_string()
+            });
+        }
+        let reverse: Option<String> = conn
+            .query_row(
+                "SELECT status FROM friendships WHERE requester_id = ?1 AND addressee_id = ?2",
+                params![other_id, user_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(match reverse.as_deref() {
+            Some("accepted") => "accepted".to_string(),
+            Some("pending") => "pending_incoming".to_string(),
+            _ => "none".to_string(),
+        })
+    }
+
+    pub fn are_friends(&self, user_id: &str, other_id: &str) -> rusqlite::Result<bool> {
+        Ok(self.friend_status(user_id, other_id)? == "accepted")
+    }
+
+    pub fn friend_ids(&self, user_id: &str) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn.lock().expect("db lock");
+        let mut stmt = conn.prepare(
+            "SELECT CASE
+                    WHEN requester_id = ?1 THEN addressee_id
+                    ELSE requester_id
+                END
+             FROM friendships
+             WHERE status = 'accepted'
+               AND (requester_id = ?1 OR addressee_id = ?1)
+             ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt.query_map([user_id], |row| row.get(0))?;
+        rows.collect()
+    }
+
+    pub fn pending_friend_ids(&self, user_id: &str, incoming: bool) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn.lock().expect("db lock");
+        let (column, other) = if incoming {
+            ("addressee_id", "requester_id")
+        } else {
+            ("requester_id", "addressee_id")
+        };
+        let sql = format!(
+            "SELECT {other}
+             FROM friendships
+             WHERE {column} = ?1 AND status = 'pending'
+             ORDER BY updated_at DESC"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([user_id], |row| row.get(0))?;
+        rows.collect()
+    }
+
+    pub fn send_friend_request(&self, user_id: &str, other_id: &str) -> Result<String, DbError> {
+        if user_id == other_id {
+            return Err(DbError::BadRequest("you cannot add yourself"));
+        }
+        let mut conn = self.conn.lock().expect("db lock");
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        let direct: Option<String> = tx
+            .query_row(
+                "SELECT status FROM friendships WHERE requester_id = ?1 AND addressee_id = ?2",
+                params![user_id, other_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if direct.as_deref() == Some("accepted") {
+            tx.commit()?;
+            return Ok("accepted".to_string());
+        }
+        if direct.as_deref() == Some("pending") {
+            tx.commit()?;
+            return Ok("pending_outgoing".to_string());
+        }
+
+        let reverse: Option<String> = tx
+            .query_row(
+                "SELECT status FROM friendships WHERE requester_id = ?1 AND addressee_id = ?2",
+                params![other_id, user_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match reverse.as_deref() {
+            Some("accepted") => {
+                tx.commit()?;
+                return Ok("accepted".to_string());
+            }
+            Some("pending") => {
+                tx.execute(
+                    "UPDATE friendships SET status = 'accepted', updated_at = ?1
+                     WHERE requester_id = ?2 AND addressee_id = ?3",
+                    params![crate::now_ms(), other_id, user_id],
+                )?;
+                tx.commit()?;
+                return Ok("accepted".to_string());
+            }
+            _ => {}
+        }
+
+        let now = crate::now_ms();
+        tx.execute(
+            "INSERT INTO friendships (requester_id, addressee_id, status, created_at, updated_at)
+             VALUES (?1, ?2, 'pending', ?3, ?3)",
+            params![user_id, other_id, now],
+        )?;
+        tx.commit()?;
+        Ok("pending_outgoing".to_string())
+    }
+
+    pub fn accept_friend_request(&self, user_id: &str, other_id: &str) -> Result<bool, DbError> {
+        let conn = self.conn.lock().expect("db lock");
+        let changed = conn.execute(
+            "UPDATE friendships
+             SET status = 'accepted', updated_at = ?1
+             WHERE requester_id = ?2 AND addressee_id = ?3 AND status = 'pending'",
+            params![crate::now_ms(), other_id, user_id],
+        )?;
+        if changed == 0 {
+            return Err(DbError::BadRequest("friend request was not found"));
+        }
+        Ok(true)
+    }
+
+    pub fn remove_friendship(&self, user_id: &str, other_id: &str) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("db lock");
+        let changed = conn.execute(
+            "DELETE FROM friendships
+             WHERE (requester_id = ?1 AND addressee_id = ?2)
+                OR (requester_id = ?2 AND addressee_id = ?1)",
+            params![user_id, other_id],
+        )?;
+        Ok(changed > 0)
+    }
+
+    pub fn message_policy(&self, user_id: &str) -> rusqlite::Result<String> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.query_row(
+            "SELECT message_policy FROM users WHERE id = ?1",
+            [user_id],
+            |row| row.get(0),
+        )
+    }
+
+    pub fn set_message_policy(&self, user_id: &str, policy: &str) -> Result<(), DbError> {
+        if !matches!(policy, "everyone" | "friends") {
+            return Err(DbError::BadRequest("unsupported message privacy setting"));
+        }
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "UPDATE users SET message_policy = ?1 WHERE id = ?2",
+            params![policy, user_id],
+        )?;
+        Ok(())
+    }
+
     pub fn list_users(&self, online_ids: &[String]) -> rusqlite::Result<Vec<UserInfo>> {
         let conn = self.conn.lock().expect("db lock");
         let mut stmt = conn.prepare(
             "SELECT id, display_name, avatar_id, username,
                     EXISTS(SELECT 1 FROM crypto_devices WHERE crypto_devices.user_id = users.id),
-                    activity
+                    activity, message_policy
                  FROM users ORDER BY display_name COLLATE NOCASE",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -1071,6 +1245,7 @@ impl Database {
             let username: String = row.get(3)?;
             let e2e_enabled: bool = row.get(4)?;
             let activity: String = row.get(5)?;
+            let message_policy: String = row.get(6)?;
             let online = online_ids.iter().any(|online| online == &id);
             Ok(UserInfo {
                 user_id: id.clone(),
@@ -1086,6 +1261,8 @@ impl Database {
                 post_policy: String::new(),
                 e2e_enabled,
                 group_member_ids: Vec::new(),
+                friend_status: "none".to_string(),
+                message_policy,
             })
         })?;
         rows.collect()
@@ -1974,6 +2151,22 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             music_attachment_id TEXT,
             created_at INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS friendships (
+            requester_id TEXT NOT NULL,
+            addressee_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (requester_id, addressee_id),
+            CHECK (requester_id <> addressee_id),
+            FOREIGN KEY (requester_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (addressee_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_friendships_addressee_status
+            ON friendships(addressee_id, status);
+        CREATE INDEX IF NOT EXISTS idx_friendships_requester_status
+            ON friendships(requester_id, status);
+
         CREATE TABLE IF NOT EXISTS sessions (
             token TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -2196,6 +2389,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     }
     for (column, definition) in [
         ("username", "TEXT NOT NULL DEFAULT ''"),
+        ("message_policy", "TEXT NOT NULL DEFAULT 'everyone'"),
         ("about", "TEXT NOT NULL DEFAULT ''"),
         ("music_attachment_id", "TEXT"),
         ("activity", "TEXT NOT NULL DEFAULT ''"),
