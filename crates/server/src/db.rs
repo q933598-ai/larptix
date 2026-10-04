@@ -1338,8 +1338,7 @@ impl Database {
         user_id: &str,
         activities: &[UserActivity],
     ) -> rusqlite::Result<()> {
-        let raw =
-            serde_json::to_string(activities).map_err(|_| rusqlite::Error::InvalidQuery)?;
+        let raw = serde_json::to_string(activities).map_err(|_| rusqlite::Error::InvalidQuery)?;
         let conn = self.conn.lock().expect("db lock");
         conn.execute(
             "UPDATE users SET activity = ?1 WHERE id = ?2",
