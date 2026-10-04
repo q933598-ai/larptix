@@ -56,6 +56,17 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/api/groups", get(list_groups).post(create_group))
         .route("/api/groups/{id}/members", post(add_group_member))
+        .route("/api/groups/{id}/settings", patch(update_group_settings))
+        .route(
+            "/api/groups/{id}/avatar",
+            post(set_group_avatar).layer(DefaultBodyLimit::max(MAX_IMAGE_BYTES + 64 * 1024)),
+        )
+        .route(
+            "/api/groups/{id}/banner",
+            post(set_group_banner).layer(DefaultBodyLimit::max(MAX_IMAGE_BYTES + 64 * 1024)),
+        )
+        .route("/api/groups/{id}/avatar", get(get_group_avatar))
+        .route("/api/groups/{id}/banner", get(get_group_banner))
         .route("/api/channels", post(create_channel))
         .route(
             "/api/channels/{id}/admins",
@@ -1811,6 +1822,151 @@ async fn remove_channel_admin(
 #[derive(Deserialize)]
 pub struct UpdateChannelSettingsBody {
     pub post_policy: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateGroupSettingsBody {
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+async fn update_group_settings(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateGroupSettingsBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let group = state
+        .db
+        .group(&id)
+        .map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::not_found("group not found"))?;
+    if group.is_channel {
+        return Err(ApiError::bad("use channel settings for a channel"));
+    }
+    if group.admin_ids.first().map(String::as_str) != Some(user.id.as_str()) {
+        return Err(ApiError::bad("only the group creator can change group settings"));
+    }
+    let name = body
+        .name
+        .as_deref()
+        .map(|value| sanitize_display_name(value).map_err(ApiError::bad))
+        .transpose()?
+        .unwrap_or(group.name.clone());
+    let description = body.description.unwrap_or(group.description.clone());
+    if description.chars().count() > 512 {
+        return Err(ApiError::bad("group description is too long"));
+    }
+    state
+        .db
+        .update_group_profile(&id, &name, &description)
+        .map_err(ApiError::db)?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "group_id": id,
+        "name": name,
+        "description": description,
+    })))
+}
+
+async fn set_group_avatar(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    multipart: Multipart,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    set_group_media(&state, &headers, &id, multipart, "avatar_id").await
+}
+
+async fn set_group_banner(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    multipart: Multipart,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    set_group_media(&state, &headers, &id, multipart, "banner_id").await
+}
+
+async fn set_group_media(
+    state: &AppState,
+    headers: &HeaderMap,
+    id: &str,
+    multipart: Multipart,
+    column: &str,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(state, headers)?;
+    let group = state
+        .db
+        .group(id)
+        .map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::not_found("group not found"))?;
+    if group.admin_ids.first().map(String::as_str) != Some(user.id.as_str()) {
+        return Err(ApiError::bad("only the group creator can change group media"));
+    }
+    let saved = save_image(state, &user.id, multipart).await?;
+    let old = state
+        .db
+        .set_group_media(id, column, Some(&saved.id))
+        .map_err(ApiError::db)?;
+    if let Some(old_id) = old {
+        if let Ok(Some(old_file)) = state.db.attachment(&old_id) {
+            let _ = std::fs::remove_file(upload_path(
+                &state.upload_dir,
+                &old_file.id,
+                &old_file.ext,
+            ));
+        }
+    }
+    let key = if column == "avatar_id" { "avatar_url" } else { "banner_url" };
+    Ok(Json(serde_json::json!({
+        key: format!("/api/groups/{id}/{}/", if column == "avatar_id" { "avatar" } else { "banner" }).trim_end_matches('/'),
+    })))
+}
+
+async fn get_group_avatar(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    get_group_media(&state, &headers, &id, "avatar_id").await
+}
+
+async fn get_group_banner(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    get_group_media(&state, &headers, &id, "banner_id").await
+}
+
+async fn get_group_media(
+    state: &AppState,
+    headers: &HeaderMap,
+    id: &str,
+    column: &str,
+) -> Result<Response, ApiError> {
+    let user = require_user(state, headers)?;
+    let group = state
+        .db
+        .group(id)
+        .map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::not_found("group not found"))?;
+    if !group.member_ids.iter().any(|member| member == &user.id) {
+        return Err(ApiError::not_found("group media not found"));
+    }
+    let attachment_id = match column {
+        "avatar_id" => group.avatar_id,
+        "banner_id" => group.banner_id,
+        _ => None,
+    };
+    let attachment_id = attachment_id.ok_or_else(|| ApiError::not_found("group media not found"))?;
+    file_response(state, &attachment_id)
 }
 
 async fn update_channel_settings(
@@ -1834,8 +1990,30 @@ async fn update_channel_settings(
         .db
         .set_channel_post_policy(&id, &body.post_policy)
         .map_err(ApiError::from_db)?;
+
+    let name = body
+        .name
+        .as_deref()
+        .map(|value| sanitize_display_name(value).map_err(ApiError::bad))
+        .transpose()?
+        .unwrap_or(channel.name.clone());
+    let description = body.description.unwrap_or(channel.description.clone());
+    if description.chars().count() > 512 {
+        return Err(ApiError::bad("channel description is too long"));
+    }
+    state
+        .db
+        .update_group_profile(&id, &name, &description)
+        .map_err(ApiError::db)?;
+
     Ok(Json(
-        serde_json::json!({ "ok": true, "channel_id": id, "post_policy": body.post_policy }),
+        serde_json::json!({
+            "ok": true,
+            "channel_id": id,
+            "post_policy": body.post_policy,
+            "name": name,
+            "description": description,
+        }),
     ))
 }
 
