@@ -10,6 +10,7 @@ const {
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { fileURLToPath } = require("url");
 const { spawn } = require("child_process");
 
 const PERSISTENT_PARTITION = "persist:larptrix";
@@ -58,10 +59,14 @@ function isBootstrapUrl(rawUrl) {
       return false;
     }
 
-    return (
-      path.resolve(decodeURIComponent(target.pathname)) ===
-      path.resolve(path.join(__dirname, "..", "bootstrap", "index.html"))
+    const targetPath = path.resolve(fileURLToPath(target));
+    const bootstrapPath = path.resolve(
+      path.join(__dirname, "..", "bootstrap", "index.html"),
     );
+
+    return process.platform === "win32"
+      ? targetPath.toLowerCase() === bootstrapPath.toLowerCase()
+      : targetPath === bootstrapPath;
   } catch {
     return false;
   }
