@@ -5555,13 +5555,31 @@ html[data-theme="catppuccin-mocha"] .call-stage .call-dock-heading > .ghost {
   bottom: 12px;
 }
 
+.call-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
 .call-stage.call-ending-notice {
-  height: min(430px, 58vh);
-  min-height: 300px;
+  width: min(410px, 38vw);
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  overflow: hidden;
+}
+
+.call-stage.call-ending-notice .call-security-note,
+.call-stage.call-ending-notice .call-controls {
+  display: none;
 }
 
 .call-stage.call-ending-notice .call-videos {
-  min-height: 220px;
+  min-height: 270px;
+  max-height: none;
+  aspect-ratio: 1 / 1;
+  border-radius: 6px;
   background:
     radial-gradient(circle at 50% 44%, rgb(73 84 110 / 35%), transparent 48%),
     #08090d;
@@ -5579,36 +5597,53 @@ html[data-theme="catppuccin-mocha"] .call-stage .call-dock-heading > .ghost {
 .call-stage.call-ending-notice .direct-call-participants {
   top: 50%;
   bottom: auto;
+  left: 50%;
   transform: translate(-50%, -50%);
+  width: 100%;
+  max-width: none;
 }
 
 .call-stage.call-ending-notice .call-participant-chip {
   flex-direction: column;
-  min-width: 104px;
-  padding: 10px 12px;
-  background: rgb(14 16 22 / 78%);
-  font-size: .82rem;
+  min-width: 150px;
+  padding: 18px 22px;
+  border-color: rgb(255 255 255 / 12%);
+  background: rgb(14 16 22 / 72%);
+  font-size: .9rem;
   white-space: normal;
   text-align: center;
 }
 
 .call-stage.call-ending-notice .call-participant-chip .avatar {
-  width: 88px;
-  height: 88px;
-  flex-basis: 88px;
-  font-size: 1.5rem;
+  width: 128px;
+  height: 128px;
+  flex-basis: 128px;
+  font-size: 2rem;
+  border-width: 3px;
+}
+
+.call-stage.call-ending-notice .direct-call-join {
+  width: auto;
+  min-width: 132px;
+  min-height: 40px;
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
 }
 
 .direct-call-join {
-  position: absolute;
-  left: 50%;
-  bottom: 16px;
-  z-index: 10;
-  min-width: 120px;
-  min-height: 40px;
-  transform: translateX(-50%);
-  border-radius: 999px;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+  position: static;
+  left: auto;
+  bottom: auto;
+  z-index: auto;
+  transform: none;
+}
+
+.call-heading-actions .call-collapse,
+.call-heading-actions #call-collapse {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  font-size: 1.15rem;
 }
 
 .call-settings-devices {
