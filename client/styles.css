@@ -222,6 +222,29 @@ h1 {
   gap: 12px;
   padding: 8px 16px;
   border-bottom: 1px solid var(--line);
+  min-width: 0;
+  flex-wrap: wrap;
+  overflow: hidden;
+}
+.chat-titlebar > .peer-heading-copy {
+  min-width: 0;
+  flex: 1 1 18rem;
+}
+.chat-titlebar > .verified-badge {
+  flex: 0 0 auto;
+}
+.chat-titlebar > .call-actions {
+  flex: 0 1 60%;
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  justify-content: flex-end;
+  padding-bottom: 1px;
+  scrollbar-width: thin;
+}
+.chat-titlebar > .call-actions > * {
+  flex: 0 0 auto;
 }
 
 .chat-titlebar[hidden],
@@ -994,6 +1017,130 @@ dialog form {
   font-size: 0.72rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.activity-entry {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--muted);
+  text-decoration: none;
+}
+.activity-entry:hover {
+  color: var(--text);
+}
+.activity-entry-compact {
+  line-height: 1.2;
+}
+.activity-entry-icon,
+.activity-entry-image {
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  flex: 0 0 18px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+.activity-entry-icon {
+  display: grid;
+  place-items: center;
+  font-size: .8rem;
+}
+.activity-entry-copy {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+}
+.activity-entry-copy strong,
+.activity-entry-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-entry-copy strong {
+  color: inherit;
+  font-size: .72rem;
+  font-weight: 600;
+}
+.activity-entry-copy small {
+  color: var(--muted);
+  font-size: .66rem;
+}
+.profile-card-activities {
+  display: grid;
+  gap: 5px;
+  min-height: 20px;
+}
+.profile-activity-empty {
+  color: var(--muted);
+}
+.profile-status-editor {
+  display: grid;
+  gap: 6px;
+}
+.profile-status-editor-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+.profile-status-editor-row > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-status-editor-row button {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0;
+}
+.profile-status-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  gap: 6px;
+}
+.profile-status-add-row button {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+}
+.spotify-status-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+.spotify-status-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.spotify-status-copy strong {
+  color: var(--text);
+}
+.spotify-status-copy span {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.spotify-status-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
 }
 
 #legacy-credentials:not([hidden]) {
@@ -5228,6 +5375,12 @@ html[data-theme="catppuccin-mocha"] .log a {
   .shell {
     grid-template-columns: minmax(0, 1fr) !important;
   }
+  .chat-titlebar > .call-actions {
+    flex: 1 1 100%;
+    width: 100%;
+    max-width: 100%;
+    justify-content: flex-start;
+  }
   .people {
     width: calc(100vw - 16px);
   }
@@ -5345,5 +5498,18 @@ html[data-theme="catppuccin-mocha"] .call-stage .call-dock-heading > .ghost {
   }
   .call-mini-avatars {
     max-width: 120px;
+  }
+}
+
+
+/* Multi-status / Spotify final spacing on narrow desktop windows. */
+@media (min-width: 761px) and (max-width: 1180px) {
+  .chat-titlebar {
+    align-items: flex-start;
+  }
+  .chat-titlebar > .call-actions {
+    flex-basis: 100%;
+    width: 100%;
+    justify-content: flex-start;
   }
 }

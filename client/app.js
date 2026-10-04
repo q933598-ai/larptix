@@ -51,8 +51,14 @@ const profileCamera = document.getElementById("profile-camera");
 const profileDevicesStatus = document.getElementById("profile-devices-status");
 const profileEmail = document.getElementById("profile-email");
 const profileEmailLabel = document.getElementById("profile-email-label");
-const profileActivity = document.getElementById("profile-activity");
+const profileCustomActivities = document.getElementById("profile-custom-activities");
+const profileNewActivity = document.getElementById("profile-new-activity");
+const profileAddActivity = document.getElementById("profile-add-activity");
 const showMusicActivity = document.getElementById("show-music-activity");
+const showSpotifyActivity = document.getElementById("show-spotify-activity");
+const spotifyConnect = document.getElementById("spotify-connect");
+const spotifyDisconnect = document.getElementById("spotify-disconnect");
+const spotifyStatus = document.getElementById("spotify-status");
 const forgetE2eDeviceButton = document.getElementById("forget-e2e-device");
 const resetE2eKeysButton = document.getElementById("reset-e2e-keys");
 const resetE2eHelp = document.getElementById("reset-e2e-help");
@@ -260,9 +266,17 @@ let cryptoDialogMode = null;
 let cryptoEnabled = false;
 let cryptoReady = Promise.resolve();
 let cryptoLoadResolve = null;
-let customActivity = "";
+let customActivities = [];
+let localMusicActivity = null;
+let spotifyActivity = null;
+let spotifyAccessToken = "";
+let spotifyRefreshToken = "";
+let spotifyExpiresAt = 0;
+let spotifyPollTimer = null;
+let spotifyConfigPromise = null;
 let customCallRingtoneUrl = null;
 let musicActivityEnabled = localStorage.getItem("larptrix_show_music_activity") !== "0";
+let spotifyActivityEnabled = localStorage.getItem("larptrix_show_spotify_activity") !== "0";
 let matrixCrypto = null;
 let matrixServerName = null;
 let matrixCryptoReady = Promise.resolve(false);
@@ -1781,10 +1795,14 @@ profileOpen.addEventListener("click", async () => {
     profileUsername.value = profile.username;
     profileAbout.value = profile.about;
     if (profileTags) profileTags.value = Array.isArray(profile.tags) ? profile.tags.join(", ") : "";
+    customActivities = getUserActivities(profile)
+      .filter((item) => item.kind === "custom")
+      .slice(0, 3);
+    renderCustomActivityEditor();
     updateOwnProfileCard(profile);
-    customActivity = profile.activity?.startsWith("Listening to ") ? "" : (profile.activity || "");
-    profileActivity.value = customActivity;
     showMusicActivity.checked = musicActivityEnabled;
+    showSpotifyActivity.checked = spotifyActivityEnabled;
+    updateSpotifyUi();
     await populateCallDeviceSelects();
     if (profileMicrophone) profileMicrophone.value = selectedCallDeviceId("audioinput");
     if (profileSpeakers) profileSpeakers.value = selectedCallDeviceId("audiooutput");
@@ -1883,6 +1901,37 @@ settingsTheme.addEventListener("change", () => {
   if (settingsTheme.value === "custom") loadThemeEditor();
   applyTheme(settingsTheme.value);
 });
+showMusicActivity?.addEventListener("change", () => {
+  musicActivityEnabled = showMusicActivity.checked;
+  localStorage.setItem("larptrix_show_music_activity", musicActivityEnabled ? "1" : "0");
+  window.larptixMusicStatus?.refresh?.();
+});
+showSpotifyActivity?.addEventListener("change", () => {
+  spotifyActivityEnabled = showSpotifyActivity.checked;
+  localStorage.setItem("larptrix_show_spotify_activity", spotifyActivityEnabled ? "1" : "0");
+  if (!spotifyActivityEnabled) {
+    spotifyActivity = null;
+    void syncActivities();
+  } else {
+    void pollSpotifyNow();
+  }
+});
+profileAddActivity?.addEventListener("click", () => {
+  const value = profileNewActivity?.value?.trim() || "";
+  if (!value) return;
+  if (customActivities.length >= 3) return;
+  customActivities.push({ kind: "custom", name: value, details: "", url: null, image_url: null });
+  profileNewActivity.value = "";
+  renderCustomActivityEditor();
+});
+profileNewActivity?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    profileAddActivity?.click();
+  }
+});
+spotifyConnect?.addEventListener("click", () => void connectSpotify());
+spotifyDisconnect?.addEventListener("click", () => void disconnectSpotify());
 themeSaveCustom.addEventListener("click", saveCustomTheme);
 themeLoadSaved?.addEventListener("click", () => loadSavedTheme(savedThemeSelect?.value));
 themeDeleteSaved?.addEventListener("click", () => {
@@ -2420,13 +2469,17 @@ profileForm.addEventListener("submit", async (event) => {
       about: profileAbout.value.trim(),
       tags: profileTags ? profileTags.value.split(",").map((tag) => tag.trim()).filter(Boolean) : [],
     });
-    customActivity = profileActivity.value.trim();
+    customActivities = customActivities
+      .map((item) => ({ ...item, kind: "custom" }))
+      .filter((item) => item.name.trim())
+      .slice(0, 3);
     musicActivityEnabled = showMusicActivity.checked;
+    spotifyActivityEnabled = showSpotifyActivity.checked;
     localStorage.setItem("larptrix_show_music_activity", musicActivityEnabled ? "1" : "0");
-    await setMyActivity(customActivity);
+    localStorage.setItem("larptrix_show_spotify_activity", spotifyActivityEnabled ? "1" : "0");
+    await syncActivities();
     window.larptixMusicStatus?.refresh?.();
     renderMe();
-    updateOwnProfileCard({ ...me, activity: profileCardActivity.textContent });
     profileDialog.close();
   } catch (err) {
     profileError.textContent = err.message;
@@ -2473,7 +2526,8 @@ logoutBtn.addEventListener("click", async () => {
   reconnect = false;
   if (socket) socket.close();
   const signedOutUserId = me?.user_id;
-  if (signedOutUserId) await api("POST", "/api/me/activity", { activity: "" }).catch(() => {});
+  if (signedOutUserId) await api("POST", "/api/me/activities", { activities: [] }).catch(() => {});
+  stopSpotifyPolling();
   await api("POST", "/api/logout", {});
   me = null;
   peerId = null;
@@ -3377,6 +3431,8 @@ function signedIn(user, options = {}) {
     cryptoProfileStatus.textContent = `E2E setup error: ${err.message}`;
     return false;
   });
+  void initSpotifyIntegration();
+
   matrixCryptoReady = cryptoReady.then(async (ready) => {
     if (!ready) return false;
     try {
@@ -3577,6 +3633,7 @@ function connect() {
         peerName.hidden = false;
         composer.hidden = false;
         peerName.textContent = msg.peer.display_name;
+        peerName.classList.toggle("has-activities", getUserActivities(msg.peer).length > 0);
         peerMeta.textContent = msg.peer.is_channel
           ? `${msg.peer.subscriber_count || msg.peer.group_member_ids?.length || 0} subscriber(s)`
           : msg.peer.is_group
@@ -4508,7 +4565,9 @@ async function startCall(kind) {
       callPlaceholderRemoteAvatar.replaceChildren();
       callPlaceholderRemoteName.textContent = "No answer";
       callPlaceholderRemoteName.classList.add("call-no-answer");
-    }, 30000);
+      renderDirectCallAvatarStack();
+      updateDirectCallButtons(peerId);
+    }, 20000);
   } catch (err) {
     appendSystem(`Call setup failed: ${err.message || "Check camera and microphone permissions."}`);
     endCall(false);
@@ -4651,7 +4710,7 @@ async function handleCallSignal(signal) {
       callStatus.textContent = "Missed call — Join from the chat when you're ready.";
       renderDirectCallAvatarStack();
       updateDirectCallButtons(peerId);
-    }, 30000);
+    }, 20000);
     incomingCallDialog.showModal();
     return;
   }
@@ -5362,11 +5421,8 @@ function renderUsers() {
       handle.textContent = "@" + user.username;
       name.append(handle);
     }
-    if (!user.is_saved_chat && user.activity && !user.is_group) {
-      const activity = document.createElement("small");
-      activity.className = "person-activity";
-      activity.textContent = user.activity;
-      name.append(activity);
+    if (!user.is_saved_chat && !user.is_group) {
+      renderActivityEntries(name, user, { compact: true, limit: 2 });
     }
     button.append(avatar, name, dot);
 
@@ -7429,35 +7485,391 @@ function openVideoViewer(src, name = "Video") {
   imageViewerVideo.play().catch(() => {});
 }
 
-function updateOwnProfileCard(profile) {
-  profileCardName.textContent = profile.display_name || "";
-  profileCardHandle.textContent = profile.username ? `@${profile.username}` : "";
-  profileCardActivity.textContent = profile.activity || "No activity";
+function getUserActivities(user) {
+  const activities = Array.isArray(user?.activities) ? user.activities : [];
+  if (activities.length) return activities;
+  if (user?.activity) {
+    return [{
+      kind: "custom",
+      name: String(user.activity),
+      details: "",
+      url: null,
+      image_url: null,
+    }];
+  }
+  return [];
 }
 
-async function setMyActivity(activity) {
+function activityIcon(kind) {
+  if (kind === "spotify") return "🎵";
+  if (kind === "music") return "♫";
+  return "💬";
+}
+
+function renderActivityEntries(parent, user, { compact = false, limit = 4 } = {}) {
+  if (!parent) return;
+  const activities = getUserActivities(user).slice(0, limit);
+  for (const activity of activities) {
+    const row = activity.url ? document.createElement("a") : document.createElement("div");
+    row.className = compact ? "person-activity activity-entry activity-entry-compact" : "activity-entry";
+    if (activity.url) {
+      row.href = activity.url;
+      row.target = "_blank";
+      row.rel = "noopener noreferrer";
+    }
+    if (activity.image_url) {
+      const image = document.createElement("img");
+      image.className = "activity-entry-image";
+      image.src = activity.image_url;
+      image.alt = "";
+      image.loading = "lazy";
+      row.append(image);
+    } else {
+      const icon = document.createElement("span");
+      icon.className = "activity-entry-icon";
+      icon.textContent = activityIcon(activity.kind);
+      row.append(icon);
+    }
+    const copy = document.createElement("span");
+    copy.className = "activity-entry-copy";
+    const name = document.createElement("strong");
+    name.textContent = activity.name;
+    copy.append(name);
+    if (activity.details) {
+      const details = document.createElement("small");
+      details.textContent = activity.details;
+      copy.append(details);
+    }
+    row.append(copy);
+    row.title = activity.details ? activity.name + " · " + activity.details : activity.name;
+    parent.append(row);
+  }
+}
+
+function renderCustomActivityEditor() {
+  if (!profileCustomActivities) return;
+  profileCustomActivities.replaceChildren();
+  if (!customActivities.length) {
+    const empty = document.createElement("span");
+    empty.className = "settings-help";
+    empty.textContent = "No custom statuses yet.";
+    profileCustomActivities.append(empty);
+    return;
+  }
+  customActivities.forEach((activity, index) => {
+    const row = document.createElement("div");
+    row.className = "profile-status-editor-row";
+    const text = document.createElement("span");
+    text.textContent = activity.name;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ghost";
+    remove.textContent = "×";
+    remove.title = "Remove status";
+    remove.addEventListener("click", () => {
+      customActivities.splice(index, 1);
+      renderCustomActivityEditor();
+    });
+    row.append(text, remove);
+    profileCustomActivities.append(row);
+  });
+}
+
+async function syncActivities(next = null) {
+  if (!me) return;
+  const source = next || [
+    ...customActivities,
+    ...(musicActivityEnabled && localMusicActivity ? [localMusicActivity] : []),
+    ...(spotifyActivityEnabled && spotifyActivity ? [spotifyActivity] : []),
+  ];
+  const activities = source
+    .filter((item) => item?.name?.trim())
+    .slice(0, 5)
+    .map((item) => ({
+      kind: item.kind || "custom",
+      name: item.name.trim(),
+      details: item.details || "",
+      url: item.url || null,
+      image_url: item.image_url || null,
+    }));
   try {
-    const result = await api("POST", "/api/me/activity", { activity });
-    profileCardActivity.textContent = result.activity || "No activity";
+    const result = await api("POST", "/api/me/activities", { activities });
+    me = { ...me, activity: result.activity || null, activities: result.activities || activities };
+    if (next) {
+      customActivities = [];
+      localMusicActivity = null;
+      spotifyActivity = null;
+    }
+    updateOwnProfileCard(me);
+    renderUsers();
   } catch {
     return;
   }
 }
 
+function updateOwnProfileCard(profile) {
+  profileCardName.textContent = profile.display_name || "";
+  profileCardHandle.textContent = profile.username ? `@${profile.username}` : "";
+  profileCardActivity.replaceChildren();
+  renderActivityEntries(profileCardActivity, profile, { compact: false, limit: 5 });
+  if (!getUserActivities(profile).length) {
+    const empty = document.createElement("span");
+    empty.className = "profile-activity-empty";
+    empty.textContent = "No activity";
+    profileCardActivity.append(empty);
+  }
+}
+
 function updateMusicActivity(trackName, playing) {
-  if (!musicActivityEnabled || customActivity) return;
-  void setMyActivity(playing ? `Listening to ${trackName}` : "");
+  localMusicActivity = playing
+    ? { kind: "music", name: "Listening to " + trackName, details: "Larptrix Music Library", url: null, image_url: null }
+    : null;
+  void syncActivities();
 }
 
 window.larptixMusicStatus = {
   update: updateMusicActivity,
   refresh() {
-    if (!musicActivityEnabled || customActivity) return;
     const player = document.getElementById("music-audio");
     const name = document.getElementById("music-player-name")?.textContent?.trim();
-    if (player && name) updateMusicActivity(name, !player.paused);
+    updateMusicActivity(name || "", Boolean(player && !player.paused && musicActivityEnabled));
   },
 };
+
+function spotifyStorageKey(name) {
+  return "larptrix_spotify_" + (me?.user_id || "anon") + "_" + name;
+}
+
+function loadSpotifyTokens() {
+  spotifyAccessToken = localStorage.getItem(spotifyStorageKey("access_token")) || "";
+  spotifyRefreshToken = localStorage.getItem(spotifyStorageKey("refresh_token")) || "";
+  spotifyExpiresAt = Number(localStorage.getItem(spotifyStorageKey("expires_at")) || "0") || 0;
+}
+
+function storeSpotifyTokens(tokens) {
+  spotifyAccessToken = tokens.access_token || spotifyAccessToken;
+  spotifyRefreshToken = tokens.refresh_token || spotifyRefreshToken;
+  spotifyExpiresAt = Date.now() + Math.max(30, Number(tokens.expires_in || 3600) - 30) * 1000;
+  localStorage.setItem(spotifyStorageKey("access_token"), spotifyAccessToken);
+  if (spotifyRefreshToken) localStorage.setItem(spotifyStorageKey("refresh_token"), spotifyRefreshToken);
+  localStorage.setItem(spotifyStorageKey("expires_at"), String(spotifyExpiresAt));
+}
+
+function clearSpotifyTokens() {
+  for (const key of ["access_token", "refresh_token", "expires_at"]) localStorage.removeItem(spotifyStorageKey(key));
+  spotifyAccessToken = "";
+  spotifyRefreshToken = "";
+  spotifyExpiresAt = 0;
+}
+
+function spotifyRedirectUri() {
+  return window.location.origin + "/";
+}
+
+function randomBase64Url(bytes = 32) {
+  const data = crypto.getRandomValues(new Uint8Array(bytes));
+  return btoa(String.fromCharCode(...data)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function spotifyPkceChallenge(verifier) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  return btoa(String.fromCharCode(...new Uint8Array(digest)))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function getSpotifyConfig() {
+  if (!spotifyConfigPromise) {
+    spotifyConfigPromise = api("GET", "/api/integrations/spotify/config")
+      .finally(() => { spotifyConfigPromise = null; });
+  }
+  return spotifyConfigPromise;
+}
+
+async function connectSpotify() {
+  try {
+    const config = await getSpotifyConfig();
+    if (!config.enabled || !config.client_id) {
+      updateSpotifyUi("Spotify is not configured on this server.");
+      return;
+    }
+    const verifier = randomBase64Url(64);
+    const challenge = await spotifyPkceChallenge(verifier);
+    const state = randomBase64Url(24);
+    sessionStorage.setItem("larptrix_spotify_pkce_verifier", verifier);
+    sessionStorage.setItem("larptrix_spotify_pkce_state", state);
+    const params = new URLSearchParams({
+      response_type: "code",
+      client_id: config.client_id,
+      redirect_uri: spotifyRedirectUri(),
+      scope: "user-read-currently-playing user-read-playback-state",
+      code_challenge_method: "S256",
+      code_challenge: challenge,
+      state,
+    });
+    location.assign("https://accounts.spotify.com/authorize?" + params.toString());
+  } catch (err) {
+    updateSpotifyUi(err.message || "Could not connect Spotify.");
+  }
+}
+
+async function exchangeSpotifyCode(code) {
+  const verifier = sessionStorage.getItem("larptrix_spotify_pkce_verifier");
+  if (!verifier) throw new Error("Spotify login session expired. Connect again.");
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: spotifyRedirectUri(),
+    client_id: (await getSpotifyConfig()).client_id,
+    code_verifier: verifier,
+  });
+  const response = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error_description || data.error || "Spotify token exchange failed.");
+  storeSpotifyTokens(data);
+  sessionStorage.removeItem("larptrix_spotify_pkce_verifier");
+  sessionStorage.removeItem("larptrix_spotify_pkce_state");
+  history.replaceState(null, "", window.location.pathname + window.location.hash);
+}
+
+async function refreshSpotifyAccessToken() {
+  if (!spotifyRefreshToken) return false;
+  const config = await getSpotifyConfig();
+  if (!config.enabled || !config.client_id) return false;
+  const response = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: spotifyRefreshToken,
+      client_id: config.client_id,
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    clearSpotifyTokens();
+    return false;
+  }
+  storeSpotifyTokens(data);
+  return true;
+}
+
+async function spotifyApi(path, retry = true) {
+  if (!spotifyAccessToken) return null;
+  if (spotifyExpiresAt && Date.now() >= spotifyExpiresAt) {
+    if (!await refreshSpotifyAccessToken()) return null;
+  }
+  let response = await fetch("https://api.spotify.com/v1" + path, {
+    headers: { Authorization: "Bearer " + spotifyAccessToken },
+  });
+  if (response.status === 401 && retry && await refreshSpotifyAccessToken()) {
+    response = await fetch("https://api.spotify.com/v1" + path, {
+      headers: { Authorization: "Bearer " + spotifyAccessToken },
+    });
+  }
+  if (response.status === 204) return null;
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error?.message || data.error_description || "Spotify request failed.");
+  }
+  return data;
+}
+
+async function pollSpotifyNow() {
+  if (!me || !spotifyAccessToken || !spotifyActivityEnabled) return;
+  try {
+    const playback = await spotifyApi("/me/player/currently-playing");
+    const item = playback?.item;
+    let next = null;
+    if (playback?.is_playing && item) {
+      const artist = Array.isArray(item.artists)
+        ? item.artists.map((entry) => entry.name).filter(Boolean).join(", ")
+        : item.show?.name || "";
+      next = {
+        kind: "spotify",
+        name: "Listening to " + (item.name || "Spotify"),
+        details: artist || "Spotify",
+        url: item.external_urls?.spotify || null,
+        image_url: item.album?.images?.[0]?.url || item.images?.[0]?.url || null,
+      };
+    }
+    const previous = spotifyActivity;
+    spotifyActivity = next;
+    const changed = JSON.stringify(previous) !== JSON.stringify(next);
+    if (changed) await syncActivities();
+    updateSpotifyUi();
+  } catch (err) {
+    if (spotifyStatus) spotifyStatus.textContent = "Spotify error: " + (err.message || "request failed");
+  }
+}
+
+function startSpotifyPolling() {
+  stopSpotifyPolling();
+  if (!spotifyAccessToken || !spotifyActivityEnabled) return;
+  void pollSpotifyNow();
+  spotifyPollTimer = setInterval(() => void pollSpotifyNow(), 10000);
+}
+
+function stopSpotifyPolling() {
+  if (spotifyPollTimer) clearInterval(spotifyPollTimer);
+  spotifyPollTimer = null;
+}
+
+function updateSpotifyUi(message = null) {
+  const connected = Boolean(spotifyRefreshToken || spotifyAccessToken);
+  if (spotifyConnect) spotifyConnect.hidden = connected;
+  if (spotifyDisconnect) spotifyDisconnect.hidden = !connected;
+  if (spotifyStatus) {
+    spotifyStatus.textContent = message
+      || (connected
+        ? (spotifyActivity ? spotifyActivity.name : "Connected · nothing is playing")
+        : "Not connected");
+  }
+}
+
+async function initSpotifyIntegration() {
+  if (!me) return;
+  loadSpotifyTokens();
+  try {
+    const config = await getSpotifyConfig();
+    if (!config.enabled) {
+      updateSpotifyUi("Spotify is not configured on this server.");
+      return;
+    }
+    const query = new URLSearchParams(window.location.search);
+    const code = query.get("code");
+    const state = query.get("state");
+    const error = query.get("error");
+    if (error) {
+      history.replaceState(null, "", window.location.pathname + window.location.hash);
+      updateSpotifyUi("Spotify authorization was cancelled.");
+      return;
+    }
+    if (code) {
+      const expected = sessionStorage.getItem("larptrix_spotify_pkce_state");
+      if (!expected || state !== expected) {
+        history.replaceState(null, "", window.location.pathname + window.location.hash);
+        throw new Error("Spotify authorization state did not match.");
+      }
+      await exchangeSpotifyCode(code);
+    }
+    updateSpotifyUi();
+    if (spotifyAccessToken || spotifyRefreshToken) startSpotifyPolling();
+  } catch (err) {
+    updateSpotifyUi(err.message || "Spotify is unavailable.");
+  }
+}
+
+async function disconnectSpotify() {
+  stopSpotifyPolling();
+  clearSpotifyTokens();
+  spotifyActivity = null;
+  updateSpotifyUi();
+  await syncActivities();
+}
 
 function chatWallpaperKey(id) {
   return `larptrix_chat_wallpaper_${me.user_id}_${id}`;
@@ -7554,7 +7966,13 @@ async function showPeerProfile(id) {
       tagsEl?.append(chip);
     }
     if (serverEl) serverEl.textContent = "Server: " + (profile.server || location.host);
-    if (activityEl) activityEl.textContent = profile.activity || "No activity";
+    if (activityEl) {
+      activityEl.replaceChildren();
+      renderActivityEntries(activityEl, profile, { compact: false, limit: 5 });
+      if (!getUserActivities(profile).length) {
+        activityEl.textContent = "No activity";
+      }
+    }
     peerProfileDialog.showModal();
   } catch (err) {
     appendSystem(err.message || "Could not load profile.");

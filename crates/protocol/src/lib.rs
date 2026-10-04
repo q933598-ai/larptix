@@ -183,6 +183,18 @@ fn default_channel_post_policy() -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserActivity {
+    pub kind: String,
+    pub name: String,
+    #[serde(default)]
+    pub details: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserInfo {
     pub user_id: String,
     pub display_name: String,
@@ -195,6 +207,8 @@ pub struct UserInfo {
     pub avatar_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activity: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub activities: Vec<UserActivity>,
     #[serde(default)]
     pub is_group: bool,
     #[serde(default)]

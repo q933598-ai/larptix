@@ -3,7 +3,8 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use larptrix_protocol::{
-    attachment_url, avatar_url, AttachmentInfo, ChatMessage, ReactionSummary, UserInfo,
+    attachment_url, avatar_url, AttachmentInfo, ChatMessage, ReactionSummary, UserActivity,
+    UserInfo,
 };
 use rusqlite::{params, Connection, ErrorCode, OptionalExtension, TransactionBehavior};
 use uuid::Uuid;
@@ -1278,6 +1279,12 @@ impl Database {
             let profile_tags: String = row.get(7)?;
             let tags = serde_json::from_str::<Vec<String>>(&profile_tags).unwrap_or_default();
             let online = online_ids.iter().any(|online| online == &id);
+            let activities = if online {
+                decode_activities(&activity)
+            } else {
+                Vec::new()
+            };
+            let legacy_activity = activities.first().map(|item| item.name.clone());
             Ok(UserInfo {
                 user_id: id.clone(),
                 display_name,
@@ -1285,7 +1292,8 @@ impl Database {
                 email: None,
                 online,
                 avatar_url: avatar_id.map(|_| avatar_url(&id)),
-                activity: (online && !activity.is_empty()).then_some(activity),
+                activity: legacy_activity,
+                activities,
                 is_group: false,
                 is_channel: false,
                 admin_ids: Vec::new(),
@@ -1309,6 +1317,32 @@ impl Database {
         conn.execute(
             "UPDATE users SET activity = ?1 WHERE id = ?2",
             params![activity, user_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn profile_activities(&self, user_id: &str) -> rusqlite::Result<Vec<UserActivity>> {
+        let conn = self.conn.lock().expect("db lock");
+        let raw = conn
+            .query_row(
+                "SELECT activity FROM users WHERE id = ?1",
+                [user_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(raw.as_deref().map(decode_activities).unwrap_or_default())
+    }
+
+    pub fn set_activities(
+        &self,
+        user_id: &str,
+        activities: &[UserActivity],
+    ) -> rusqlite::Result<()> {
+        let raw = serde_json::to_string(activities).map_err(|_| rusqlite::Error::InvalidQuery)?;
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "UPDATE users SET activity = ?1 WHERE id = ?2",
+            params![raw, user_id],
         )?;
         Ok(())
     }
@@ -2554,6 +2588,23 @@ impl From<rusqlite::Error> for DbError {
     fn from(err: rusqlite::Error) -> Self {
         Self::Sqlite(err)
     }
+}
+
+fn decode_activities(raw: &str) -> Vec<UserActivity> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Vec::new();
+    }
+    if let Ok(activities) = serde_json::from_str::<Vec<UserActivity>>(value) {
+        return activities;
+    }
+    vec![UserActivity {
+        kind: "custom".to_string(),
+        name: value.to_string(),
+        details: String::new(),
+        url: None,
+        image_url: None,
+    }]
 }
 
 fn map_user(row: &rusqlite::Row<'_>) -> rusqlite::Result<UserRow> {
