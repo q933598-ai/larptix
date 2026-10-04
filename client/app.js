@@ -201,7 +201,7 @@ let users = [];
 let searchResults = [];
 let groups = [];
 let searchRequestId = 0;
-let friendRequests = { incoming: [], outgoing: [] };
+let friendRequests = { friends: [], incoming: [], outgoing: [] };
 let peopleView = "chats";
 let friendRequestsRequestId = 0;
 let friendSearchLoading = false;
@@ -1773,11 +1773,12 @@ async function loadFriendRequests() {
     const result = await api("GET", "/api/friends");
     if (requestId !== friendRequestsRequestId) return;
     friendRequests = {
+      friends: Array.isArray(result?.friends) ? result.friends : [],
       incoming: Array.isArray(result?.incoming) ? result.incoming : [],
       outgoing: Array.isArray(result?.outgoing) ? result.outgoing : [],
     };
     updateFriendRequestsBadge();
-    if (peopleView === "requests") renderUsers();
+    renderUsers();
   } catch (err) {
     if (requestId === friendRequestsRequestId) {
       appendSystem("Friend requests failed: " + (err.message || err));
@@ -4572,7 +4573,7 @@ function renderUsers() {
     ? [...users.filter((user) => user.display_name.toLocaleLowerCase().includes(query)
         || (user.username || "").toLocaleLowerCase().includes(query)),
       ...searchResults]
-    : [savedChatEntry(), ...users, ...groups];
+    : [savedChatEntry(), ...friendRequests.friends, ...groups];
   const dedupe = new Map();
   for (const user of base) {
     if (!user || user.user_id === me?.user_id || dedupe.has(user.user_id)) continue;
