@@ -1478,43 +1478,121 @@ async function getMessagePlaintextPayload(message) {
 async function openForwardDialog(message) {
   const payload = await getMessagePlaintextPayload(message);
   const textValue = payload?.text || message.text || "";
-  if (!textValue) {
+  const hasForwardableContent = Boolean(
+    textValue
+      || payload?.file
+      || (Array.isArray(payload?.files) && payload.files.length)
+      || payload?.gif
+      || payload?.voice
+  );
+  if (!hasForwardableContent) {
     appendSystem("Wait for this message to decrypt before forwarding.");
     return;
   }
+
   const dialog = document.getElementById("forward-message-dialog");
   const list = document.getElementById("forward-message-list");
+  const search = document.getElementById("forward-message-search");
+  const closeButton = document.getElementById("forward-message-close");
   if (!dialog || !list) return;
-  list.replaceChildren();
-  document.getElementById("forward-message-close")?.addEventListener("click", () => dialog.close(), { once: true });
-  for (const target of getChatEntries().filter((item) => item.user_id !== me?.user_id)) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "forward-target";
-    button.textContent = target.is_saved_chat
-      ? "★ Saved Messages"
-      : target.display_name + (target.username ? " · @" + target.username : "");
-    button.addEventListener("click", async () => {
-      try {
-        const extras = {
-          forwarded_from: {
-            sender_id: message.sender_id,
-            sender_name: message.sender_name || "Larptrix user",
-            message_id: message.id,
-          },
-        };
-        if (target.is_saved_chat) {
-          await saveManualSavedMessage(textValue, extras);
-        } else {
-          await sendEncryptedPayloadToPeer(target.user_id, { text: textValue, ...extras });
-        }
-        dialog.close();
-      } catch (err) {
-        appendSystem("Forward failed: " + (err.message || err));
-      }
-    });
-    list.append(button);
+
+  const targets = getChatEntries().filter((item) => item.user_id !== me?.user_id);
+  const forwardPayload = {
+    ...payload,
+    ...(textValue ? { text: textValue } : {}),
+    forwarded_from: {
+      sender_id: message.sender_id,
+      sender_name: message.sender_name || "Larptrix user",
+      message_id: message.id,
+    },
+  };
+  delete forwardPayload.reply_to;
+  if (forwardPayload.forwarded_from?.message_id === message.id) {
+    forwardPayload.forwarded_from = {
+      sender_id: message.sender_id,
+      sender_name: message.sender_name || "Larptrix user",
+      message_id: message.id,
+    };
   }
+
+  const renderTargets = () => {
+    const query = normalizePeopleSearch(search?.value || "");
+    list.replaceChildren();
+
+    const matches = targets.filter((target) => {
+      if (!query) return true;
+      const name = String(target.display_name || "").toLocaleLowerCase();
+      const username = String(target.username || "").toLocaleLowerCase();
+      return name.includes(query) || username.includes(query);
+    });
+
+    if (!matches.length) {
+      const empty = document.createElement("p");
+      empty.className = "search-empty";
+      empty.textContent = "No chats match your search.";
+      list.append(empty);
+      return;
+    }
+
+    for (const target of matches) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "forward-target";
+
+      const avatar = document.createElement("span");
+      avatar.className = "avatar";
+      paintAvatar(
+        avatar,
+        target.is_saved_chat
+          ? { user_id: "saved", display_name: "Saved Messages" }
+          : target,
+      );
+
+      const copy = document.createElement("span");
+      copy.className = "forward-target-copy";
+      const title = document.createElement("strong");
+      title.textContent = target.is_saved_chat ? "Saved Messages" : target.display_name;
+      copy.append(title);
+
+      if (!target.is_saved_chat && target.username) {
+        const handle = document.createElement("small");
+        handle.textContent = "@" + target.username;
+        copy.append(handle);
+      } else if (target.is_group) {
+        const kind = document.createElement("small");
+        kind.textContent = target.is_channel
+          ? (target.subscriber_count || target.group_member_ids?.length || 0) + " subscribers"
+          : (target.group_member_ids?.length || 0) + " members";
+        copy.append(kind);
+      }
+
+      button.append(avatar, copy);
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        try {
+          if (target.is_saved_chat) {
+            await saveManualSavedMessage(textValue, {
+              ...forwardPayload,
+              forwarded_from: { ...forwardPayload.forwarded_from },
+            });
+          } else {
+            await sendEncryptedPayloadToPeer(target.user_id, forwardPayload);
+          }
+          dialog.close();
+        } catch (err) {
+          button.disabled = false;
+          appendSystem("Forward failed: " + (err.message || err));
+        }
+      });
+      list.append(button);
+    }
+  };
+
+  search?.addEventListener("input", renderTargets);
+  search?.removeAttribute("value");
+  if (search) search.value = "";
+  closeButton?.addEventListener("click", () => dialog.close(), { once: true });
+  renderTargets();
   dialog.showModal();
 }
 
@@ -5411,6 +5489,7 @@ async function stopScreenShare() {
 function endCall(notifyPeer) {
   const preserveNoAnswerAvatar = Boolean(callNoAnswer && callPeerId);
   const endedDirectPeerId = callPeerId;
+  const endedDirectCallKind = callMediaKind || "audio";
   clearTimeout(outgoingCallTimeout);
   outgoingCallTimeout = null;
   clearTimeout(incomingCallTimeout);
@@ -5481,7 +5560,7 @@ function endCall(notifyPeer) {
 
   if (preserveNoAnswerAvatar && endedDirectPeerId) {
     lastDirectCallJoinPeerId = endedDirectPeerId;
-    lastDirectCallJoinKind = "audio";
+    lastDirectCallJoinKind = endedDirectCallKind;
     lastDirectCallPeerId = endedDirectPeerId;
     clearTimeout(lastDirectCallAvatarTimeout);
     lastDirectCallAvatarTimeout = setTimeout(() => {
