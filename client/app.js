@@ -1185,8 +1185,6 @@ function appendSavedMessage(item) {
   actions.append(reply, remove);
   li.append(actions);
   logEl.append(li);
-    channelViewObserver.observe(li);
-  }
 }
 
 async function saveManualSavedMessage(text, extras = {}) {
@@ -5393,6 +5391,7 @@ function appendMessage(message) {
   }
 
   li.append(actions);
+  renderMessageReactions(message, li);
   logEl.append(li);
 
   if (encryptedBodyElement) {
