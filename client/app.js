@@ -408,6 +408,9 @@ function renderCachedDecryptedPayload(message, bodyElement, payload) {
   renderMessageDecorations(bodyElement.parentElement, payload);
   bodyElement.textContent =
     typeof payload.text === "string" ? payload.text : JSON.stringify(payload);
+  void renderEncryptedAttachments(message, payload, bodyElement.parentElement).catch((err) => {
+    console.error("[E2E] cached attachment render failed", err);
+  });
   bodyElement.classList.add("decrypted-cached");
 }
 
@@ -6183,7 +6186,11 @@ async function renderGifFavorites() {
 }
 
 async function renderEncryptedAttachment(attachment, metadata, container) {
-  const response = await fetch(attachment.url, { credentials: "same-origin" });
+  const urlForAttachment = attachment?.url
+    || metadata?.url
+    || (metadata?.id ? `/api/attachments/${encodeURIComponent(metadata.id)}` : null);
+  if (!urlForAttachment) throw new Error("Encrypted attachment has no file URL.");
+  const response = await fetch(urlForAttachment, { credentials: "same-origin" });
   if (!response.ok) throw new Error("Encrypted attachment could not be loaded.");
   const ciphertext = await response.arrayBuffer();
   const key = await crypto.subtle.importKey("raw", base64ToBytes(metadata.key), "AES-GCM", false, ["decrypt"]);
@@ -6194,6 +6201,7 @@ async function renderEncryptedAttachment(attachment, metadata, container) {
   );
   const blob = new Blob([plaintext], { type: metadata.mime });
   const url = URL.createObjectURL(blob);
+
   if (metadata.mime === "image/gif") {
     const image = document.createElement("img");
     image.className = "photo";
@@ -6201,6 +6209,7 @@ async function renderEncryptedAttachment(attachment, metadata, container) {
     image.alt = metadata.name;
     image.tabIndex = 0;
     image.setAttribute("role", "button");
+    image.title = "Open image";
     image.addEventListener("click", () => openImageViewer(url, metadata.name));
     container.append(image);
     void addGifToFavorites(blob, metadata.name, container, metadata.gif_id || null);
@@ -6211,8 +6220,19 @@ async function renderEncryptedAttachment(attachment, metadata, container) {
     image.alt = metadata.name;
     image.tabIndex = 0;
     image.setAttribute("role", "button");
+    image.title = "Open image";
     image.addEventListener("click", () => openImageViewer(url, metadata.name));
     container.append(image);
+  } else if (metadata.mime.startsWith("video/")) {
+    const video = document.createElement("video");
+    video.className = "chat-video";
+    video.controls = true;
+    video.playsInline = true;
+    video.preload = "metadata";
+    video.src = url;
+    video.title = metadata.name;
+    video.addEventListener("dblclick", () => openVideoViewer(url, metadata.name));
+    container.append(video);
   } else if (metadata.mime.startsWith("audio/")) {
     const audio = document.createElement("audio");
     audio.controls = true;
@@ -6227,6 +6247,34 @@ async function renderEncryptedAttachment(attachment, metadata, container) {
     container.append(link);
   }
 }
+
+async function renderEncryptedAttachments(message, payload, container) {
+  const files = Array.isArray(payload?.files) && payload.files.length
+    ? payload.files
+    : payload?.file && message?.attachment
+      ? [{
+          ...payload.file,
+          id: message.attachment.id,
+          url: message.attachment.url,
+        }]
+      : [];
+
+  if (!files.length) return;
+
+  const media = document.createElement("div");
+  media.className = files.length > 1 && files.every((file) => String(file?.mime || "").startsWith("image/"))
+    ? "message-media-grid"
+    : "message-media-stack";
+  container.append(media);
+
+  for (const [index, metadata] of files.entries()) {
+    const fallbackAttachment = index === 0
+      ? message?.attachment
+      : Array.isArray(message?.attachments) ? message.attachments[index] : null;
+    await renderEncryptedAttachment(fallbackAttachment, metadata, media);
+  }
+}
+
 
 function bytesToBase64(bytes) {
   let binary = "";
