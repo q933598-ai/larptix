@@ -172,6 +172,10 @@ pub struct UserInfo {
     pub post_policy: String,
     #[serde(default)]
     pub e2e_enabled: bool,
+    #[serde(default)]
+    pub friend_status: String,
+    #[serde(default)]
+    pub message_policy: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub group_member_ids: Vec<String>,
 }
