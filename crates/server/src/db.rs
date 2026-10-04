@@ -1964,6 +1964,7 @@ impl Database {
                     }),
                     _ => None,
                 },
+                attachments: Vec::new(),
                 created_at: row.get(6)?,
             })
         })?;
@@ -2174,7 +2175,8 @@ impl Database {
                         }),
                         _ => None,
                     },
-                    created_at: row.get(6)?,
+                    attachments: Vec::new(),
+                created_at: row.get(6)?,
                 })
             },
         )?;
