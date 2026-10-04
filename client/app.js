@@ -2386,6 +2386,49 @@ recordAudioButton.addEventListener("click", toggleRecording);
 document.getElementById("start-audio-call").addEventListener("click", () => startCall("audio"));
 document.getElementById("start-video-call").addEventListener("click", () => startCall("video"));
 groupMembersOpen?.addEventListener("click", openGroupMembers);
+groupProfileForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const group = groups.find((item) => item.user_id === peerId && item.is_group);
+  if (!group) return;
+  groupProfileError.hidden = true;
+  try {
+    const endpoint = group.is_channel
+      ? "/api/channels/" + encodeURIComponent(group.user_id) + "/settings"
+      : "/api/groups/" + encodeURIComponent(group.user_id) + "/settings";
+    const updated = await api("PATCH", endpoint, {
+      name: groupProfileName.value.trim(),
+      description: groupProfileDescription.value.trim(),
+      ...(group.is_channel ? { post_policy: group.post_policy || "admins" } : {}),
+    });
+
+    if (groupProfileAvatar.files[0]) {
+      await uploadFile(
+        "/api/groups/" + encodeURIComponent(group.user_id) + "/avatar",
+        groupProfileAvatar.files[0],
+      );
+    }
+    if (group.is_channel && groupProfileBanner.files[0]) {
+      await uploadFile(
+        "/api/groups/" + encodeURIComponent(group.user_id) + "/banner",
+        groupProfileBanner.files[0],
+      );
+    }
+
+    await loadGroups();
+    const refreshed = groups.find((item) => item.user_id === group.user_id);
+    if (refreshed) {
+      peerName.textContent = refreshed.display_name;
+      peerMeta.textContent = refreshed.is_channel
+        ? `${refreshed.subscriber_count || refreshed.group_member_ids.length} subscriber(s)`
+        : `${refreshed.group_member_ids.length} member(s)`;
+      renderGroupMembersDialog(refreshed);
+    }
+  } catch (err) {
+    groupProfileError.textContent = err.message || "Could not update group profile.";
+    groupProfileError.hidden = false;
+  }
+});
+
 groupMembersClose?.addEventListener("click", () => groupMembersDialog.close());
 groupCallInvite?.addEventListener("click", openGroupMembers);
 groupCallStart?.addEventListener("click", () => {
@@ -2473,6 +2516,7 @@ setTimeout(() => void checkForClientUpdate({ silent: true }), 12000);
 setInterval(() => void checkForClientUpdate({ silent: true }), 6 * 60 * 60 * 1000);
 setCallPinned(localStorage.getItem("larptrix_call_window_pinned") === "1");
 void loadCustomCallRingtone();
+applyAvatarShape();
 bootstrap();
 
 async function bootstrap() {
@@ -3545,6 +3589,10 @@ function openGroupMembers() {
   const group = groups.find((item) => item.user_id === peerId && item.is_group)
     || groups.find((item) => item.user_id === groupCallGroupId && item.is_group);
   if (!group) return;
+  if (group.is_channel && !group.admin_ids?.includes(me?.user_id)) {
+    appendSystem("Only channel admins can view subscribers.");
+    return;
+  }
   renderGroupMembersDialog(group);
   groupMembersDialog.showModal();
 }
@@ -3654,15 +3702,22 @@ function openChat(id) {
   const selected = getChatEntries().find((user) => user.user_id === id);
   peerVerified.hidden = true;
   if (!selected?.is_group) void refreshPeerVerification(id);
-  document.getElementById("start-audio-call").hidden = false;
-  document.getElementById("start-video-call").hidden = false;
-  document.getElementById("start-audio-call").textContent = selected?.is_group ? "Group audio" : "Call";
-  document.getElementById("start-video-call").textContent = selected?.is_group ? "Group video" : "Video";
-  groupMembersOpen.hidden = !selected?.is_group;
-  groupCallStart.hidden = !selected?.is_group;
-  groupCallStart.textContent = selected?.is_group
+  const isChannel = Boolean(selected?.is_channel);
+  const isGroup = Boolean(selected?.is_group);
+  document.getElementById("start-audio-call").hidden = isGroup || isChannel;
+  document.getElementById("start-video-call").hidden = isGroup || isChannel;
+  document.getElementById("start-audio-call").textContent = "Call";
+  document.getElementById("start-video-call").textContent = "Video";
+  groupMembersOpen.hidden = !isGroup || (isChannel && !selected?.admin_ids?.includes(me?.user_id));
+  groupCallStart.hidden = !isGroup || isChannel;
+  groupCallStart.textContent = isGroup && !isChannel
     ? (activeGroupCalls.get(id)?.active ? "Join group call" : "Group call")
     : "Group call";
+  peerMeta.textContent = isChannel
+    ? `${selected?.subscriber_count || selected?.group_member_ids?.length || 0} subscriber(s)`
+    : isGroup
+      ? `${selected?.group_member_ids?.length || 0} member(s)`
+      : "";
   applyChatWallpaper(id);
   chatTitlebar.hidden = false;
   renderUsers();
@@ -3677,6 +3732,10 @@ async function startGroupCall(kind) {
   if (!peerId || !socket || socket.readyState !== WebSocket.OPEN) return;
   const group = groups.find((item) => item.user_id === peerId && item.is_group);
   if (!group) return;
+  if (group.is_channel) {
+    appendSystem("Channels do not support calls.");
+    return;
+  }
   if (typeof globalThis.RTCPeerConnection !== "function") {
     appendSystem("Group calls require WebRTC support in this desktop runtime.");
     return;
