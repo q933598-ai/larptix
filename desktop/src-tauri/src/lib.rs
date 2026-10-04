@@ -25,6 +25,15 @@ fn validate_http_url(raw: &str) -> Result<Url, String> {
 }
 
 #[tauri::command]
+fn toggle_fullscreen(window: tauri::WebviewWindow) -> Result<bool, String> {
+    let fullscreen = window.is_fullscreen().map_err(|err| err.to_string())?;
+    window
+        .set_fullscreen(!fullscreen)
+        .map_err(|err| err.to_string())?;
+    Ok(!fullscreen)
+}
+
+#[tauri::command]
 fn open_call_in_browser(window: tauri::WebviewWindow, url: String) -> Result<(), String> {
     let target = validate_http_url(&url)?;
 
@@ -84,7 +93,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![open_call_in_browser])
+        .invoke_handler(tauri::generate_handler![open_call_in_browser, toggle_fullscreen])
         .setup(|app| {
             let url = match std::env::var("LARPTRIX_SERVER_URL") {
                 Ok(server) => {
