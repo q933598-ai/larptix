@@ -4320,20 +4320,28 @@ function renderDirectCallTopbar(id = peerId) {
     || pendingIncomingCall?.sender_id
     || lastDirectCallJoinPeerId
     || null;
+  const hasCallSession = Boolean(
+    directCallSessionId
+      || pendingIncomingCall
+      || lastDirectCallJoinPeerId
+  );
   const active = Boolean(
-    remoteId
+    hasCallSession
+      && remoteId
       && !callStage?.hidden
       && isDirectCallActive(remoteId)
       && id === remoteId
   );
   const incoming = Boolean(
-    remoteId
+    hasCallSession
+      && remoteId
       && pendingIncomingCall?.sender_id === remoteId
       && !peerConnection
       && id === remoteId
   );
   const joinable = Boolean(
-    remoteId
+    hasCallSession
+      && remoteId
       && lastDirectCallJoinPeerId === remoteId
       && !peerConnection
       && !directCallOutgoing
@@ -5839,6 +5847,7 @@ function endCall(notifyPeer) {
   callStage.classList.remove("call-collapsed");
   callStage.classList.remove("call-ending-notice");
   renderDirectCallParticipants();
+  renderDirectCallTopbar(peerId);
   const collapseButton = document.getElementById("call-collapse");
   collapseButton.textContent = "−";
   collapseButton.title = "Minimize call";
