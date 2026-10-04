@@ -1620,7 +1620,8 @@ impl Database {
         })?;
         let mut groups = Vec::new();
         for row in rows {
-            let (id, name, is_channel, creator_id, post_policy, description, avatar_id, banner_id) = row?;
+            let (id, name, is_channel, creator_id, post_policy, description, avatar_id, banner_id) =
+                row?;
             let member_ids = conn
                 .prepare("SELECT user_id FROM group_members WHERE group_id = ?1 ORDER BY user_id")?
                 .query_map([&id], |member| member.get(0))?
@@ -1669,7 +1670,17 @@ impl Database {
                 },
             )
             .optional()?;
-        let Some((id, name, is_channel, creator_id, post_policy, description, avatar_id, banner_id)) = group else {
+        let Some((
+            id,
+            name,
+            is_channel,
+            creator_id,
+            post_policy,
+            description,
+            avatar_id,
+            banner_id,
+        )) = group
+        else {
             return Ok(None);
         };
         let member_ids = conn
@@ -1725,7 +1736,8 @@ impl Database {
         let conn = self.conn.lock().expect("db lock");
         let old: Option<String> = {
             let sql = format!("SELECT {column} FROM groups WHERE id = ?1");
-            conn.query_row(&sql, [group_id], |row| row.get(0)).optional()?
+            conn.query_row(&sql, [group_id], |row| row.get(0))
+                .optional()?
         };
         let sql = format!("UPDATE groups SET {column} = ?1 WHERE id = ?2");
         conn.execute(&sql, params![attachment_id, group_id])?;
@@ -2053,7 +2065,10 @@ impl Database {
         let mut reactions_by_message: HashMap<String, Vec<ReactionSummary>> = HashMap::new();
         for row in reaction_rows {
             let (message_id, reaction) = row?;
-            reactions_by_message.entry(message_id).or_default().push(reaction);
+            reactions_by_message
+                .entry(message_id)
+                .or_default()
+                .push(reaction);
         }
 
         for message in &mut messages {
@@ -2084,9 +2099,7 @@ impl Database {
                 }
             }
             message.attachments = attachments;
-            message.reactions = reactions_by_message
-                .remove(&message.id)
-                .unwrap_or_default();
+            message.reactions = reactions_by_message.remove(&message.id).unwrap_or_default();
         }
 
         Ok(messages)
@@ -2232,11 +2245,7 @@ impl Database {
         )
     }
 
-    pub fn message_is_channel(
-        &self,
-        message_id: &str,
-        user_id: &str,
-    ) -> rusqlite::Result<bool> {
+    pub fn message_is_channel(&self, message_id: &str, user_id: &str) -> rusqlite::Result<bool> {
         let conn = self.conn.lock().expect("db lock");
         conn.query_row(
             "SELECT EXISTS(
