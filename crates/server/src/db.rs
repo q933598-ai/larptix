@@ -2022,8 +2022,6 @@ impl Database {
                     _ => None,
                 },
                 attachments: Vec::new(),
-                reactions: Vec::new(),
-                view_count: 0,
                 created_at: row.get(6)?,
             })
         })?;
@@ -2086,7 +2084,9 @@ impl Database {
                 }
             }
             message.attachments = attachments;
-            message.reactions = reactions_by_message.remove(&message.id).unwrap_or_default();
+            message.reactions = reactions_by_message
+                .remove(&message.id)
+                .unwrap_or_default();
         }
 
         Ok(messages)
@@ -2260,12 +2260,12 @@ impl Database {
     ) -> rusqlite::Result<Vec<ReactionSummary>> {
         let conn = self.conn.lock().expect("db lock");
         let mut stmt = conn.prepare(
-            "SELECT emoji, COUNT(*) AS count,
-                    MAX(CASE WHEN user_id = ?2 THEN 1 ELSE 0 END) AS reacted
+            "SELECT emoji, COUNT(*),
+                    MAX(CASE WHEN user_id = ?2 THEN 1 ELSE 0 END)
              FROM message_reactions
              WHERE message_id = ?1
              GROUP BY emoji
-             ORDER BY count DESC, emoji ASC",
+             ORDER BY COUNT(*) DESC, emoji ASC",
         )?;
         let rows = stmt.query_map(params![message_id, viewer_id], |row| {
             Ok(ReactionSummary {
@@ -2274,7 +2274,7 @@ impl Database {
                 reacted: row.get::<_, i64>(2)? != 0,
             })
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
+        rows.collect()
     }
 
     pub fn toggle_message_reaction(
@@ -2285,7 +2285,7 @@ impl Database {
         add: bool,
     ) -> Result<Vec<ReactionSummary>, DbError> {
         let emoji = emoji.trim();
-        if emoji.is_empty() || emoji.chars().count() > 16 {
+        if emoji.is_empty() || emoji.chars().count() > 8 {
             return Err(DbError::BadRequest("invalid reaction"));
         }
         if !self
@@ -2326,7 +2326,43 @@ impl Database {
         }
         let conn = self.conn.lock().expect("db lock");
         conn.execute(
-             pub fn group_history(
+            "INSERT OR IGNORE INTO message_views (message_id, user_id, viewed_at)
+             VALUES (?1, ?2, ?3)",
+            params![message_id, user_id, crate::now_ms()],
+        )?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM message_views WHERE message_id = ?1",
+            [message_id],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    pub fn delete_message(
+        &self,
+        requester_id: &str,
+        conversation_id: &str,
+        message_id: &str,
+    ) -> Result<bool, DbError> {
+        if requester_id.is_empty() || conversation_id.is_empty() || message_id.is_empty() {
+            return Err(DbError::BadRequest(
+                "message deletion is missing required identifiers",
+            ));
+        }
+
+        let conn = self.conn.lock().expect("db lock");
+        let deleted = conn.execute(
+            "DELETE FROM messages
+             WHERE id = ?1
+               AND conversation_id = ?2
+               AND sender_id = ?3",
+            params![message_id, conversation_id, requester_id],
+        )?;
+
+        Ok(deleted > 0)
+    }
+
+    pub fn group_history(
         &self,
         user_id: &str,
         group_id: &str,
@@ -2404,7 +2440,6 @@ impl Database {
             let (message_id, reaction) = row?;
             reactions_by_message.entry(message_id).or_default().push(reaction);
         }
-
         let is_channel: bool = conn.query_row(
             "SELECT is_channel FROM groups WHERE id = ?1",
             [group_id],
@@ -2417,7 +2452,7 @@ impl Database {
                  FROM message_attachments ma
                  JOIN attachments a ON a.id = ma.attachment_id
                  WHERE ma.message_id = ?1
-                 ORDER BY ma.position",
+                 ORDER BY ma.attachment_id",
             )?;
             let rows = stmt.query_map([&message.id], |row| {
                 let id: String = row.get(0)?;
@@ -2439,7 +2474,9 @@ impl Database {
                 }
             }
             message.attachments = attachments;
-            message.reactions = reactions_by_message.remove(&message.id).unwrap_or_default();
+            message.reactions = reactions_by_message
+                .remove(&message.id)
+                .unwrap_or_default();
             if is_channel {
                 message.view_count = conn.query_row(
                     "SELECT COUNT(*) FROM message_views WHERE message_id = ?1",
@@ -2447,37 +2484,6 @@ impl Database {
                     |row| row.get::<_, i64>(0),
                 )? as usize;
             }
-        }
-
-        Ok(messages)
-    }e in &mut messages {
-            let mut stmt = conn.prepare(
-                "SELECT a.id, a.mime, a.file_name, a.byte_size
-                 FROM message_attachments ma
-                 JOIN attachments a ON a.id = ma.attachment_id
-                 WHERE ma.message_id = ?1
-                 ORDER BY ma.position",
-            )?;
-            let rows = stmt.query_map([&message.id], |row| {
-                let id: String = row.get(0)?;
-                Ok(AttachmentInfo {
-                    id: id.clone(),
-                    mime: row.get(1)?,
-                    url: attachment_url(&id),
-                    name: row.get(2)?,
-                    size_bytes: row.get(3)?,
-                })
-            })?;
-            let mut attachments = Vec::new();
-            for row in rows {
-                attachments.push(row?);
-            }
-            if attachments.is_empty() {
-                if let Some(primary) = message.attachment.clone() {
-                    attachments.push(primary);
-                }
-            }
-            message.attachments = attachments;
         }
 
         Ok(messages)
