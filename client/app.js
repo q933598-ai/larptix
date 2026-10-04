@@ -4407,6 +4407,7 @@ async function startCall(kind) {
   if (peerConnection) endCall(true);
   callPeerId = peerId;
   callMediaKind = kind;
+  updateDirectCallButtons(peerId);
   updateCallPlaceholder({ force: true });
   startOutgoingCallRingtone();
   try {
@@ -4795,27 +4796,26 @@ async function toggleScreenShare() {
           ...(supported.restrictOwnAudio ? { restrictOwnAudio: true } : {}),
         }
       : false;
-    // Firefox's screen-capture implementation is happiest with an
-    // unconstrained request. Do not pass audio=false or Chromium-only
-    // presentation hints. Try the two minimal forms before reporting failure.
+    // Always keep a final, completely unconstrained capture fallback.
+    // Chromium/WebView builds get the rich options first (for audio/quality);
+    // Firefox gets only the minimal form because several capture hints are
+    // rejected by some Firefox + PipeWire combinations.
+    const richCaptureOptions = {
+      video: {
+        width: { ideal: resolution.width },
+        height: { ideal: resolution.height },
+        frameRate: { ideal: frameRate },
+      },
+      ...(captureAudio ? { audio: audioConstraints || true } : {}),
+      selfBrowserSurface: "exclude",
+      surfaceSwitching: "include",
+      monitorTypeSurfaces: "include",
+      ...(audioMode === "system" ? { systemAudio: "include" } : {}),
+      ...(audioMode === "window" ? { windowAudio: "window" } : {}),
+    };
     const captureOptions = firefox
       ? [{ video: {} }, { video: true }]
-      : [
-          {
-            video: {
-              width: { ideal: resolution.width },
-              height: { ideal: resolution.height },
-              frameRate: { ideal: frameRate },
-            },
-            ...(captureAudio ? { audio: audioConstraints || true } : {}),
-            selfBrowserSurface: "exclude",
-            surfaceSwitching: "include",
-            monitorTypeSurfaces: "include",
-            ...(audioMode === "system" ? { systemAudio: "include" } : {}),
-            ...(audioMode === "window" ? { windowAudio: "window" } : {}),
-          },
-          { video: true },
-        ];
+      : [richCaptureOptions, { video: true }, { video: {} }];
     let captureError = null;
     for (const options of captureOptions) {
       try {
@@ -4826,7 +4826,8 @@ async function toggleScreenShare() {
       }
     }
     if (!screenMediaStream) {
-      throw captureError || new Error("Could not start screen sharing.");
+      const detail = captureError?.message || captureError?.name || "unknown capture error";
+      throw new Error("Screen capture failed (" + detail + ").");
     }
     const screenTrack = screenMediaStream.getVideoTracks()[0];
     if (!screenTrack) throw new Error("The selected share source has no video track.");
