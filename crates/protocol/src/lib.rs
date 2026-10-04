@@ -20,6 +20,9 @@ pub enum ClientMessage {
         body: String,
         #[serde(default)]
         attachment_id: Option<String>,
+        /// Additional attachments for one message.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachment_ids: Vec<String>,
     },
     /// Permanently delete a message authored by the requesting user.
     Delete {
@@ -189,6 +192,10 @@ pub struct ChatMessage {
     pub body: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachment: Option<AttachmentInfo>,
+    /// All attachments belonging to this message. The legacy attachment
+    /// field remains the primary attachment for wire compatibility.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<AttachmentInfo>,
     pub created_at: i64,
 }
 

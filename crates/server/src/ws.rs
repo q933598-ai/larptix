@@ -148,9 +148,15 @@ pub async fn handle_socket(
                     peer_id,
                     body,
                     attachment_id,
+                    mut attachment_ids,
                 }) => {
+                    if attachment_ids.is_empty() {
+                        if let Some(id) = attachment_id {
+                            attachment_ids.push(id);
+                        }
+                    }
                     if let Err(err) =
-                        send_dm(&state, &user, &peer_id, body, attachment_id, &server_name)
+                        send_dm(&state, &user, &peer_id, body, attachment_ids, &server_name)
                     {
                         send_error(&tx, "bad_send", err);
                     }
@@ -925,12 +931,15 @@ fn send_dm(
     user: &UserRow,
     peer_id: &str,
     body: String,
-    attachment_id: Option<String>,
+    attachment_ids: Vec<String>,
     server_name: &str,
 ) -> Result<(), String> {
     let body = sanitize_body(&body).map_err(|err| err.to_string())?;
-    if body.is_empty() && attachment_id.is_none() {
+    if body.is_empty() && attachment_ids.is_empty() {
         return Err("message is empty".into());
+    }
+    if attachment_ids.len() > 32 {
+        return Err("too many attachments in one message".into());
     }
     if let Some(group) = state.db.group(peer_id).map_err(|err| err.to_string())? {
         if !group.member_ids.iter().any(|member| member == &user.id) {
@@ -945,14 +954,16 @@ fn send_dm(
                 return Err("all group members must have E2E enabled".into());
             }
         }
-        let attachment_is_ciphertext = match attachment_id.as_deref() {
-            Some(id) => state
+        let attachment_is_ciphertext = attachment_ids.iter().all(|id| {
+            state
                 .db
                 .attachment(id)
-                .map_err(|err| err.to_string())?
-                .is_some_and(|attachment| attachment.mime == "application/octet-stream"),
-            None => true,
-        };
+                .map(|attachment| {
+                    attachment
+                        .is_some_and(|attachment| attachment.mime == "application/octet-stream")
+                })
+                .unwrap_or(false)
+        });
         let parsed_envelope = serde_json::from_str::<serde_json::Value>(&body).ok();
         if parsed_envelope
             .as_ref()
@@ -977,7 +988,7 @@ fn send_dm(
         }
         let message = state
             .db
-            .insert_group_dm(&user.id, peer_id, &body, attachment_id.as_deref(), now_ms())
+            .insert_group_dm_with_attachments(&user.id, peer_id, &body, &attachment_ids, now_ms())
             .map_err(db_err)?;
         fanout(state, &message);
         return Ok(());
@@ -1007,14 +1018,15 @@ fn send_dm(
         .db
         .user_has_crypto_devices(&recipient.id)
         .map_err(|err| err.to_string())?;
-    let attachment_is_ciphertext = match attachment_id.as_deref() {
-        Some(id) => state
+    let attachment_is_ciphertext = attachment_ids.iter().all(|id| {
+        state
             .db
             .attachment(id)
-            .map_err(|err| err.to_string())?
-            .is_some_and(|attachment| attachment.mime == "application/octet-stream"),
-        None => true,
-    };
+            .map(|attachment| {
+                attachment.is_some_and(|attachment| attachment.mime == "application/octet-stream")
+            })
+            .unwrap_or(false)
+    });
     validate_e2e_message_with_state(
         state,
         &user.id,
@@ -1022,13 +1034,13 @@ fn send_dm(
         sender_e2e,
         recipient_e2e,
         &body,
-        attachment_id.as_deref(),
+        attachment_ids.first().map(String::as_str),
         attachment_is_ciphertext,
         server_name,
     )?;
     let message = state
         .db
-        .insert_dm(&user.id, peer_id, &body, attachment_id.as_deref(), now_ms())
+        .insert_dm_with_attachments(&user.id, peer_id, &body, &attachment_ids, now_ms())
         .map_err(db_err)?;
     fanout(state, &message);
     Ok(())
@@ -2162,6 +2174,7 @@ mod call_signal_tests {
                 recipient_id: group.id,
                 body: "ciphertext".into(),
                 attachment: None,
+                attachments: Vec::new(),
                 created_at: 1,
             },
         );

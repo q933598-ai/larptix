@@ -1778,9 +1778,10 @@ impl Database {
         }
         let used: i64 = conn.query_row(
             "SELECT COUNT(*)
-             FROM messages m
+             FROM message_attachments ma
+             JOIN messages m ON m.id = ma.message_id
              JOIN conversations c ON c.id = m.conversation_id
-             WHERE m.attachment_id = ?1 AND (
+             WHERE ma.attachment_id = ?1 AND (
                  c.user_a = ?2 OR c.user_b = ?2 OR EXISTS (
                      SELECT 1 FROM group_members gm
                      WHERE gm.user_id = ?2
@@ -1790,6 +1791,7 @@ impl Database {
             params![attachment_id, user_id],
             |row| row.get(0),
         )?;
+
         Ok(used > 0)
     }
 
@@ -1799,6 +1801,20 @@ impl Database {
         recipient_id: &str,
         body: &str,
         attachment_id: Option<&str>,
+        created_at: i64,
+    ) -> Result<ChatMessage, DbError> {
+        let attachment_ids = attachment_id
+            .map(|id| vec![id.to_string()])
+            .unwrap_or_default();
+        self.insert_dm_with_attachments(sender_id, recipient_id, body, &attachment_ids, created_at)
+    }
+
+    pub fn insert_dm_with_attachments(
+        &self,
+        sender_id: &str,
+        recipient_id: &str,
+        body: &str,
+        attachment_ids: &[String],
         created_at: i64,
     ) -> Result<ChatMessage, DbError> {
         if sender_id == recipient_id {
@@ -1813,22 +1829,22 @@ impl Database {
             .map_err(DbError::Sqlite)?
             .ok_or(DbError::BadRequest("unknown user"))?;
 
+        let mut attachment_rows = Vec::new();
+        for attachment_id in attachment_ids {
+            let attachment = self
+                .attachment(attachment_id)
+                .map_err(DbError::Sqlite)?
+                .ok_or(DbError::BadRequest("unknown attachment"))?;
+            if attachment.owner_id != sender_id {
+                return Err(DbError::BadRequest("attachment is not yours"));
+            }
+            attachment_rows.push(attachment);
+        }
+
         let conversation_id = conversation_key(sender_id, recipient_id);
         let (user_a, user_b) = ordered(sender_id, recipient_id);
         let message_id = Uuid::new_v4().to_string();
-        let attachment = match attachment_id {
-            Some(id) => Some(
-                self.attachment(id)
-                    .map_err(DbError::Sqlite)?
-                    .ok_or(DbError::BadRequest("unknown attachment"))?,
-            ),
-            None => None,
-        };
-        if let Some(att) = &attachment {
-            if att.owner_id != sender_id {
-                return Err(DbError::BadRequest("attachment is not yours"));
-            }
-        }
+        let primary_attachment_id = attachment_rows.first().map(|a| a.id.clone());
 
         let conn = self.conn.lock().expect("db lock");
         conn.execute(
@@ -1844,11 +1860,31 @@ impl Database {
                 conversation_id,
                 sender_id,
                 body,
-                attachment.as_ref().map(|a| a.id.as_str()),
+                primary_attachment_id,
                 created_at
             ],
         )
         .map_err(DbError::Sqlite)?;
+
+        for (index, attachment) in attachment_rows.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO message_attachments (message_id, attachment_id, position)
+                 VALUES (?1, ?2, ?3)",
+                params![message_id, attachment.id, index as i64],
+            )
+            .map_err(DbError::Sqlite)?;
+        }
+
+        let attachment_infos = attachment_rows
+            .iter()
+            .map(|a| AttachmentInfo {
+                id: a.id.clone(),
+                mime: a.mime.clone(),
+                url: attachment_url(&a.id),
+                name: a.file_name.clone(),
+                size_bytes: a.byte_size,
+            })
+            .collect::<Vec<_>>();
 
         Ok(ChatMessage {
             id: message_id,
@@ -1856,13 +1892,8 @@ impl Database {
             sender_name: sender.display_name,
             recipient_id: recipient.id,
             body: body.to_string(),
-            attachment: attachment.map(|a| AttachmentInfo {
-                id: a.id.clone(),
-                mime: a.mime,
-                url: attachment_url(&a.id),
-                name: a.file_name,
-                size_bytes: a.byte_size,
-            }),
+            attachment: attachment_infos.first().cloned(),
+            attachments: attachment_infos,
             created_at,
         })
     }
@@ -1933,6 +1964,7 @@ impl Database {
                     }),
                     _ => None,
                 },
+                attachments: Vec::new(),
                 created_at: row.get(6)?,
             })
         })?;
@@ -1941,6 +1973,37 @@ impl Database {
             messages.push(row.map_err(DbError::Sqlite)?);
         }
         messages.reverse();
+
+        for message in &mut messages {
+            let mut stmt = conn.prepare(
+                "SELECT a.id, a.mime, a.file_name, a.byte_size
+                 FROM message_attachments ma
+                 JOIN attachments a ON a.id = ma.attachment_id
+                 WHERE ma.message_id = ?1
+                 ORDER BY ma.position",
+            )?;
+            let rows = stmt.query_map([&message.id], |row| {
+                let id: String = row.get(0)?;
+                Ok(AttachmentInfo {
+                    id: id.clone(),
+                    mime: row.get(1)?,
+                    url: attachment_url(&id),
+                    name: row.get(2)?,
+                    size_bytes: row.get(3)?,
+                })
+            })?;
+            let mut attachments = Vec::new();
+            for row in rows {
+                attachments.push(row?);
+            }
+            if attachments.is_empty() {
+                if let Some(primary) = message.attachment.clone() {
+                    attachments.push(primary);
+                }
+            }
+            message.attachments = attachments;
+        }
+
         Ok(messages)
     }
 
@@ -1950,6 +2013,26 @@ impl Database {
         group_id: &str,
         body: &str,
         attachment_id: Option<&str>,
+        created_at: i64,
+    ) -> Result<ChatMessage, DbError> {
+        let attachment_ids = attachment_id
+            .map(|id| vec![id.to_string()])
+            .unwrap_or_default();
+        self.insert_group_dm_with_attachments(
+            sender_id,
+            group_id,
+            body,
+            &attachment_ids,
+            created_at,
+        )
+    }
+
+    pub fn insert_group_dm_with_attachments(
+        &self,
+        sender_id: &str,
+        group_id: &str,
+        body: &str,
+        attachment_ids: &[String],
         created_at: i64,
     ) -> Result<ChatMessage, DbError> {
         let group = self
@@ -1969,21 +2052,21 @@ impl Database {
             .user_by_id(sender_id)
             .map_err(DbError::Sqlite)?
             .ok_or(DbError::BadRequest("unknown sender"))?;
-        let attachment = match attachment_id {
-            Some(id) => Some(
-                self.attachment(id)
-                    .map_err(DbError::Sqlite)?
-                    .ok_or(DbError::BadRequest("unknown attachment"))?,
-            ),
-            None => None,
-        };
-        if attachment
-            .as_ref()
-            .is_some_and(|file| file.owner_id != sender_id)
-        {
-            return Err(DbError::BadRequest("attachment is not yours"));
+
+        let mut attachment_rows = Vec::new();
+        for attachment_id in attachment_ids {
+            let attachment = self
+                .attachment(attachment_id)
+                .map_err(DbError::Sqlite)?
+                .ok_or(DbError::BadRequest("unknown attachment"))?;
+            if attachment.owner_id != sender_id {
+                return Err(DbError::BadRequest("attachment is not yours"));
+            }
+            attachment_rows.push(attachment);
         }
+
         let message_id = Uuid::new_v4().to_string();
+        let primary_attachment_id = attachment_rows.first().map(|a| a.id.clone());
         let conn = self.conn.lock().expect("db lock");
         conn.execute(
             "INSERT INTO messages (id, conversation_id, sender_id, body, attachment_id, created_at)
@@ -1993,24 +2076,40 @@ impl Database {
                 group_conversation_key(group_id),
                 sender_id,
                 body,
-                attachment.as_ref().map(|file| file.id.as_str()),
+                primary_attachment_id,
                 created_at
             ],
         )
         .map_err(DbError::Sqlite)?;
+
+        for (index, attachment) in attachment_rows.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO message_attachments (message_id, attachment_id, position)
+                 VALUES (?1, ?2, ?3)",
+                params![message_id, attachment.id, index as i64],
+            )
+            .map_err(DbError::Sqlite)?;
+        }
+
+        let attachment_infos = attachment_rows
+            .iter()
+            .map(|a| AttachmentInfo {
+                id: a.id.clone(),
+                mime: a.mime.clone(),
+                url: attachment_url(&a.id),
+                name: a.file_name.clone(),
+                size_bytes: a.byte_size,
+            })
+            .collect::<Vec<_>>();
+
         Ok(ChatMessage {
             id: message_id,
             sender_id: sender.id,
             sender_name: sender.display_name,
             recipient_id: group.id,
             body: body.to_string(),
-            attachment: attachment.map(|file| AttachmentInfo {
-                id: file.id.clone(),
-                mime: file.mime,
-                url: attachment_url(&file.id),
-                name: file.file_name,
-                size_bytes: file.byte_size,
-            }),
+            attachment: attachment_infos.first().cloned(),
+            attachments: attachment_infos,
             created_at,
         })
     }
@@ -2082,12 +2181,44 @@ impl Database {
                         }),
                         _ => None,
                     },
+                    attachments: Vec::new(),
                     created_at: row.get(6)?,
                 })
             },
         )?;
         let mut messages = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         messages.reverse();
+
+        for message in &mut messages {
+            let mut stmt = conn.prepare(
+                "SELECT a.id, a.mime, a.file_name, a.byte_size
+                 FROM message_attachments ma
+                 JOIN attachments a ON a.id = ma.attachment_id
+                 WHERE ma.message_id = ?1
+                 ORDER BY ma.attachment_id",
+            )?;
+            let rows = stmt.query_map([&message.id], |row| {
+                let id: String = row.get(0)?;
+                Ok(AttachmentInfo {
+                    id: id.clone(),
+                    mime: row.get(1)?,
+                    url: attachment_url(&id),
+                    name: row.get(2)?,
+                    size_bytes: row.get(3)?,
+                })
+            })?;
+            let mut attachments = Vec::new();
+            for row in rows {
+                attachments.push(row?);
+            }
+            if attachments.is_empty() {
+                if let Some(primary) = message.attachment.clone() {
+                    attachments.push(primary);
+                }
+            }
+            message.attachments = attachments;
+        }
+
         Ok(messages)
     }
 }
@@ -2374,6 +2505,17 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         );
         CREATE INDEX IF NOT EXISTS messages_conversation_created
             ON messages (conversation_id, created_at);
+        CREATE TABLE IF NOT EXISTS message_attachments (
+            message_id TEXT NOT NULL,
+            attachment_id TEXT NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (message_id, position),
+            UNIQUE (message_id, attachment_id),
+            FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+            FOREIGN KEY (attachment_id) REFERENCES attachments(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_message_attachments_attachment
+            ON message_attachments(attachment_id);
         "#,
     )?;
     for (column, definition) in [

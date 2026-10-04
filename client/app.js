@@ -32,6 +32,7 @@ const keySaved = document.getElementById("key-saved");
 const keyContinue = document.getElementById("key-continue");
 const imageViewer = document.getElementById("image-viewer");
 const imageViewerImage = document.getElementById("image-viewer-image");
+const imageViewerVideo = document.getElementById("image-viewer-video");
 const logoutBtn = document.getElementById("logout");
 const meLabel = document.getElementById("me-label");
 const meUsername = document.getElementById("me-username");
@@ -211,9 +212,9 @@ let mode = "login";
 let legacyLogin = false;
 let registerWithPassword = false;
 let pendingKeyUser = null;
-let pendingAttachment = null;
+let pendingAttachments = [];
 let pendingGif = null;
-let previewUrl = null;
+let previewUrls = [];
 let recorder = null;
 let recordingStream = null;
 let recordedChunks = [];
@@ -407,6 +408,9 @@ function renderCachedDecryptedPayload(message, bodyElement, payload) {
   renderMessageDecorations(bodyElement.parentElement, payload);
   bodyElement.textContent =
     typeof payload.text === "string" ? payload.text : JSON.stringify(payload);
+  void renderEncryptedAttachments(message, payload, bodyElement.parentElement).catch((err) => {
+    console.error("[E2E] cached attachment render failed", err);
+  });
   bodyElement.classList.add("decrypted-cached");
 }
 
@@ -1235,19 +1239,33 @@ async function openForwardDialog(message) {
   dialog.showModal();
 }
 
-async function sendEncryptedPayloadToPeer(targetId, payloadObject, file = null) {
+async function sendEncryptedPayloadToPeer(targetId, payloadObject, files = []) {
   if (!cryptoEnabled || !cryptoDevice) throw new Error("Unlock E2E before sending messages.");
   const peer = getChatEntries().find((item) => item.user_id === targetId);
   if (!peer || peer.is_saved_chat) throw new Error("Invalid message target.");
-  let attachment_id = null;
-  let encryptedFile = null;
-  if (file) {
+
+  const fileList = Array.isArray(files) ? files.filter(Boolean) : (files ? [files] : []);
+  const uploadedAttachments = [];
+  for (const file of fileList) {
     const encrypted = await encryptAttachment(file);
     const uploaded = await uploadFile("/api/upload", encrypted.file);
-    attachment_id = uploaded.id;
-    encryptedFile = encrypted.metadata;
+    uploadedAttachments.push({
+      ...encrypted.metadata,
+      id: uploaded.id,
+      url: uploaded.url || `/api/attachments/${encodeURIComponent(uploaded.id)}`,
+    });
   }
-  const rawPayload = JSON.stringify({ file: encryptedFile, ...payloadObject });
+
+  const rawPayload = JSON.stringify({
+    ...payloadObject,
+    ...(uploadedAttachments.length
+      ? {
+          files: uploadedAttachments,
+          ...(uploadedAttachments.length === 1 ? { file: uploadedAttachments[0] } : {}),
+        }
+      : {}),
+  });
+
   let encryptedBody;
   await withCryptoStateLock(async () => {
     await matrixCryptoReady;
@@ -1293,12 +1311,20 @@ async function sendEncryptedPayloadToPeer(targetId, payloadObject, file = null) 
     }
     await persistCryptoState();
   });
+
   sentPlaintextByCiphertext.set(encryptedBody, rawPayload);
   void cacheSentPlaintext(encryptedBody, rawPayload);
   if (!socket || socket.readyState !== WebSocket.OPEN) throw new Error("Not connected to server.");
-  socket.send(JSON.stringify({ type: "send", peer_id: targetId, body: encryptedBody, attachment_id }));
+  socket.send(JSON.stringify({
+    type: "send",
+    peer_id: targetId,
+    body: encryptedBody,
+    ...(uploadedAttachments.length ? {
+      attachment_id: uploadedAttachments[0].id,
+      attachment_ids: uploadedAttachments.map((attachment) => attachment.id),
+    } : {}),
+  }));
 }
-
 function closeAppMenu() {
   appMenu.hidden = true;
   menuBackdrop.hidden = true;
@@ -1775,14 +1801,22 @@ gifOpenButton.addEventListener("click", () => {
   gifDialog.showModal();
 });
 gifCloseButton.addEventListener("click", () => gifDialog.close());
-document.getElementById("image-viewer-close").addEventListener("click", () => imageViewer.close());
+function closeMediaViewer() {
+  imageViewerVideo?.pause();
+  imageViewerVideo?.removeAttribute("src");
+  imageViewerVideo?.load();
+  imageViewerVideo?.setAttribute("hidden", "");
+  imageViewerImage.hidden = false;
+  imageViewer.close();
+}
+document.getElementById("image-viewer-close").addEventListener("click", closeMediaViewer);
 imageViewer.addEventListener("click", (event) => {
-  if (event.target === imageViewer) imageViewer.close();
+  if (event.target === imageViewer) closeMediaViewer();
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && imageViewer.open) {
     event.preventDefault();
-    imageViewer.close();
+    closeMediaViewer();
   }
 });
 document.getElementById("peer-profile-open").addEventListener("click", () => {
@@ -2242,10 +2276,10 @@ composer.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!peerId) return;
   const body = bodyInput.value.trim();
-  const file = pendingAttachment;
+  const files = [...pendingAttachments];
   if (peerId === SAVED_MESSAGES_ID) {
-    if (!body && !file) return;
-    if (file) {
+    if (!body && !files.length) return;
+    if (files.length) {
       appendSystem("Attachments in Saved Messages are not supported yet.");
       return;
     }
@@ -2260,11 +2294,11 @@ composer.addEventListener("submit", async (event) => {
     await waitForSocketOpen();
     await cryptoReady;
     if (!cryptoDevice) throw new Error("Unlock E2E before sending messages.");
-    if (!body && !file) return;
+    if (!body && !files.length) return;
     await sendEncryptedPayloadToPeer(peerId, {
       text: body,
       ...(replyingToMessage ? { reply_to: replyingToMessage } : {}),
-    }, file);
+    }, files);
     bodyInput.value = "";
     clearAttachment();
     clearReplyComposer();
@@ -2273,9 +2307,18 @@ composer.addEventListener("submit", async (event) => {
   }
 });
 
-photoInput.addEventListener("change", () => queueAttachment(photoInput.files[0]));
-fileInput.addEventListener("change", () => queueAttachment(fileInput.files[0]));
-audioFileInput.addEventListener("change", () => queueAttachment(audioFileInput.files[0]));
+photoInput.addEventListener("change", () => {
+  queueAttachments(photoInput.files);
+  photoInput.value = "";
+});
+fileInput.addEventListener("change", () => {
+  queueAttachments(fileInput.files);
+  fileInput.value = "";
+});
+audioFileInput.addEventListener("change", () => {
+  queueAttachments(audioFileInput.files);
+  audioFileInput.value = "";
+});
 
 let fileDropDepth = 0;
 
@@ -2308,52 +2351,18 @@ function handleChatDragLeave(event) {
   if (fileDropDepth === 0) setFileDropActive(false);
 }
 
-async function sendDroppedFiles(files) {
-  if (!peerId) {
-    appendSystem("Open a chat before dropping files.");
-    return;
-  }
-  if (peerId === SAVED_MESSAGES_ID) {
-    appendSystem("Attachments cannot be added to Saved Messages yet.");
-    return;
-  }
-  if (!cryptoEnabled || !cryptoDevice) {
-    appendSystem("Set up E2E before sending files.");
-    return;
-  }
-
-  const validFiles = files.filter((file) => file && file.size > 0);
-  if (!validFiles.length) return;
-
-  for (const file of validFiles) {
-    try {
-      await waitForSocketOpen();
-      await cryptoReady;
-      if (!cryptoDevice) throw new Error("Unlock E2E before sending files.");
-      await sendEncryptedPayloadToPeer(peerId, {
-        text: "",
-      }, file);
-    } catch (err) {
-      appendSystem(`Could not send “${file.name}”: ${err.message || err}`);
-    }
-  }
-}
-
-async function handleChatDrop(event) {
+function handleChatDrop(event) {
   if (!hasDroppedFiles(event) || event.target.closest("#music-library")) return;
   event.preventDefault();
   fileDropDepth = 0;
   setFileDropActive(false);
-  await sendDroppedFiles([...event.dataTransfer.files]);
+  queueAttachments(event.dataTransfer.files);
 }
 
 chatEl?.addEventListener("dragenter", handleChatDragEnter);
 chatEl?.addEventListener("dragover", handleChatDragOver);
 chatEl?.addEventListener("dragleave", handleChatDragLeave);
-chatEl?.addEventListener("drop", (event) => {
-  void handleChatDrop(event);
-});
-
+chatEl?.addEventListener("drop", handleChatDrop);
 
 recordAudioButton.addEventListener("click", toggleRecording);
 document.getElementById("start-audio-call").addEventListener("click", () => startCall("audio"));
@@ -5077,6 +5086,15 @@ function appendMessage(message) {
         }
       });
       li.append(img);
+    } else if (message.attachment.mime.startsWith("video/")) {
+      const video = document.createElement("video");
+      video.className = "chat-video";
+      video.controls = true;
+      video.playsInline = true;
+      video.preload = "metadata";
+      video.src = message.attachment.url;
+      video.addEventListener("dblclick", () => openVideoViewer(video.src, message.attachment.name));
+      li.append(video);
     } else if (message.attachment.mime.startsWith("audio/")) {
       const audio = document.createElement("audio");
       audio.controls = true;
@@ -5279,9 +5297,9 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
       bodyElement.textContent =
         typeof payload?.text === "string" ? payload.text : JSON.stringify(payload);
 
-      if (payload?.file && message.attachment) {
+      if (payload?.files?.length || (payload?.file && message.attachment)) {
         try {
-          await renderEncryptedAttachment(message.attachment, payload.file, bodyElement.parentElement);
+          await renderEncryptedAttachments(message, payload, bodyElement.parentElement);
         } catch (err) {
           bodyElement.textContent =
             `Could not open encrypted attachment: ${err?.message || String(err)}`;
@@ -5312,9 +5330,9 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
     message._decryptedPayload = payload;
     renderMessageDecorations(bodyElement.parentElement, payload);
     bodyElement.textContent = payload?.text || "Encrypted message sent from this device";
-    if (payload?.file && message.attachment) {
+    if (payload?.files?.length || (payload?.file && message.attachment)) {
       try {
-        await renderEncryptedAttachment(message.attachment, payload.file, bodyElement.parentElement);
+        await renderEncryptedAttachments(message, payload, bodyElement.parentElement);
       } catch (err) {
         bodyElement.textContent = `Could not open encrypted attachment: ${err?.message || String(err)}`;
       }
@@ -5553,24 +5571,20 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
     renderMessageDecorations(bodyElement.parentElement, payload);
     bodyElement.textContent = payload?.text ?? result;
 
-    if (payload?.file && message.attachment) {
+    if (payload?.files?.length || (payload?.file && message.attachment)) {
       try {
-        await renderEncryptedAttachment(
-          message.attachment,
-          payload.file,
-          bodyElement.parentElement
-        );
-          if (payload?.gif) {
-        try {
-          renderSelectedGif(payload.gif, bodyElement.parentElement);
-        } catch (err) {
-          bodyElement.textContent =
-            `Could not open GIF: ${err?.message || String(err)}`;
-        }
-      }
-  } catch (err) {
+        await renderEncryptedAttachments(message, payload, bodyElement.parentElement);
+      } catch (err) {
         bodyElement.textContent =
           `Could not open encrypted attachment: ${err?.message || String(err)}`;
+      }
+    }
+    if (payload?.gif) {
+      try {
+        renderSelectedGif(payload.gif, bodyElement.parentElement);
+      } catch (err) {
+        bodyElement.textContent =
+          `Could not open GIF: ${err?.message || String(err)}`;
       }
     }
   } catch (err) {
@@ -6177,7 +6191,11 @@ async function renderGifFavorites() {
 }
 
 async function renderEncryptedAttachment(attachment, metadata, container) {
-  const response = await fetch(attachment.url, { credentials: "same-origin" });
+  const urlForAttachment = attachment?.url
+    || metadata?.url
+    || (metadata?.id ? `/api/attachments/${encodeURIComponent(metadata.id)}` : null);
+  if (!urlForAttachment) throw new Error("Encrypted attachment has no file URL.");
+  const response = await fetch(urlForAttachment, { credentials: "same-origin" });
   if (!response.ok) throw new Error("Encrypted attachment could not be loaded.");
   const ciphertext = await response.arrayBuffer();
   const key = await crypto.subtle.importKey("raw", base64ToBytes(metadata.key), "AES-GCM", false, ["decrypt"]);
@@ -6188,6 +6206,7 @@ async function renderEncryptedAttachment(attachment, metadata, container) {
   );
   const blob = new Blob([plaintext], { type: metadata.mime });
   const url = URL.createObjectURL(blob);
+
   if (metadata.mime === "image/gif") {
     const image = document.createElement("img");
     image.className = "photo";
@@ -6195,6 +6214,7 @@ async function renderEncryptedAttachment(attachment, metadata, container) {
     image.alt = metadata.name;
     image.tabIndex = 0;
     image.setAttribute("role", "button");
+    image.title = "Open image";
     image.addEventListener("click", () => openImageViewer(url, metadata.name));
     container.append(image);
     void addGifToFavorites(blob, metadata.name, container, metadata.gif_id || null);
@@ -6205,8 +6225,19 @@ async function renderEncryptedAttachment(attachment, metadata, container) {
     image.alt = metadata.name;
     image.tabIndex = 0;
     image.setAttribute("role", "button");
+    image.title = "Open image";
     image.addEventListener("click", () => openImageViewer(url, metadata.name));
     container.append(image);
+  } else if (metadata.mime.startsWith("video/")) {
+    const video = document.createElement("video");
+    video.className = "chat-video";
+    video.controls = true;
+    video.playsInline = true;
+    video.preload = "metadata";
+    video.src = url;
+    video.title = metadata.name;
+    video.addEventListener("dblclick", () => openVideoViewer(url, metadata.name));
+    container.append(video);
   } else if (metadata.mime.startsWith("audio/")) {
     const audio = document.createElement("audio");
     audio.controls = true;
@@ -6222,6 +6253,34 @@ async function renderEncryptedAttachment(attachment, metadata, container) {
   }
 }
 
+async function renderEncryptedAttachments(message, payload, container) {
+  const files = Array.isArray(payload?.files) && payload.files.length
+    ? payload.files
+    : payload?.file && message?.attachment
+      ? [{
+          ...payload.file,
+          id: message.attachment.id,
+          url: message.attachment.url,
+        }]
+      : [];
+
+  if (!files.length) return;
+
+  const media = document.createElement("div");
+  media.className = files.length > 1 && files.every((file) => String(file?.mime || "").startsWith("image/"))
+    ? "message-media-grid"
+    : "message-media-stack";
+  container.append(media);
+
+  for (const [index, metadata] of files.entries()) {
+    const fallbackAttachment = index === 0
+      ? message?.attachment
+      : Array.isArray(message?.attachments) ? message.attachments[index] : null;
+    await renderEncryptedAttachment(fallbackAttachment, metadata, media);
+  }
+}
+
+
 function bytesToBase64(bytes) {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -6232,34 +6291,75 @@ function base64ToBytes(value) {
   return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
 }
 
-function queueAttachment(file) {
-  if (!file) return;
-  pendingAttachment = file;
-  if (previewUrl) URL.revokeObjectURL(previewUrl);
-  previewUrl = URL.createObjectURL(file);
-  attachmentPreview.replaceChildren();
-  if (file.type.startsWith("image/")) {
-    const image = document.createElement("img");
-    image.src = previewUrl;
-    image.alt = "Selected image preview";
-    attachmentPreview.append(image);
-  } else if (file.type.startsWith("audio/")) {
-    const audio = document.createElement("audio");
-    audio.controls = true;
-    audio.src = previewUrl;
-    attachmentPreview.append(audio);
-  }
-  const details = document.createElement("span");
-  details.textContent = `${file.name} · ${formatSize(file.size)}`;
-  attachmentPreview.append(details);
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.className = "ghost";
-  remove.textContent = "Remove";
-  remove.addEventListener("click", clearAttachment);
-  attachmentPreview.append(remove);
-  attachmentPreview.hidden = false;
+function queueAttachments(files) {
+  const incoming = [...files].filter((file) => file instanceof File && file.size > 0);
+  if (!incoming.length) return;
+  pendingAttachments.push(...incoming);
+  renderAttachmentPreview();
 }
+
+function renderAttachmentPreview() {
+  for (const url of previewUrls) URL.revokeObjectURL(url);
+  previewUrls = [];
+  attachmentPreview.replaceChildren();
+
+  pendingAttachments.forEach((file, index) => {
+    const item = document.createElement("div");
+    item.className = "attachment-preview-item";
+    const url = URL.createObjectURL(file);
+    previewUrls.push(url);
+
+    if (file.type.startsWith("image/")) {
+      const image = document.createElement("img");
+      image.src = url;
+      image.alt = file.name;
+      item.append(image);
+    } else if (file.type.startsWith("video/")) {
+      const video = document.createElement("video");
+      video.src = url;
+      video.muted = true;
+      video.playsInline = true;
+      video.preload = "metadata";
+      item.append(video);
+    } else if (file.type.startsWith("audio/")) {
+      const audio = document.createElement("audio");
+      audio.controls = true;
+      audio.src = url;
+      item.append(audio);
+    } else {
+      const fileIcon = document.createElement("span");
+      fileIcon.className = "attachment-file-icon";
+      fileIcon.textContent = "↗";
+      item.append(fileIcon);
+    }
+
+    const info = document.createElement("span");
+    info.className = "attachment-preview-name";
+    info.textContent = file.name;
+    info.title = file.name;
+    item.append(info);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ghost";
+    remove.textContent = "×";
+    remove.title = "Remove attachment";
+    remove.setAttribute("aria-label", `Remove ${file.name}`);
+    remove.addEventListener("click", () => {
+      pendingAttachments.splice(index, 1);
+      renderAttachmentPreview();
+    });
+    item.append(remove);
+    attachmentPreview.append(item);
+  });
+
+  attachmentPreview.hidden = pendingAttachments.length === 0;
+}
+
+function queueAttachment(file) {
+  queueAttachments(file ? [file] : []);
+}
+
 
 function browserLocale() {
   const locale = (navigator.language || "en-US").replace("-", "_").trim();
@@ -6318,10 +6418,10 @@ function renderSelectedGif(gif, container) {
 }
 
 function clearAttachment() {
-  pendingAttachment = null;
+  pendingAttachments = [];
   pendingGif = null;
-  if (previewUrl) URL.revokeObjectURL(previewUrl);
-  previewUrl = null;
+  for (const url of previewUrls) URL.revokeObjectURL(url);
+  previewUrls = [];
   attachmentPreview.replaceChildren();
   attachmentPreview.hidden = true;
   photoInput.value = "";
@@ -6377,9 +6477,26 @@ function appendSystem(text) {
 }
 
 function openImageViewer(src, alt) {
+  if (imageViewerVideo) {
+    imageViewerVideo.pause();
+    imageViewerVideo.removeAttribute("src");
+    imageViewerVideo.hidden = true;
+  }
+  imageViewerImage.hidden = false;
   imageViewerImage.src = src;
   imageViewerImage.alt = alt;
   imageViewer.showModal();
+}
+
+function openVideoViewer(src, name = "Video") {
+  imageViewerImage.hidden = true;
+  imageViewerImage.removeAttribute("src");
+  if (!imageViewerVideo) return;
+  imageViewerVideo.hidden = false;
+  imageViewerVideo.setAttribute("aria-label", name);
+  imageViewerVideo.src = src;
+  imageViewer.showModal();
+  imageViewerVideo.play().catch(() => {});
 }
 
 function updateOwnProfileCard(profile) {

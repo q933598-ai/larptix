@@ -4498,3 +4498,203 @@ html[data-theme="custom"] .music-library {
   pointer-events: none;
   backdrop-filter: blur(3px);
 }
+
+
+/* Multiple attachments queued for one outgoing message. */
+.attachment-preview {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 8px;
+  max-height: 170px;
+  overflow: auto;
+  padding: 8px 12px;
+  background: var(--panel);
+}
+
+.attachment-preview-item {
+  position: relative;
+  min-width: 0;
+  min-height: 76px;
+  display: grid;
+  grid-template-rows: 56px auto;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.attachment-preview-item > img,
+.attachment-preview-item > video {
+  width: 100%;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 5px;
+  background: var(--bg);
+}
+
+.attachment-preview-item > audio {
+  width: 100%;
+  height: 40px;
+  align-self: center;
+}
+
+.attachment-preview-name {
+  min-width: 0;
+  padding-right: 22px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: .62rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-preview-item > button {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: rgb(0 0 0 / 48%);
+  color: var(--text);
+  font-size: .72rem;
+  line-height: 1;
+}
+
+.attachment-file-icon {
+  display: grid;
+  place-items: center;
+  height: 56px;
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--accent);
+  font-size: 1.2rem;
+}
+
+.message-media-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+  max-width: min(520px, 100%);
+}
+
+.message-media-grid .photo {
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
+  margin-top: 0;
+}
+
+.message-media-stack {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  max-width: min(520px, 100%);
+}
+
+.message-media-stack .photo,
+.chat-video {
+  max-width: 100%;
+  border-radius: 8px;
+  margin-top: 0;
+}
+
+.chat-video {
+  display: block;
+  width: min(520px, 100%);
+  max-height: 420px;
+  background: #000;
+  cursor: pointer;
+}
+
+.media-viewer-content {
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+#image-viewer-image,
+#image-viewer-video {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}
+
+#image-viewer-video {
+  background: #000;
+}
+
+@media (max-width: 760px) {
+  .attachment-preview {
+    grid-template-columns: repeat(auto-fill, minmax(82px, 1fr));
+    max-height: 150px;
+  }
+
+  .message-media-grid {
+    grid-template-columns: repeat(2, minmax(90px, 1fr));
+  }
+
+  .message-media-grid .photo {
+    height: 140px;
+  }
+}
+
+/* Only the selected chat gets the persistent blue/active background. */
+.people li > button {
+  background: transparent;
+}
+
+.people li:not(.chat-active) > button,
+.people li:not(.chat-active) > button.active {
+  background: transparent;
+  box-shadow: none;
+}
+
+.people li:not(.chat-active) > button:hover {
+  background: var(--panel-3);
+}
+
+.people li.chat-active > button,
+.people li.chat-active > button.active,
+.people li.chat-active > button:hover {
+  background: var(--me);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* Drop target is an add-to-message area, not an instant-send action. */
+.chat.file-drop-active .log {
+  position: relative;
+}
+.chat.file-drop-active .log::after {
+  content: "Drop files to attach";
+}
+
+
+/* Chat list: only the conversation that is currently open gets the active background. */
+.people li > button {
+  background: transparent;
+}
+.people li:not(.chat-active) > button,
+.people li:not(.chat-active) > button.active {
+  background: transparent;
+  box-shadow: none;
+}
+.people li:not(.chat-active) > button:hover {
+  background: var(--panel-3);
+}
+.people li.chat-active > button,
+.people li.chat-active > button.active,
+.people li.chat-active > button:hover {
+  background: var(--me);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
