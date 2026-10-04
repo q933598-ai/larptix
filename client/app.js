@@ -1190,13 +1190,17 @@ function appendSavedMessage(item) {
   const li = document.createElement("li");
   li.dataset.messageId = item.id;
   li.classList.add("me");
+  const savedAvatar = document.createElement("span");
+  savedAvatar.className = "avatar message-avatar";
+  paintAvatar(savedAvatar, me || { user_id: "saved", display_name: item.sender_name || "Saved" });
+
   const meta = document.createElement("div");
   meta.className = "meta";
   meta.textContent = (item.sender_name || "Saved") + " · " + new Date(item.created_at).toLocaleTimeString();
   const body = document.createElement("div");
   body.textContent = item.text || "";
   renderMessageDecorations(li, item);
-  li.append(meta, body);
+  li.append(savedAvatar, meta, body);
   const actions = document.createElement("div");
   actions.className = "message-actions";
   const reply = document.createElement("button");
