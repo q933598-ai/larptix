@@ -2251,10 +2251,10 @@ composer.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!peerId) return;
   const body = bodyInput.value.trim();
-  const file = pendingAttachment;
+  const files = [...pendingAttachments];
   if (peerId === SAVED_MESSAGES_ID) {
-    if (!body && !file) return;
-    if (file) {
+    if (!body && !files.length) return;
+    if (files.length) {
       appendSystem("Attachments in Saved Messages are not supported yet.");
       return;
     }
@@ -2269,11 +2269,11 @@ composer.addEventListener("submit", async (event) => {
     await waitForSocketOpen();
     await cryptoReady;
     if (!cryptoDevice) throw new Error("Unlock E2E before sending messages.");
-    if (!body && !file) return;
+    if (!body && !files.length) return;
     await sendEncryptedPayloadToPeer(peerId, {
       text: body,
       ...(replyingToMessage ? { reply_to: replyingToMessage } : {}),
-    }, file);
+    }, files);
     bodyInput.value = "";
     clearAttachment();
     clearReplyComposer();
@@ -2282,9 +2282,18 @@ composer.addEventListener("submit", async (event) => {
   }
 });
 
-photoInput.addEventListener("change", () => queueAttachment(photoInput.files[0]));
-fileInput.addEventListener("change", () => queueAttachment(fileInput.files[0]));
-audioFileInput.addEventListener("change", () => queueAttachment(audioFileInput.files[0]));
+photoInput.addEventListener("change", () => {
+  queueAttachments(photoInput.files);
+  photoInput.value = "";
+});
+fileInput.addEventListener("change", () => {
+  queueAttachments(fileInput.files);
+  fileInput.value = "";
+});
+audioFileInput.addEventListener("change", () => {
+  queueAttachments(audioFileInput.files);
+  audioFileInput.value = "";
+});
 
 let fileDropDepth = 0;
 
@@ -2317,52 +2326,18 @@ function handleChatDragLeave(event) {
   if (fileDropDepth === 0) setFileDropActive(false);
 }
 
-async function sendDroppedFiles(files) {
-  if (!peerId) {
-    appendSystem("Open a chat before dropping files.");
-    return;
-  }
-  if (peerId === SAVED_MESSAGES_ID) {
-    appendSystem("Attachments cannot be added to Saved Messages yet.");
-    return;
-  }
-  if (!cryptoEnabled || !cryptoDevice) {
-    appendSystem("Set up E2E before sending files.");
-    return;
-  }
-
-  const validFiles = files.filter((file) => file && file.size > 0);
-  if (!validFiles.length) return;
-
-  for (const file of validFiles) {
-    try {
-      await waitForSocketOpen();
-      await cryptoReady;
-      if (!cryptoDevice) throw new Error("Unlock E2E before sending files.");
-      await sendEncryptedPayloadToPeer(peerId, {
-        text: "",
-      }, file);
-    } catch (err) {
-      appendSystem(`Could not send “${file.name}”: ${err.message || err}`);
-    }
-  }
-}
-
-async function handleChatDrop(event) {
+function handleChatDrop(event) {
   if (!hasDroppedFiles(event) || event.target.closest("#music-library")) return;
   event.preventDefault();
   fileDropDepth = 0;
   setFileDropActive(false);
-  await sendDroppedFiles([...event.dataTransfer.files]);
+  queueAttachments(event.dataTransfer.files);
 }
 
 chatEl?.addEventListener("dragenter", handleChatDragEnter);
 chatEl?.addEventListener("dragover", handleChatDragOver);
 chatEl?.addEventListener("dragleave", handleChatDragLeave);
-chatEl?.addEventListener("drop", (event) => {
-  void handleChatDrop(event);
-});
-
+chatEl?.addEventListener("drop", handleChatDrop);
 
 recordAudioButton.addEventListener("click", toggleRecording);
 document.getElementById("start-audio-call").addEventListener("click", () => startCall("audio"));
