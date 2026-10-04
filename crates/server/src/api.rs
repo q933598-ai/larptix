@@ -2102,14 +2102,7 @@ async fn add_group_member(
                 .groups_for_user(member_id)
                 .map_err(ApiError::db)?
                 .into_iter()
-                .map(|item| GroupInfo {
-                    group_id: item.id,
-                    name: item.name,
-                    member_ids: item.member_ids,
-                    is_channel: item.is_channel,
-                    admin_ids: item.admin_ids,
-                    post_policy: item.post_policy,
-                })
+                .map(group_info)
                 .collect();
             state
                 .hub
