@@ -4809,3 +4809,10 @@ body.avatar-shape-square .menu-avatar,
 body.avatar-shape-square .menu-avatar img {
   border-radius: 7px;
 }
+
+
+/* Keep long histories cheap to lay out. */
+.log > li:not(.e2e-reset-notice) {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 54px;
+}
