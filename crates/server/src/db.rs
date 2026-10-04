@@ -2989,7 +2989,7 @@ mod tests {
         let db = Database::open(Path::new(":memory:")).unwrap();
         let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
         let bob = db.create_key_user("Bob", "bob", "hash-b", 1).unwrap();
-        db.update_profile(&alice.id, "Alice A", "alice_a", "Hello there")
+        db.update_profile(&alice.id, "Alice A", "alice_a", "Hello there", "[]")
             .unwrap();
         let (name, username, about, _) = db.profile_fields(&alice.id).unwrap().unwrap();
         assert_eq!(
