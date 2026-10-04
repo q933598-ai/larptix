@@ -6,6 +6,13 @@ use std::process::Command;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 use url::Url;
 
+#[cfg(not(target_os = "android"))]
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager,
+};
+
 fn validate_http_url(raw: &str) -> Result<Url, String> {
     let url = Url::parse(raw.trim()).map_err(|_| "invalid Larptix URL".to_string())?;
 
@@ -103,11 +110,64 @@ pub fn run() {
                 Err(_) => WebviewUrl::App("index.html".into()),
             };
 
-            WebviewWindowBuilder::new(app, "main", url)
+            let main_window = WebviewWindowBuilder::new(app, "main", url)
                 .title("Larptix")
                 .inner_size(1200.0, 800.0)
                 .min_inner_size(800.0, 560.0)
                 .build()?;
+
+            #[cfg(not(target_os = "android"))]
+            {
+                let show_item = MenuItem::with_id(app, "show", "Show Larptrix", true, None::<&str>)?;
+                let hide_item = MenuItem::with_id(app, "hide", "Hide Larptrix", true, None::<&str>)?;
+                let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&show_item, &hide_item, &quit_item])?;
+
+                let _tray = TrayIconBuilder::new()
+                    .menu(&menu)
+                    .tooltip("Larptrix")
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| match event.id.as_ref() {
+                        "show" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.unminimize();
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        "hide" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.hide();
+                            }
+                        }
+                        "quit" => app.exit(0),
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            let app = tray.app_handle();
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.unminimize();
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    })
+                    .build(app)?;
+
+                let window_for_close = main_window.clone();
+                main_window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = window_for_close.hide();
+                    }
+                });
+            }
 
             Ok(())
         })
