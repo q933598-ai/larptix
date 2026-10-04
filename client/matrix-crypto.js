@@ -68,6 +68,7 @@ export class LarptrixMatrixCrypto {
     this.keyBackupRestoreFailed = false;
     this.decryptionSettings = null;
     this.encryptionSettings = null;
+    this.preparedRoomAt = new Map();
   }
 
   get deviceId() {
@@ -115,6 +116,7 @@ export class LarptrixMatrixCrypto {
   async close() {
     this.machine?.close();
     this.machine = null;
+    this.preparedRoomAt.clear();
   }
 
   async restoreRoomKeyBackup() {
@@ -329,6 +331,16 @@ export class LarptrixMatrixCrypto {
   async prepareRoom(roomId, participantInternalUserIds) {
     if (!this.machine) throw new Error("Matrix E2E is not initialized.");
 
+    const participantsKey = [...new Set(
+      participantInternalUserIds.filter((id) => id && id !== this.internalUserId),
+    )].sort().join(",");
+    const cacheKey = roomId + "|" + participantsKey;
+    const preparedAt = this.preparedRoomAt.get(cacheKey) || 0;
+    // Preparing a room performs several Matrix key-query/to-device round trips.
+    // Reuse a successfully prepared room briefly; membership changes produce a
+    // different cache key, and the TTL lets rotated devices get refreshed.
+    if (Date.now() - preparedAt < 30000) return;
+
     // The WASM SDK takes ownership of UserId objects passed to several
     // methods and invalidates those instances afterwards. Keep a reusable
     // set of UserId objects here and pass clones to every consuming call.
@@ -387,6 +399,7 @@ export class LarptrixMatrixCrypto {
     }
 
     await this.processOutgoingRequests();
+    this.preparedRoomAt.set(cacheKey, Date.now());
     void this.syncRoomKeyBackup();
   }
 

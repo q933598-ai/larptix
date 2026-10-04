@@ -96,6 +96,11 @@ const localVideo = document.getElementById("local-video");
 const localScreenVideo = document.getElementById("local-screen-video");
 const remoteVideo = document.getElementById("remote-video");
 const remoteAudio = document.getElementById("remote-audio");
+const callAudioPlaceholder = document.getElementById("call-audio-placeholder");
+const callPlaceholderLocalAvatar = document.getElementById("call-placeholder-local-avatar");
+const callPlaceholderRemoteAvatar = document.getElementById("call-placeholder-remote-avatar");
+const callPlaceholderLocalName = document.getElementById("call-placeholder-local-name");
+const callPlaceholderRemoteName = document.getElementById("call-placeholder-remote-name");
 const enableCallAudio = document.getElementById("enable-call-audio");
 const incomingCallDialog = document.getElementById("incoming-call-dialog");
 const incomingCallTitle = document.getElementById("incoming-call-title");
@@ -267,6 +272,7 @@ let replyingToMessage = null;
 const decryptedPayloadByMessageId = new Map();
 const mutedRemoteUserIds = new Set();
 const viewedChannelMessages = new Set();
+const matrixDeviceCheckCache = new Map();
 const channelViewObserver = typeof IntersectionObserver === "function"
   ? new IntersectionObserver((entries) => {
       for (const entry of entries) {
@@ -677,17 +683,27 @@ function renderNotificationSettings() {
     "Permission has not been requested yet.";
 }
 
-async function showBrowserNotification(title, body, tag) {
+async function showBrowserNotification(title, body, tag, iconUrl = null) {
   if (!browserNotificationsEnabled()) return;
   if (document.visibilityState === "visible" && document.hasFocus()) return;
   const native = getTauriNotificationApi();
   if (native?.sendNotification) {
-    try { native.sendNotification({ title, body }); } catch {}
+    try {
+      native.sendNotification({
+        title,
+        body,
+        ...(iconUrl ? { icon: iconUrl } : {}),
+      });
+    } catch {}
     return;
   }
   if (typeof Notification !== "function" || Notification.permission !== "granted") return;
   try {
-    const notification = new Notification(title, { body, tag });
+    const notification = new Notification(title, {
+      body,
+      tag,
+      ...(iconUrl ? { icon: iconUrl } : {}),
+    });
     notification.onclick = () => {
       try {
         window.focus();
@@ -795,9 +811,35 @@ function applySavedCallPosition() {
   callStage.style.bottom = "auto";
 }
 
+function updateCallPlaceholder({ force = false } = {}) {
+  if (!callAudioPlaceholder) return;
+  const remoteId = callPeerId || groupCallGroupId;
+  const remoteUser = groups.find((item) => item.user_id === remoteId)
+    || users.find((item) => item.user_id === remoteId)
+    || (pendingIncomingCall?.sender_id
+      ? users.find((item) => item.user_id === pendingIncomingCall.sender_id)
+      : null)
+    || { user_id: remoteId || "remote", display_name: "Larptrix user" };
+
+  callPlaceholderLocalName.textContent = me?.display_name || "You";
+  callPlaceholderRemoteName.textContent = remoteUser.display_name || "Larptrix user";
+  paintAvatar(callPlaceholderLocalAvatar, me || { user_id: "local", display_name: "You" });
+  paintAvatar(callPlaceholderRemoteAvatar, remoteUser);
+
+  const hasRemoteVideo = Boolean(
+    remoteVideo?.srcObject instanceof MediaStream
+      && remoteVideo.srcObject.getVideoTracks().some((track) => track.readyState !== "ended"),
+  );
+  const hasLocalVideo = Boolean(
+    localMediaStream?.getVideoTracks().some((track) => track.readyState !== "ended" && track.enabled),
+  );
+  callAudioPlaceholder.hidden = !force && (hasRemoteVideo || hasLocalVideo || Boolean(screenMediaStream));
+}
+
 function showCallStage() {
   callStage.hidden = false;
   applySavedCallPosition();
+  updateCallPlaceholder({ force: !localMediaStream?.getVideoTracks().length });
   renderCallParticipantSettings();
 }
 
@@ -1155,13 +1197,17 @@ function appendSavedMessage(item) {
   const li = document.createElement("li");
   li.dataset.messageId = item.id;
   li.classList.add("me");
+  const savedAvatar = document.createElement("span");
+  savedAvatar.className = "avatar message-avatar";
+  paintAvatar(savedAvatar, me || { user_id: "saved", display_name: item.sender_name || "Saved" });
+
   const meta = document.createElement("div");
   meta.className = "meta";
   meta.textContent = (item.sender_name || "Saved") + " · " + new Date(item.created_at).toLocaleTimeString();
   const body = document.createElement("div");
   body.textContent = item.text || "";
   renderMessageDecorations(li, item);
-  li.append(meta, body);
+  li.append(savedAvatar, meta, body);
   const actions = document.createElement("div");
   actions.className = "message-actions";
   const reply = document.createElement("button");
@@ -1180,11 +1226,7 @@ function appendSavedMessage(item) {
   });
   actions.append(reply, remove);
   li.append(actions);
-  renderMessageReactions(message, li);
   logEl.append(li);
-  if (channelViewObserver && groups.some((item) => item.user_id === peerId && item.is_channel)) {
-    channelViewObserver.observe(li);
-  }
 }
 
 async function saveManualSavedMessage(text, extras = {}) {
@@ -1344,7 +1386,9 @@ async function sendEncryptedPayloadToPeer(targetId, payloadObject, files = []) {
       }
       encryptedBody = JSON.stringify({ version: 2, message_type: "message", sender_device_id: cryptoDevice.device_id(), ciphertexts });
     }
-    await persistCryptoState();
+    if (!matrixReady) {
+      await persistCryptoState();
+    }
   });
 
   sentPlaintextByCiphertext.set(encryptedBody, rawPayload);
@@ -2499,6 +2543,22 @@ document.getElementById("toggle-camera").addEventListener("click", toggleCamera)
 document.getElementById("toggle-screen-share").addEventListener("click", toggleScreenShare);
 document.getElementById("toggle-call-fullscreen").addEventListener("click", async () => {
   try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+      return;
+    }
+
+    // During screen sharing, fullscreen the actual shared video rather than
+    // the floating call window. This removes the call controls from over the
+    // demo and matches Discord-style screen-share fullscreen behavior.
+    const screenTarget = screenMediaStream
+      ? localScreenVideo
+      : (callStage.classList.contains("screen-sharing") ? remoteVideo : null);
+    if (screenTarget && !screenTarget.hidden) {
+      await screenTarget.requestFullscreen();
+      return;
+    }
+
     if (globalThis.larptrixDesktop?.toggleFullscreen) {
       const fullscreen = await globalThis.larptrixDesktop.toggleFullscreen();
       callStage.classList.toggle("native-window-fullscreen", Boolean(fullscreen));
@@ -2510,8 +2570,7 @@ document.getElementById("toggle-call-fullscreen").addEventListener("click", asyn
       callStage.classList.toggle("native-window-fullscreen", Boolean(fullscreen));
       return;
     }
-    if (document.fullscreenElement) await document.exitFullscreen();
-    else await document.getElementById("call-videos").requestFullscreen();
+    await document.getElementById("call-videos").requestFullscreen();
   } catch (err) {
     appendSystem(err.message || "Fullscreen is not available in this app.");
   }
@@ -2975,6 +3034,9 @@ function setPeerVerified(userId, verified) {
 async function waitForMatrixDevices(userIds, { attempts = 8, delayMs = 350 } = {}) {
   const ids = [...new Set(userIds.filter((id) => id && id !== me?.user_id))];
   if (!ids.length) return;
+  const cacheKey = ids.slice().sort().join(",");
+  const cachedAt = matrixDeviceCheckCache.get(cacheKey) || 0;
+  if (Date.now() - cachedAt < 15000) return;
 
   let lastMissing = [];
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -2992,7 +3054,10 @@ async function waitForMatrixDevices(userIds, { attempts = 8, delayMs = 350 } = {
       }
     }));
 
-    if (!lastMissing.length) return;
+    if (!lastMissing.length) {
+      matrixDeviceCheckCache.set(cacheKey, Date.now());
+      return;
+    }
     if (attempt + 1 < attempts) {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
@@ -3404,7 +3469,13 @@ function connect() {
         if (isForOpenChat(msg.message)) appendMessage(msg.message);
         if (msg.message?.sender_id !== me?.user_id) {
           playIncomingMessageSound();
-          showBrowserNotification(msg.message.sender_name || "Larptrix", "New message", "message-" + msg.message.sender_id);
+          const sender = users.find((user) => user.user_id === msg.message.sender_id);
+          showBrowserNotification(
+            msg.message.sender_name || "Larptrix",
+            "New message",
+            "message-" + msg.message.sender_id,
+            sender?.avatar_url || null,
+          );
         }
         break;
       case "presence":
@@ -4006,7 +4077,12 @@ async function handleGroupCallSignal(signal) {
     incomingCallKind.textContent = (callMediaKind === "video" ? "Group video" : "Group") + " call · " + group.display_name;
     document.getElementById("accept-call").textContent = "Join";
     startCallRingtone();
-    showBrowserNotification(incomingCallTitle.textContent || "Incoming group call", incomingCallKind.textContent || "Group call", "group-call-" + groupId);
+    showBrowserNotification(
+      incomingCallTitle.textContent || "Incoming group call",
+      incomingCallKind.textContent || "Group call",
+      "group-call-" + groupId,
+      group.group_avatar_url || group.avatar_url || null,
+    );
     incomingCallDialog.showModal();
     return;
   }
@@ -4204,6 +4280,7 @@ async function startCall(kind) {
   if (peerConnection) endCall(true);
   callPeerId = peerId;
   callMediaKind = kind;
+  updateCallPlaceholder({ force: true });
   startOutgoingCallRingtone();
   try {
     localMediaStream = await acquireCallMedia(kind);
@@ -4263,6 +4340,7 @@ async function createPeerConnection() {
   });
   connection.addEventListener("track", (event) => {
     if (event.track.kind === "audio") {
+      updateCallPlaceholder();
       const volume = Number(localStorage.getItem("larptrix_call_audio_volume"));
       if (Number.isFinite(volume)) remoteAudio.volume = Math.min(1, Math.max(0, volume));
       const stream = remoteAudio.srcObject instanceof MediaStream
@@ -4283,6 +4361,8 @@ async function createPeerConnection() {
       });
     } else if (event.streams[0]) {
       remoteVideo.srcObject = event.streams[0];
+      remoteVideo.hidden = false;
+      callAudioPlaceholder.hidden = true;
       remoteVideo.play().catch(() => {});
     }
   });
@@ -4409,6 +4489,7 @@ async function acceptIncomingCall() {
   stopCallRingtone();
   incomingCallDialog.close();
   peerId = incoming.sender_id;
+  updateCallPlaceholder({ force: true });
   renderUsers();
   if (socket?.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "open", peer_id: peerId }));
@@ -4470,10 +4551,11 @@ async function flushIceCandidates() {
 }
 
 function callAudioConstraints() {
+  const supported = navigator.mediaDevices?.getSupportedConstraints?.() || {};
   return {
-    echoCancellation: true,
-    noiseSuppression: readStoredBool(NOISE_SUPPRESSION_KEY, true),
-    autoGainControl: true,
+    ...(supported.echoCancellation ? { echoCancellation: true } : {}),
+    ...(supported.noiseSuppression ? { noiseSuppression: readStoredBool(NOISE_SUPPRESSION_KEY, true) } : {}),
+    ...(supported.autoGainControl ? { autoGainControl: true } : {}),
   };
 }
 
@@ -4494,8 +4576,15 @@ async function acquireCallMedia(kind) {
     : [false];
   const attempts = [];
   if (hasMicrophone) {
+    // Prefer the browser's native audio profile first. Some Linux/PipeWire
+    // devices reject processing constraints even though plain microphone
+    // capture works perfectly.
+    for (const video of videoAttempts) attempts.push({ audio: true, video });
     for (const video of videoAttempts) attempts.push({ audio: callAudioConstraints(), video });
-    if (kind === "video") attempts.push({ audio: callAudioConstraints(), video: false });
+    if (kind === "video") {
+      attempts.push({ audio: true, video: false });
+      attempts.push({ audio: callAudioConstraints(), video: false });
+    }
   }
   if (kind === "video") {
     for (const video of videoAttempts) attempts.push({ audio: false, video });
@@ -4578,19 +4667,25 @@ async function toggleScreenShare() {
           ...(supported.restrictOwnAudio ? { restrictOwnAudio: true } : {}),
         }
       : false;
-    screenMediaStream = await navigator.mediaDevices.getDisplayMedia({
-      video: {
-        width: { ideal: resolution.width, max: resolution.width },
-        height: { ideal: resolution.height, max: resolution.height },
-        frameRate: { ideal: frameRate, max: frameRate },
-      },
-      audio: audioConstraints,
-      selfBrowserSurface: "exclude",
-      surfaceSwitching: "include",
-      monitorTypeSurfaces: "include",
-      systemAudio: audioMode === "system" ? "include" : "exclude",
-      windowAudio: audioMode === "window" ? "window" : "exclude",
-    });
+    // Firefox rejects several Chromium-specific display-capture
+    // constraints with "Invalid capture constraints". Keep its request
+    // deliberately minimal and apply quality after the source is selected.
+    const displayConstraints = firefox
+      ? { video: true, audio: false }
+      : {
+          video: {
+            width: { ideal: resolution.width },
+            height: { ideal: resolution.height },
+            frameRate: { ideal: frameRate },
+          },
+          audio: audioConstraints,
+          selfBrowserSurface: "exclude",
+          surfaceSwitching: "include",
+          monitorTypeSurfaces: "include",
+          ...(audioMode === "system" ? { systemAudio: "include" } : {}),
+          ...(audioMode === "window" ? { windowAudio: "window" } : {}),
+        };
+    screenMediaStream = await navigator.mediaDevices.getDisplayMedia(displayConstraints);
     const screenTrack = screenMediaStream.getVideoTracks()[0];
     if (!screenTrack) throw new Error("The selected share source has no video track.");
     try {
@@ -4702,6 +4797,7 @@ async function stopScreenShare() {
   localScreenVideo.srcObject = null;
   localScreenVideo.muted = true;
   localScreenVideo.hidden = true;
+  updateCallPlaceholder({ force: !localMediaStream?.getVideoTracks().length });
   document.getElementById("toggle-screen-share").textContent = "Share screen";
   if (callStatus.textContent.startsWith("Sharing ")) callStatus.textContent = "Connected";
 }
@@ -4770,6 +4866,8 @@ function endCall(notifyPeer) {
   localVideo.srcObject = null;
   localScreenVideo.srcObject = null;
   localScreenVideo.hidden = true;
+  callAudioPlaceholder.hidden = true;
+  callStage.classList.remove("screen-sharing");
   remoteVideo.srcObject = null;
   remoteVideo.hidden = false;
   remoteAudio.srcObject = null;
@@ -4975,10 +5073,18 @@ async function loadGroups() {
       post_policy: group.post_policy || (group.is_channel ? "admins" : "members"),
       group_member_ids: Array.isArray(group.member_ids) ? group.member_ids : [],
       group_description: group.description || "",
-      group_avatar_url: group.avatar_url || null,
-      group_banner_url: group.banner_url || null,
-      avatar_url: group.avatar_url || null,
-      banner_url: group.banner_url || null,
+      group_avatar_url: group.avatar_url
+        ? group.avatar_url + (group.avatar_url.includes("?") ? "&" : "?") + "v=" + Date.now()
+        : null,
+      group_banner_url: group.banner_url
+        ? group.banner_url + (group.banner_url.includes("?") ? "&" : "?") + "v=" + Date.now()
+        : null,
+      avatar_url: group.avatar_url
+        ? group.avatar_url + (group.avatar_url.includes("?") ? "&" : "?") + "v=" + Date.now()
+        : null,
+      banner_url: group.banner_url
+        ? group.banner_url + (group.banner_url.includes("?") ? "&" : "?") + "v=" + Date.now()
+        : null,
       subscriber_count: Number(group.subscriber_count || group.member_ids?.length || 0),
     }));
     renderUsers();
@@ -5207,10 +5313,33 @@ function appendMessage(message) {
   li.dataset.messageId = message.id;
   if (me && message.sender_id === me.user_id) li.classList.add("me");
 
+  const senderUser = message.sender_id === me?.user_id
+    ? me
+    : users.find((user) => user.user_id === message.sender_id)
+      || groups.find((group) => group.user_id === message.sender_id)
+      || { user_id: message.sender_id, display_name: message.sender_name || "Larptrix user" };
+
+  const messageAvatar = document.createElement("span");
+  messageAvatar.className = "avatar message-avatar";
+  paintAvatar(messageAvatar, senderUser);
+
   const meta = document.createElement("div");
   meta.className = "meta";
   meta.textContent = (message.sender_name || "Larptrix user") + " · " + new Date(message.created_at).toLocaleTimeString();
-  li.append(meta);
+
+  const previousRow = logEl.lastElementChild;
+  const previousMessage = previousRow?.dataset?.messageId
+    ? messagesById.get(previousRow.dataset.messageId)
+    : null;
+  const groupedWithPrevious = Boolean(
+    previousMessage
+      && previousMessage.sender_id === message.sender_id
+      && Math.abs(Number(message.created_at) - Number(previousMessage.created_at)) <= 120000
+      && !previousRow.classList.contains("e2e-reset-notice")
+  );
+  if (groupedWithPrevious) li.classList.add("message-grouped");
+
+  li.append(messageAvatar, meta);
 
   let encryptedBodyElement = null;
   let messageBodyForSave = null;
@@ -5320,6 +5449,7 @@ function appendMessage(message) {
   }
 
   li.append(actions);
+  renderMessageReactions(message, li);
   logEl.append(li);
 
   if (encryptedBodyElement) {

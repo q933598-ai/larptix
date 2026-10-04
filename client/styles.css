@@ -325,6 +325,66 @@ h1 {
   pointer-events: none;
 }
 
+.call-audio-placeholder {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  justify-items: center;
+  gap: 18px;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 50% 42%, rgb(73 84 110 / 35%), transparent 48%),
+    #08090d;
+}
+
+.call-placeholder-user {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  min-width: 0;
+  max-width: 180px;
+  text-align: center;
+}
+
+.call-placeholder-user .avatar {
+  width: 88px;
+  height: 88px;
+  font-size: 1.6rem;
+  border: 2px solid var(--line-bright);
+  box-shadow: 0 8px 30px rgb(0 0 0 / 35%);
+}
+
+.call-placeholder-user strong {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.call-videos > video:fullscreen {
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none !important;
+  max-height: none !important;
+  aspect-ratio: auto !important;
+  object-fit: contain !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: #050506;
+}
+
+.call-videos > video:fullscreen::-webkit-media-controls {
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+.call-videos > video:fullscreen:hover::-webkit-media-controls {
+  opacity: 1;
+}
+
 .call-videos:fullscreen {
   width: 100vw;
   height: 100vh;
@@ -383,9 +443,10 @@ h1 {
 }
 
 .log li {
+  position: relative;
   max-width: 52rem;
   margin: 0 0 12px;
-  padding: 10px 12px;
+  padding: 10px 12px 10px 56px;
   border-radius: 10px;
   background: rgb(24 26 33 / 94%);
   border: 1px solid var(--line);
@@ -448,6 +509,25 @@ h1 {
 
 .attachment-preview button {
   margin-left: auto;
+}
+
+.message-avatar {
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  width: 34px;
+  height: 34px;
+  font-size: .82rem;
+}
+
+.message-grouped {
+  margin-top: -8px;
+  padding-top: 2px !important;
+}
+
+.message-grouped .message-avatar,
+.message-grouped .meta {
+  display: none;
 }
 
 .meta {
@@ -2949,6 +3029,13 @@ html[data-theme="custom"] .music-library {
 .people li > button.active {
   background: var(--panel-2);
   color: var(--text);
+}
+.people .person-name,
+.people .person-name > span {
+  color: var(--text);
+}
+.people .person-name small {
+  color: var(--muted);
 }
 .people li > button:hover { background: var(--panel-3); }
 .people li > button.active {
