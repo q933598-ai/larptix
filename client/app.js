@@ -5288,9 +5288,9 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
       bodyElement.textContent =
         typeof payload?.text === "string" ? payload.text : JSON.stringify(payload);
 
-      if (payload?.file && message.attachment) {
+      if (payload?.files?.length || (payload?.file && message.attachment)) {
         try {
-          await renderEncryptedAttachment(message.attachment, payload.file, bodyElement.parentElement);
+          await renderEncryptedAttachments(message, payload, bodyElement.parentElement);
         } catch (err) {
           bodyElement.textContent =
             `Could not open encrypted attachment: ${err?.message || String(err)}`;
@@ -5321,9 +5321,9 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
     message._decryptedPayload = payload;
     renderMessageDecorations(bodyElement.parentElement, payload);
     bodyElement.textContent = payload?.text || "Encrypted message sent from this device";
-    if (payload?.file && message.attachment) {
+    if (payload?.files?.length || (payload?.file && message.attachment)) {
       try {
-        await renderEncryptedAttachment(message.attachment, payload.file, bodyElement.parentElement);
+        await renderEncryptedAttachments(message, payload, bodyElement.parentElement);
       } catch (err) {
         bodyElement.textContent = `Could not open encrypted attachment: ${err?.message || String(err)}`;
       }
@@ -5562,24 +5562,20 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
     renderMessageDecorations(bodyElement.parentElement, payload);
     bodyElement.textContent = payload?.text ?? result;
 
-    if (payload?.file && message.attachment) {
+    if (payload?.files?.length || (payload?.file && message.attachment)) {
       try {
-        await renderEncryptedAttachment(
-          message.attachment,
-          payload.file,
-          bodyElement.parentElement
-        );
-          if (payload?.gif) {
-        try {
-          renderSelectedGif(payload.gif, bodyElement.parentElement);
-        } catch (err) {
-          bodyElement.textContent =
-            `Could not open GIF: ${err?.message || String(err)}`;
-        }
-      }
-  } catch (err) {
+        await renderEncryptedAttachments(message, payload, bodyElement.parentElement);
+      } catch (err) {
         bodyElement.textContent =
           `Could not open encrypted attachment: ${err?.message || String(err)}`;
+      }
+    }
+    if (payload?.gif) {
+      try {
+        renderSelectedGif(payload.gif, bodyElement.parentElement);
+      } catch (err) {
+        bodyElement.textContent =
+          `Could not open GIF: ${err?.message || String(err)}`;
       }
     }
   } catch (err) {
