@@ -150,9 +150,15 @@ const themeMuted = document.getElementById("theme-muted");
 const themeAccent = document.getElementById("theme-accent");
 const themeMe = document.getElementById("theme-me");
 const themeSaveCustom = document.getElementById("theme-save-custom");
+const themeSaveName = document.getElementById("theme-save-name");
+const savedThemeSelect = document.getElementById("saved-theme-select");
+const themeLoadSaved = document.getElementById("theme-load-saved");
+const themeDeleteSaved = document.getElementById("theme-delete-saved");
 const settingsPresence = document.getElementById("settings-presence");
 const settingsCallSounds = document.getElementById("settings-call-sounds");
 const settingsOutgoingCallSounds = document.getElementById("settings-outgoing-call-sounds");
+const settingsIncomingCallVolume = document.getElementById("settings-incoming-call-volume");
+const settingsOutgoingCallVolume = document.getElementById("settings-outgoing-call-volume");
 const settingsMessageSounds = document.getElementById("settings-message-sounds");
 const settingsMessagePolicy = document.getElementById("settings-message-policy");
 const settingsCallRingtone = document.getElementById("settings-call-ringtone");
@@ -173,6 +179,9 @@ const groupCallBannerMeta = document.getElementById("group-call-banner-meta");
 const groupCallJoin = document.getElementById("group-call-join");
 const callWindowTitle = document.getElementById("call-window-title");
 const callRingtone = document.getElementById("call-ringtone");
+const CALL_RING_VOLUME_KEY = "larptrix_call_ring_volume";
+const OUTGOING_RING_VOLUME_KEY = "larptrix_outgoing_ring_volume";
+const SAVED_THEMES_KEY = "larptrix_saved_themes_v1";
 const groupMembersOpen = document.getElementById("group-members-open");
 const groupMembersDialog = document.getElementById("group-members-dialog");
 const groupMembersClose = document.getElementById("group-members-close");
@@ -557,8 +566,8 @@ function loadThemeEditor() {
   themeMe.value = custom.me || "#0d3020";
 }
 
-function saveCustomTheme() {
-  const custom = {
+function currentCustomTheme() {
+  return {
     bg: themeBg.value,
     panel: themePanel.value,
     "panel-2": themePanel.value,
@@ -572,10 +581,65 @@ function saveCustomTheme() {
     me: themeMe.value,
     danger: "#ef6d73",
   };
+}
+
+function readSavedThemes() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SAVED_THEMES_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed.filter((item) => item?.id && item?.name && item?.theme) : [];
+  } catch {
+    return [];
+  }
+}
+
+function renderSavedThemeOptions() {
+  if (!savedThemeSelect) return;
+  savedThemeSelect.replaceChildren();
+  const first = document.createElement("option");
+  first.value = "";
+  first.textContent = "Saved themes…";
+  savedThemeSelect.append(first);
+  for (const theme of readSavedThemes()) {
+    const option = document.createElement("option");
+    option.value = theme.id;
+    option.textContent = theme.name;
+    savedThemeSelect.append(option);
+  }
+  const disabled = savedThemeSelect.options.length <= 1;
+  savedThemeSelect.disabled = disabled;
+  if (themeLoadSaved) themeLoadSaved.disabled = disabled;
+  if (themeDeleteSaved) themeDeleteSaved.disabled = disabled;
+}
+
+function loadSavedTheme(id) {
+  const theme = readSavedThemes().find((item) => item.id === id);
+  if (!theme) return;
+  localStorage.setItem(CUSTOM_THEME_KEY, JSON.stringify(theme.theme));
+  applyTheme("custom");
+  settingsTheme.value = "custom";
+  loadThemeEditor();
+}
+
+function saveCustomTheme() {
+  const custom = currentCustomTheme();
   localStorage.setItem(CUSTOM_THEME_KEY, JSON.stringify(custom));
   localStorage.setItem(THEME_KEY, "custom");
   applyTheme("custom");
   settingsTheme.value = "custom";
+
+  const name = (themeSaveName?.value || "My custom theme").trim().slice(0, 40);
+  const themes = readSavedThemes();
+  const existing = themes.find((item) => item.name.toLocaleLowerCase() === name.toLocaleLowerCase());
+  if (existing) {
+    existing.theme = custom;
+    existing.updatedAt = Date.now();
+  } else {
+    themes.unshift({ id: crypto.randomUUID(), name, theme: custom, updatedAt: Date.now() });
+  }
+  localStorage.setItem(SAVED_THEMES_KEY, JSON.stringify(themes.slice(0, 20)));
+  if (themeSaveName) themeSaveName.value = "";
+  renderSavedThemeOptions();
+  if (savedThemeSelect) savedThemeSelect.value = themes[0]?.id || "";
 }
 
 function mixThemeColor(a, b, amount) {
@@ -772,6 +836,7 @@ async function resetCustomCallRingtone() {
 function startCallRingtone() {
   if (!readStoredBool(CALL_SOUND_KEY, true) || localStorage.getItem(PRESENCE_KEY) === "dnd") return;
   if (!callRingtone) return;
+  callRingtone.volume = Math.min(1, Math.max(0, Number(localStorage.getItem(CALL_RING_VOLUME_KEY) ?? "0.8")));
   callRingtone.currentTime = 0;
   callRingtone.loop = true;
   callRingtone.play().catch(() => {});
@@ -780,6 +845,7 @@ function startCallRingtone() {
 function startOutgoingCallRingtone() {
   if (!readStoredBool(OUTGOING_CALL_SOUND_KEY, true)) return;
   if (!callRingtone) return;
+  callRingtone.volume = Math.min(1, Math.max(0, Number(localStorage.getItem(OUTGOING_RING_VOLUME_KEY) ?? "0.8")));
   callRingtone.currentTime = 0;
   callRingtone.loop = true;
   callRingtone.play().catch(() => {});
@@ -1210,6 +1276,7 @@ function appendSavedMessage(item) {
   li.append(savedAvatar, meta, body);
   const actions = document.createElement("div");
   actions.className = "message-actions";
+
   const reply = document.createElement("button");
   reply.type = "button";
   reply.className = "ghost";
@@ -1621,6 +1688,9 @@ function openSettings() {
   settingsPresence.value = localStorage.getItem(PRESENCE_KEY) || "online";
   settingsCallSounds.checked = readStoredBool(CALL_SOUND_KEY, true);
   settingsOutgoingCallSounds.checked = readStoredBool(OUTGOING_CALL_SOUND_KEY, true);
+  if (settingsIncomingCallVolume) settingsIncomingCallVolume.value = String(Number(localStorage.getItem(CALL_RING_VOLUME_KEY) ?? "0.8"));
+  if (settingsOutgoingCallVolume) settingsOutgoingCallVolume.value = String(Number(localStorage.getItem(OUTGOING_RING_VOLUME_KEY) ?? "0.8"));
+  renderSavedThemeOptions();
   settingsMessageSounds.checked = readStoredBool(MESSAGE_SOUND_KEY, true);
   if (settingsMessagePolicy) settingsMessagePolicy.value = me.message_policy === "friends" ? "friends" : "everyone";
   renderNotificationSettings();
@@ -1686,6 +1756,7 @@ profileOpen.addEventListener("click", async () => {
     profileName.value = profile.display_name;
     profileUsername.value = profile.username;
     profileAbout.value = profile.about;
+    profileTags.value = Array.isArray(profile.tags) ? profile.tags.join(", ") : "";
     updateOwnProfileCard(profile);
     customActivity = profile.activity?.startsWith("Listening to ") ? "" : (profile.activity || "");
     profileActivity.value = customActivity;
@@ -1785,9 +1856,27 @@ settingsTheme.addEventListener("change", () => {
   applyTheme(settingsTheme.value);
 });
 themeSaveCustom.addEventListener("click", saveCustomTheme);
+themeLoadSaved?.addEventListener("click", () => loadSavedTheme(savedThemeSelect?.value));
+themeDeleteSaved?.addEventListener("click", () => {
+  const id = savedThemeSelect?.value;
+  if (!id) return;
+  const next = readSavedThemes().filter((item) => item.id !== id);
+  localStorage.setItem(SAVED_THEMES_KEY, JSON.stringify(next));
+  renderSavedThemeOptions();
+});
 settingsPresence.addEventListener("change", () => setPresence(settingsPresence.value));
 settingsCallSounds.addEventListener("change", () => localStorage.setItem(CALL_SOUND_KEY, settingsCallSounds.checked ? "1" : "0"));
 settingsOutgoingCallSounds.addEventListener("change", () => localStorage.setItem(OUTGOING_CALL_SOUND_KEY, settingsOutgoingCallSounds.checked ? "1" : "0"));
+settingsIncomingCallVolume?.addEventListener("input", (event) => {
+  const value = Math.min(1, Math.max(0, Number(event.target.value)));
+  localStorage.setItem(CALL_RING_VOLUME_KEY, String(value));
+  if (callRingtone && !callRingtone.paused) callRingtone.volume = value;
+});
+settingsOutgoingCallVolume?.addEventListener("input", (event) => {
+  const value = Math.min(1, Math.max(0, Number(event.target.value)));
+  localStorage.setItem(OUTGOING_RING_VOLUME_KEY, String(value));
+  if (callRingtone && !callRingtone.paused) callRingtone.volume = value;
+});
 settingsMessageSounds.addEventListener("change", () => localStorage.setItem(MESSAGE_SOUND_KEY, settingsMessageSounds.checked ? "1" : "0"));
 settingsMessagePolicy?.addEventListener("change", async () => {
   try {
@@ -2277,6 +2366,7 @@ profileForm.addEventListener("submit", async (event) => {
       display_name: profileName.value.trim(),
       username: profileUsername.value.trim(),
       about: profileAbout.value.trim(),
+      tags: profileTags.value.split(",").map((tag) => tag.trim()).filter(Boolean),
     });
     customActivity = profileActivity.value.trim();
     musicActivityEnabled = showMusicActivity.checked;
@@ -2452,8 +2542,8 @@ chatEl?.addEventListener("dragleave", handleChatDragLeave);
 chatEl?.addEventListener("drop", handleChatDrop);
 
 recordAudioButton.addEventListener("click", toggleRecording);
-document.getElementById("start-audio-call").addEventListener("click", () => startCall("audio"));
-document.getElementById("start-video-call").addEventListener("click", () => startCall("video"));
+document.getElementById("start-audio-call").addEventListener("click", () => openOrJoinDirectCall("audio"));
+document.getElementById("start-video-call").addEventListener("click", () => openOrJoinDirectCall("video"));
 groupMembersOpen?.addEventListener("click", openGroupMembers);
 groupProfileForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -3819,6 +3909,43 @@ function sendGroupCallControl(kind) {
   }));
 }
 
+function isDirectCallActive(id) {
+  return Boolean(
+    peerConnection
+      && callPeerId === id
+      && ["connecting", "connected", "new"].includes(peerConnection.connectionState),
+  );
+}
+
+function updateDirectCallButtons(id = peerId) {
+  const callButton = document.getElementById("start-audio-call");
+  const videoButton = document.getElementById("start-video-call");
+  if (!callButton || !videoButton) return;
+  const selected = getChatEntries().find((item) => item.user_id === id);
+  if (selected?.is_group) {
+    callButton.textContent = "Call";
+    videoButton.textContent = "Video";
+    return;
+  }
+  const joining = isDirectCallActive(id);
+  callButton.textContent = joining ? "Join" : "Call";
+  videoButton.textContent = joining ? "Join video" : "Video";
+}
+function openOrJoinDirectCall(kind) {
+  if (!peerId) return;
+  if (pendingIncomingCall?.sender_id === peerId && !peerConnection) {
+    void acceptIncomingCall();
+    return;
+  }
+  if (isDirectCallActive(peerId)) {
+    callStage.hidden = false;
+    callStage.classList.remove("call-collapsed");
+    updateCallPlaceholder({ force: !localMediaStream?.getVideoTracks().length });
+    return;
+  }
+  void startCall(kind);
+}
+
 function openChat(id) {
   if (id === SAVED_MESSAGES_ID) {
     openSavedMessagesChat();
@@ -3834,8 +3961,7 @@ function openChat(id) {
   const isGroup = Boolean(selected?.is_group);
   document.getElementById("start-audio-call").hidden = isGroup || isChannel;
   document.getElementById("start-video-call").hidden = isGroup || isChannel;
-  document.getElementById("start-audio-call").textContent = "Call";
-  document.getElementById("start-video-call").textContent = "Video";
+  updateDirectCallButtons(id);
   groupMembersOpen.hidden = !isGroup || (isChannel && !selected?.admin_ids?.includes(me?.user_id));
   groupCallStart.hidden = !isGroup || isChannel;
   groupCallStart.textContent = isGroup && !isChannel
@@ -4280,6 +4406,7 @@ async function startCall(kind) {
   if (peerConnection) endCall(true);
   callPeerId = peerId;
   callMediaKind = kind;
+  updateDirectCallButtons(peerId);
   updateCallPlaceholder({ force: true });
   startOutgoingCallRingtone();
   try {
@@ -4376,6 +4503,7 @@ async function createPeerConnection() {
       closed: "Call ended",
     };
     const baseStatus = states[connection.connectionState] || connection.connectionState;
+    updateDirectCallButtons(peerId);
     callStatus.textContent = `${baseStatus}${callMediaNotice}`;
     if (connection.connectionState === "failed" || connection.connectionState === "closed") {
       endCall(false);
@@ -4667,34 +4795,41 @@ async function toggleScreenShare() {
           ...(supported.restrictOwnAudio ? { restrictOwnAudio: true } : {}),
         }
       : false;
-    // Firefox rejects several Chromium-specific display-capture
-    // constraints with "Invalid capture constraints". Keep its request
-    // deliberately minimal and apply quality after the source is selected.
-    const displayConstraints = firefox
-      ? { video: true, audio: false }
-      : {
-          video: {
-            width: { ideal: resolution.width },
-            height: { ideal: resolution.height },
-            frameRate: { ideal: frameRate },
-          },
-          audio: audioConstraints,
-          selfBrowserSurface: "exclude",
-          surfaceSwitching: "include",
-          monitorTypeSurfaces: "include",
-          ...(audioMode === "system" ? { systemAudio: "include" } : {}),
-          ...(audioMode === "window" ? { windowAudio: "window" } : {}),
-        };
-    screenMediaStream = await navigator.mediaDevices.getDisplayMedia(displayConstraints);
+    // Always keep a final, completely unconstrained capture fallback.
+    // Chromium/WebView builds get the rich options first (for audio/quality);
+    // Firefox gets only the minimal form because several capture hints are
+    // rejected by some Firefox + PipeWire combinations.
+    // Start with the browser's simplest valid screen-capture request.
+    // This avoids InvalidStateError/TypeError combinations from optional
+    // capture hints and leaves quality selection to the selected track.
+    // Use the least restrictive request first. Browser-specific display
+    // capture hints are intentionally avoided here because they can trigger
+    // "Invalid capture constraints" before the source picker even opens.
+    const captureOptions = [{ video: true }];
+    let captureError = null;
+    for (const options of captureOptions) {
+      try {
+        screenMediaStream = await navigator.mediaDevices.getDisplayMedia(options);
+        break;
+      } catch (err) {
+        captureError = err;
+      }
+    }
+    if (!screenMediaStream) {
+      const detail = captureError?.message || captureError?.name || "unknown capture error";
+      throw new Error("Screen capture failed (" + detail + ").");
+    }
     const screenTrack = screenMediaStream.getVideoTracks()[0];
     if (!screenTrack) throw new Error("The selected share source has no video track.");
-    try {
-      await screenTrack.applyConstraints({
-        width: { ideal: resolution.width },
-        height: { ideal: resolution.height },
-        frameRate: { ideal: frameRate },
-      });
-    } catch {}
+    if (!firefox) {
+      try {
+        await screenTrack.applyConstraints({
+          width: { ideal: resolution.width },
+          height: { ideal: resolution.height },
+          frameRate: { ideal: frameRate },
+        });
+      } catch {}
+    }
     const actual = screenTrack.getSettings?.() || {};
     const actualWidth = actual.width || resolution.width;
     const actualHeight = actual.height || resolution.height;
@@ -4769,7 +4904,13 @@ async function toggleScreenShare() {
     screenTrack.addEventListener("ended", stopScreenShare, { once: true });
     document.getElementById("toggle-screen-share").textContent = "Stop sharing";
   } catch (err) {
-    if (err.name !== "NotAllowedError") appendSystem(err.message || "Could not start screen sharing.");
+    if (err.name !== "NotAllowedError") {
+      appendSystem(
+        err.name === "TypeError" || /Invalid capture constraints/i.test(err.message || "")
+          ? "Screen sharing was rejected by the browser. Try selecting Share screen again; Firefox is using a compatibility capture mode."
+          : err.message || "Could not start screen sharing.",
+      );
+    }
     screenMediaStream = null;
   }
 }
@@ -4863,6 +5004,7 @@ function endCall(notifyPeer) {
   if (endedPeerId) iceCandidatesBeforeOffer.delete(endedPeerId);
   callPeerId = null;
   callMediaKind = null;
+  updateDirectCallButtons(peerId);
   localVideo.srcObject = null;
   localScreenVideo.srcObject = null;
   localScreenVideo.hidden = true;
@@ -5248,8 +5390,19 @@ function paintAvatar(el, user) {
 
 const commonReactionEmojis = ["👍", "❤️", "😂", "😮", "😢", "🔥"];
 
+function sendMessageReaction(message, emoji, add = true) {
+  if (!message?.id || !socket || socket.readyState !== WebSocket.OPEN || !peerId) return;
+  socket.send(JSON.stringify({
+    type: "react",
+    peer_id: peerId,
+    message_id: message.id,
+    emoji,
+    add,
+  }));
+}
+
 function renderMessageReactions(message, li) {
-  if (!li) return;
+  if (!li || !message?.id) return;
   let bar = li.querySelector(".message-reactions");
   if (!bar) {
     bar = document.createElement("div");
@@ -5266,35 +5419,10 @@ function renderMessageReactions(message, li) {
     button.textContent = `${reaction.emoji} ${reaction.count}`;
     button.title = reaction.reacted ? "Remove reaction" : "React with " + reaction.emoji;
     button.addEventListener("click", () => {
-      if (!socket || socket.readyState !== WebSocket.OPEN || !peerId) return;
-      socket.send(JSON.stringify({
-        type: "react",
-        peer_id: peerId,
-        message_id: message.id,
-        emoji: reaction.emoji,
-        add: !reaction.reacted,
-      }));
+      sendMessageReaction(message, reaction.emoji, !reaction.reacted);
     });
     bar.append(button);
   }
-
-  const addButton = document.createElement("button");
-  addButton.type = "button";
-  addButton.className = "reaction-add ghost";
-  addButton.textContent = "＋";
-  addButton.title = "Add reaction";
-  addButton.addEventListener("click", () => {
-    const next = prompt("Reaction emoji:", "👍")?.trim();
-    if (!next || next.length > 8 || !socket || socket.readyState !== WebSocket.OPEN || !peerId) return;
-    socket.send(JSON.stringify({
-      type: "react",
-      peer_id: peerId,
-      message_id: message.id,
-      emoji: next,
-      add: true,
-    }));
-  });
-  bar.append(addButton);
 
   if (message.is_channel || groups.some((item) => item.user_id === peerId && item.is_channel)) {
     const viewCount = document.createElement("span");
@@ -5303,6 +5431,44 @@ function renderMessageReactions(message, li) {
     viewCount.title = "Unique subscribers who viewed this message";
     bar.append(viewCount);
   }
+}
+
+function createReactionPicker(message) {
+  const wrap = document.createElement("span");
+  wrap.className = "reaction-picker-wrap";
+
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "ghost reaction-open";
+  open.textContent = "☺ React";
+  open.title = "Add a reaction";
+
+  const picker = document.createElement("span");
+  picker.className = "reaction-picker";
+  picker.hidden = true;
+  for (const emoji of commonReactionEmojis) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "reaction-picker-item";
+    button.textContent = emoji;
+    button.title = "React with " + emoji;
+    button.addEventListener("click", () => {
+      sendMessageReaction(message, emoji, true);
+      picker.hidden = true;
+    });
+    picker.append(button);
+  }
+
+  open.addEventListener("click", (event) => {
+    event.stopPropagation();
+    picker.hidden = !picker.hidden;
+  });
+  document.addEventListener("click", (event) => {
+    if (!wrap.contains(event.target)) picker.hidden = true;
+  }, { once: true });
+
+  wrap.append(open, picker);
+  return wrap;
 }
 
 function appendMessage(message) {
@@ -5334,7 +5500,7 @@ function appendMessage(message) {
   const groupedWithPrevious = Boolean(
     previousMessage
       && previousMessage.sender_id === message.sender_id
-      && Math.abs(Number(message.created_at) - Number(previousMessage.created_at)) <= 120000
+      && Math.abs(Number(message.created_at) - Number(previousMessage.created_at)) <= 90000
       && !previousRow.classList.contains("e2e-reset-notice")
   );
   if (groupedWithPrevious) li.classList.add("message-grouped");
@@ -5360,6 +5526,7 @@ function appendMessage(message) {
 
   const actions = document.createElement("div");
   actions.className = "message-actions";
+  actions.append(createReactionPicker(message));
 
   const reply = document.createElement("button");
   reply.type = "button";
@@ -6349,22 +6516,76 @@ async function blobSha256(blob) {
     .join("");
 }
 
+async function optimizeAttachmentImage(file) {
+  if (!file?.type || !file.type.startsWith("image/") || file.type === "image/gif") return file;
+  // Keep small images untouched. Large photos/screenshots are downscaled and
+  // re-encoded as WebP only when the result is meaningfully smaller.
+  if (file.size < 1_500_000) return file;
+  let image;
+  try {
+    image = await createImageBitmap(file);
+    const maxDimension = 2560;
+    const scale = Math.min(1, maxDimension / image.width, maxDimension / image.height);
+    if (scale === 1 && file.type === "image/webp") return file;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.width * scale));
+    canvas.height = Math.max(1, Math.round(image.height * scale));
+    const context = canvas.getContext("2d", { alpha: true });
+    if (!context) return file;
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.86));
+    if (!blob || blob.size >= file.size * 0.93) return file;
+
+    const name = file.name.replace(/.[^.]+$/, "") + ".webp";
+    return new File([blob], name, { type: "image/webp", lastModified: file.lastModified });
+  } catch {
+    return file;
+  } finally {
+    image?.close?.();
+  }
+}
+
+async function maybeCompressAttachmentBytes(bytes) {
+  if (typeof CompressionStream !== "function" || !bytes?.length) {
+    return { bytes, compression: null };
+  }
+  try {
+    const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"));
+    const compressed = new Uint8Array(await new Response(stream).arrayBuffer());
+    // Never spend CPU/storage on a compressed representation that barely helps.
+    if (compressed.length + 512 >= bytes.length || compressed.length > bytes.length * 0.97) {
+      return { bytes, compression: null };
+    }
+    return { bytes: compressed, compression: "gzip" };
+  } catch {
+    return { bytes, compression: null };
+  }
+}
+
 async function encryptAttachment(file) {
+  const sourceFile = await optimizeAttachmentImage(file);
+  const sourceBytes = new Uint8Array(await sourceFile.arrayBuffer());
+  const prepared = await maybeCompressAttachmentBytes(sourceBytes);
   const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt"]);
   const rawKey = await crypto.subtle.exportKey("raw", key);
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, await file.arrayBuffer());
-  const gifId = file.type === "image/gif"
-    ? await blobSha256(file)
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, prepared.bytes);
+  const gifId = sourceFile.type === "image/gif"
+    ? await blobSha256(sourceFile)
     : null;
   return {
-    file: new File([ciphertext], `${file.name}.encrypted`, { type: "application/octet-stream" }),
+    file: new File([ciphertext], sourceFile.name + ".encrypted", { type: "application/octet-stream" }),
     metadata: {
       key: bytesToBase64(new Uint8Array(rawKey)),
       iv: bytesToBase64(iv),
-      name: file.name,
-      mime: file.type || "application/octet-stream",
-      size: file.size,
+      name: sourceFile.name,
+      mime: sourceFile.type || "application/octet-stream",
+      size: sourceFile.size,
+      stored_size: ciphertext.byteLength,
+      ...(prepared.compression ? { compression: prepared.compression } : {}),
       ...(gifId ? { gif_id: gifId } : {}),
     },
   };
@@ -6538,11 +6759,21 @@ async function renderEncryptedAttachment(attachment, metadata, container) {
   if (!response.ok) throw new Error("Encrypted attachment could not be loaded.");
   const ciphertext = await response.arrayBuffer();
   const key = await crypto.subtle.importKey("raw", base64ToBytes(metadata.key), "AES-GCM", false, ["decrypt"]);
-  const plaintext = await crypto.subtle.decrypt(
+  let plaintext = new Uint8Array(await crypto.subtle.decrypt(
     { name: "AES-GCM", iv: base64ToBytes(metadata.iv) },
     key,
     ciphertext,
-  );
+  ));
+
+  if (metadata.compression === "gzip" && typeof DecompressionStream === "function") {
+    try {
+      const stream = new Blob([plaintext]).stream().pipeThrough(new DecompressionStream("gzip"));
+      plaintext = new Uint8Array(await new Response(stream).arrayBuffer());
+    } catch {
+      throw new Error("Compressed attachment could not be decompressed.");
+    }
+  }
+
   const blob = new Blob([plaintext], { type: metadata.mime });
   const url = URL.createObjectURL(blob);
 
@@ -6914,6 +7145,8 @@ async function showPeerProfile(id) {
     const nameEl = document.getElementById("peer-profile-name");
     const usernameEl = document.getElementById("peer-profile-username");
     const aboutEl = document.getElementById("peer-profile-about");
+    const tagsEl = document.getElementById("peer-profile-tags");
+    const serverEl = document.getElementById("peer-profile-server");
     const activityEl = document.getElementById("peer-profile-activity");
 
     if (group) {
@@ -6932,7 +7165,13 @@ async function showPeerProfile(id) {
         ? `${group.subscriber_count || group.group_member_ids.length} subscribers`
         : `${group.group_member_ids.length} members`;
       aboutEl.textContent = group.group_description || "No description";
-      activityEl.textContent = group.is_channel ? "Channel" : "Group";
+      tagsEl.replaceChildren();
+      const groupTag = document.createElement("span");
+      groupTag.className = "profile-tag";
+      groupTag.textContent = group.is_channel ? "Channel" : "Group";
+      tagsEl.append(groupTag);
+      serverEl.textContent = "Server: " + location.host;
+      activityEl.textContent = "";
       peerProfileDialog.showModal();
       return;
     }
@@ -6947,6 +7186,14 @@ async function showPeerProfile(id) {
     nameEl.textContent = profile.display_name;
     usernameEl.textContent = profile.username ? `@${profile.username}` : "";
     aboutEl.textContent = profile.about || "No profile description";
+    tagsEl.replaceChildren();
+    for (const tag of Array.isArray(profile.tags) ? profile.tags : []) {
+      const chip = document.createElement("span");
+      chip.className = "profile-tag";
+      chip.textContent = tag;
+      tagsEl.append(chip);
+    }
+    serverEl.textContent = "Server: " + (profile.server || location.host);
     activityEl.textContent = profile.activity || "No activity";
     peerProfileDialog.showModal();
   } catch (err) {

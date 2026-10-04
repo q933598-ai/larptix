@@ -1413,11 +1413,12 @@ impl Database {
         display_name: &str,
         username: &str,
         about: &str,
+        profile_tags: &str,
     ) -> Result<(), DbError> {
         let conn = self.conn.lock().expect("db lock");
         conn.execute(
-            "UPDATE users SET display_name = ?1, username = ?2, about = ?3 WHERE id = ?4",
-            params![display_name, username, about, user_id],
+            "UPDATE users SET display_name = ?1, username = ?2, about = ?3, profile_tags = ?4 WHERE id = ?5",
+            params![display_name, username, about, profile_tags, user_id],
         )
         .map_err(|err| {
             if is_unique(&err) {
@@ -1427,6 +1428,26 @@ impl Database {
             }
         })?;
         Ok(())
+    }
+
+    pub fn profile_tags(&self, user_id: &str) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn.lock().expect("db lock");
+        let raw = conn
+            .query_row(
+                "SELECT profile_tags FROM users WHERE id = ?1",
+                [user_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+
+        let Some(raw) = raw else {
+            return Ok(Vec::new());
+        };
+
+        match serde_json::from_str::<Vec<String>>(&raw) {
+            Ok(tags) => Ok(tags),
+            Err(_) => Ok(Vec::new()),
+        }
     }
 
     pub fn group_creator_id(&self, group_id: &str) -> rusqlite::Result<Option<String>> {
@@ -2868,6 +2889,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         ("username", "TEXT NOT NULL DEFAULT ''"),
         ("message_policy", "TEXT NOT NULL DEFAULT 'everyone'"),
         ("about", "TEXT NOT NULL DEFAULT ''"),
+        ("profile_tags", "TEXT NOT NULL DEFAULT '[]'"),
         ("music_attachment_id", "TEXT"),
         ("activity", "TEXT NOT NULL DEFAULT ''"),
     ] {
@@ -2969,7 +2991,7 @@ mod tests {
         let db = Database::open(Path::new(":memory:")).unwrap();
         let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
         let bob = db.create_key_user("Bob", "bob", "hash-b", 1).unwrap();
-        db.update_profile(&alice.id, "Alice A", "alice_a", "Hello there")
+        db.update_profile(&alice.id, "Alice A", "alice_a", "Hello there", "[]")
             .unwrap();
         let (name, username, about, _) = db.profile_fields(&alice.id).unwrap().unwrap();
         assert_eq!(
@@ -2985,7 +3007,9 @@ mod tests {
                 .username,
             "alice_a"
         );
-        assert!(db.update_profile(&bob.id, "Bob", "ALICE_A", "").is_err());
+        assert!(db
+            .update_profile(&bob.id, "Bob", "ALICE_A", "", "[]")
+            .is_err());
     }
 
     #[test]
