@@ -4799,22 +4799,15 @@ async function toggleScreenShare() {
     // Chromium/WebView builds get the rich options first (for audio/quality);
     // Firefox gets only the minimal form because several capture hints are
     // rejected by some Firefox + PipeWire combinations.
-    const richCaptureOptions = {
-      video: {
-        width: { ideal: resolution.width },
-        height: { ideal: resolution.height },
-        frameRate: { ideal: frameRate },
-      },
-      ...(captureAudio ? { audio: audioConstraints || true } : {}),
-      selfBrowserSurface: "exclude",
-      surfaceSwitching: "include",
-      monitorTypeSurfaces: "include",
-      ...(audioMode === "system" ? { systemAudio: "include" } : {}),
-      ...(audioMode === "window" ? { windowAudio: "window" } : {}),
-    };
-    const captureOptions = firefox
-      ? [{ video: {} }, { video: true }]
-      : [richCaptureOptions, { video: true }, { video: {} }];
+    // Start with the browser's simplest valid screen-capture request.
+    // This avoids InvalidStateError/TypeError combinations from optional
+    // capture hints and leaves quality selection to the selected track.
+    const captureOptions = [
+      { video: true },
+    ];
+    if (!captureAudio && !firefox) {
+      captureOptions.unshift({ video: { frameRate: { ideal: frameRate } } });
+    }
     let captureError = null;
     for (const options of captureOptions) {
       try {
