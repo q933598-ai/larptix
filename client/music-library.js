@@ -345,7 +345,7 @@
   }
 
   function wireDragging() {
-    const handle = $("music-library-drag-area");
+    const handle = els.library?.querySelector(".music-library-drag-area");
     if (!handle) return;
 
     let dragging = false;
@@ -529,6 +529,13 @@
 
   function setMode(libraryMode) {
     els.library.hidden = !libraryMode;
+    if (els.player) {
+      if (libraryMode) {
+        els.player.hidden = true;
+      } else {
+        updatePlayer();
+      }
+    }
     if (libraryMode) applySavedPosition();
   }
 

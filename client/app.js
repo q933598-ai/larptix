@@ -178,7 +178,6 @@ const callSettingsPanel = document.getElementById("call-settings-panel");
 const callNoiseSuppression = document.getElementById("call-noise-suppression");
 const callParticipantSettings = document.getElementById("call-participant-settings");
 const callWindowPin = document.getElementById("call-window-pin");
-const musicWindowPin = document.getElementById("music-window-pin");
 const menuNewChannel = document.getElementById("menu-new-channel");
 const menuAbout = document.getElementById("menu-about");
 const aboutDialog = document.getElementById("about-dialog");
@@ -876,15 +875,6 @@ async function toggleCallNoiseSuppression() {
     localStorage.setItem(NOISE_SUPPRESSION_KEY, enabled ? "0" : "1");
   }
 }
-
-function setMusicWindowPinned(pinned) {
-  const library = document.getElementById("music-library");
-  library?.classList.toggle("window-pinned", pinned);
-  musicWindowPin?.setAttribute("aria-pressed", String(pinned));
-  if (musicWindowPin) musicWindowPin.textContent = pinned ? "📍" : "📌";
-  localStorage.setItem("larptrix_music_window_pinned", pinned ? "1" : "0");
-}
-
 
 async function getSavedMessages() {
   if (!cryptoRecoveryKey) return [];
@@ -2265,9 +2255,6 @@ callNoiseSuppression?.addEventListener("change", () => void toggleCallNoiseSuppr
 callWindowPin?.addEventListener("click", () => {
   setCallPinned(localStorage.getItem("larptrix_call_window_pinned") !== "1");
 });
-musicWindowPin?.addEventListener("click", () => {
-  setMusicWindowPinned(localStorage.getItem("larptrix_music_window_pinned") !== "1");
-});
 
 document.getElementById("call-collapse").addEventListener("click", (event) => {
   callStage.classList.toggle("call-collapsed");
@@ -2314,7 +2301,6 @@ wireCallResponsiveSizing();
 setTimeout(() => void checkForClientUpdate({ silent: true }), 12000);
 setInterval(() => void checkForClientUpdate({ silent: true }), 6 * 60 * 60 * 1000);
 setCallPinned(localStorage.getItem("larptrix_call_window_pinned") === "1");
-setMusicWindowPinned(localStorage.getItem("larptrix_music_window_pinned") === "1");
 void loadCustomCallRingtone();
 bootstrap();
 
