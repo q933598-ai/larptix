@@ -14,7 +14,6 @@
   let repeat = false;
   let savedPosition = 0;
   let restoredPlayback = false;
-  let libraryOpen = false;
 
   function savePlaybackState() {
     const track = tracks[currentIndex];
@@ -305,7 +304,7 @@
       return;
     }
     const track = tracks[currentIndex];
-    els.player.hidden = libraryOpen;
+    els.player.hidden = false;
     els.name.textContent = track.name;
     els.meta.textContent = `${track.filename} · ${formatSize(track.size)}`;
     els.play.textContent = els.audio.paused ? "▶" : "Ⅱ";
@@ -529,16 +528,10 @@
   }
 
   function setMode(libraryMode) {
-    libraryOpen = Boolean(libraryMode);
-    els.library.hidden = !libraryOpen;
-    if (els.player) {
-      if (libraryOpen) {
-        els.player.hidden = true;
-      } else {
-        updatePlayer();
-      }
-    }
-    if (libraryOpen) applySavedPosition();
+    const open = Boolean(libraryMode);
+    els.library.hidden = !open;
+    if (open) applySavedPosition();
+    updatePlayer();
   }
 
   window.larptixMusicLibrary = {
