@@ -5121,6 +5121,7 @@ async function handleCallSignal(signal) {
       && pendingIncomingCall.payload.call_id !== incomingCallId
     ) return;
     pendingIncomingCall = signal;
+    if (peerId !== signal.sender_id) openChat(signal.sender_id);
     directCallSessionId = incomingCallId;
     directCallOutgoing = false;
     directCallStartedAt = Number(signal.payload?.started_at) || Date.now();
