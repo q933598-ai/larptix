@@ -1205,8 +1205,11 @@ async function saveManualSavedMessage(text, extras = {}) {
 }
 
 function openSavedMessagesChat() {
+  channelViewObserver?.disconnect();
+  viewedChannelMessages.clear();
   peerId = SAVED_MESSAGES_ID;
   peerName.textContent = "Saved Messages";
+  peerMeta.textContent = "";
   chatTitlebar.hidden = false;
   peerName.hidden = false;
   composer.hidden = false;
@@ -3435,7 +3438,9 @@ function connect() {
         recoveredBodiesByMessageId.delete(msg.message_id);
         cryptoRecoveryResponsesByMessageId.delete(msg.message_id);
         void writeLocalCryptoRecord({ id: `decrypted-message:${msg.message_id}`, deleted: true }).catch(() => {});
-        logEl.querySelector(`[data-message-id="${CSS.escape(msg.message_id)}"]`)?.remove();
+        const deletedRow = logEl.querySelector(`[data-message-id="${CSS.escape(msg.message_id)}"]`);
+        if (deletedRow) channelViewObserver?.unobserve(deletedRow);
+        deletedRow?.remove();
         break;
       case "group_call_state":
         handleGroupCallState(msg);
