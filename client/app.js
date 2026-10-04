@@ -3395,178 +3395,152 @@ function connect() {
 
 function renderGroupMembersDialog(group) {
   if (!groupMembersList || !group) return;
+
   const memberIds = Array.isArray(group.group_member_ids) ? group.group_member_ids : [];
-  groupMembersTitle.textContent = group.display_name;
-  groupMembersHelp.textContent = group.is_channel ? memberIds.length + " member(s) · " + (group.post_policy === "admins" ? "admins can post" : "all members can post") : memberIds.length + " member(s). Members with an active connection can be invited to the current call.";
+  const isAdmin = (group.admin_ids || []).includes(me?.user_id);
+  const canViewMembers = !group.is_channel || isAdmin;
+
+  groupMembersTitle.textContent = group.is_channel ? "Channel settings" : "Group settings";
+  groupMembersHelp.textContent = group.is_channel
+    ? `${group.subscriber_count || memberIds.length} subscriber(s) · ${group.post_policy === "admins" ? "admins can post" : "all members can post"}`
+    : `${memberIds.length} member(s)`;
+
   groupMembersList.replaceChildren();
 
-  if (group.is_channel && group.admin_ids?.includes(me?.user_id)) {
+  if (isAdmin) {
+    groupProfileForm.hidden = false;
+    groupProfileName.value = group.display_name || "";
+    groupProfileDescription.value = group.group_description || "";
+    groupProfileAvatar.value = "";
+    groupProfileBanner.value = "";
+    groupProfileBannerLabel.hidden = !group.is_channel;
+    groupProfileError.hidden = true;
+
     const settingsBox = document.createElement("div");
     settingsBox.className = "channel-admin-settings";
-    const policyLabel = document.createElement("label");
-    policyLabel.textContent = "Who can post";
-    const policy = document.createElement("select");
-    policy.innerHTML = '<option value="admins">Admins only</option><option value="members">All members</option>';
-    policy.value = group.post_policy || "admins";
-    policy.addEventListener("change", async () => {
-      try {
-        await api("PATCH", "/api/channels/" + encodeURIComponent(group.user_id) + "/settings", { post_policy: policy.value });
-        group.post_policy = policy.value;
-        groups = groups.map((item) => item.user_id === group.user_id ? { ...item, post_policy: policy.value } : item);
-      } catch (err) {
-        appendSystem(err.message || "Could not update channel posting settings.");
-        policy.value = group.post_policy || "admins";
-      }
-    });
-    settingsBox.append(policyLabel, policy);
-    const adminTitle = document.createElement("strong");
-    adminTitle.textContent = "Channel admins";
-    settingsBox.append(adminTitle);
-    for (const adminId of (group.admin_ids || [])) {
-      const row = document.createElement("div");
-      row.className = "channel-admin-row";
-      const name = document.createElement("span");
-      const user = users.find((item) => item.user_id === adminId);
-      name.textContent = user?.display_name || "Unknown admin";
-      row.append(name);
-      if (adminId !== (group.admin_ids || [])[0]) {
-        const remove = document.createElement("button");
-        remove.type = "button";
-        remove.className = "ghost";
-        remove.textContent = "Remove admin";
-        remove.addEventListener("click", async () => {
-          try {
-            await api("DELETE", "/api/channels/" + encodeURIComponent(group.user_id) + "/admins", { user_id: adminId });
-            await loadGroups();
-            const updated = groups.find((item) => item.user_id === group.user_id);
-            if (updated) renderGroupMembersDialog(updated);
-          } catch (err) {
-            appendSystem(err.message || "Could not remove channel admin.");
-          }
-        });
-        row.append(remove);
-      }
-      settingsBox.append(row);
-    }
-    const candidates = memberIds.filter((id) => !(group.admin_ids || []).includes(id));
-    if (candidates.length) {
-      const make = document.createElement("select");
-      make.innerHTML = '<option value="">Make member an admin…</option>';
-      for (const id of candidates) {
-        const option = document.createElement("option");
-        option.value = id;
-        const user = users.find((item) => item.user_id === id);
-        option.textContent = user?.display_name || id;
-        make.append(option);
-      }
-      const addAdmin = document.createElement("button");
-      addAdmin.type = "button";
-      addAdmin.className = "ghost";
-      addAdmin.textContent = "Make admin";
-      addAdmin.addEventListener("click", async () => {
-        if (!make.value) return;
-        addAdmin.disabled = true;
+
+    if (group.is_channel) {
+      const policyLabel = document.createElement("label");
+      policyLabel.textContent = "Who can post";
+      const policy = document.createElement("select");
+      policy.innerHTML = '<option value="admins">Admins only</option><option value="members">All members</option>';
+      policy.value = group.post_policy || "admins";
+      policy.addEventListener("change", async () => {
         try {
-          await api("POST", "/api/channels/" + encodeURIComponent(group.user_id) + "/admins", { user_id: make.value });
-          await loadGroups();
-          const updated = groups.find((item) => item.user_id === group.user_id);
-          if (updated) renderGroupMembersDialog(updated);
+          await api("PATCH", "/api/channels/" + encodeURIComponent(group.user_id) + "/settings", {
+            post_policy: policy.value,
+            name: group.display_name,
+            description: group.group_description || "",
+          });
+          group.post_policy = policy.value;
         } catch (err) {
-          appendSystem(err.message || "Could not add channel admin.");
-        } finally {
-          addAdmin.disabled = false;
+          appendSystem(err.message || "Could not update channel posting settings.");
+          policy.value = group.post_policy || "admins";
         }
       });
-      settingsBox.append(make, addAdmin);
+      settingsBox.append(policyLabel, policy);
     }
+
     groupMembersList.append(settingsBox);
+  } else {
+    groupProfileForm.hidden = true;
   }
 
-  const addBox = document.createElement("div");
-  addBox.className = "group-add-member";
-  const addSelect = document.createElement("select");
-  addSelect.className = "group-add-member-select";
-  addSelect.innerHTML = '<option value="">Add member…</option>';
-  users
-    .filter((item) => !item.is_group && item.user_id !== me?.user_id && !memberIds.includes(item.user_id))
-    .forEach((item) => {
-      const option = document.createElement("option");
-      option.value = item.user_id;
-      option.textContent = item.display_name + (item.username ? " · @" + item.username : "");
-      option.disabled = !item.e2e_enabled;
-      addSelect.append(option);
+  if (group.is_channel && !canViewMembers) {
+    return;
+  }
+
+  const friendIds = new Set(
+    friendRequests.friends.map((friend) => friend.user_id)
+  );
+
+  if (isAdmin) {
+    const addBox = document.createElement("div");
+    addBox.className = "group-add-member";
+    const addSelect = document.createElement("select");
+    addSelect.className = "group-add-member-select";
+    addSelect.innerHTML = '<option value="">Add friend…</option>';
+    users
+      .filter(
+        (item) =>
+          friendIds.has(item.user_id)
+          && item.user_id !== me?.user_id
+          && !item.is_group
+          && !memberIds.includes(item.user_id)
+          && item.e2e_enabled
+      )
+      .forEach((item) => {
+        const option = document.createElement("option");
+        option.value = item.user_id;
+        option.textContent = item.display_name + (item.username ? " · @" + item.username : "");
+        addSelect.append(option);
+      });
+
+    const addButton = document.createElement("button");
+    addButton.type = "button";
+    addButton.className = "ghost";
+    addButton.textContent = "Add";
+    addButton.addEventListener("click", async () => {
+      if (!addSelect.value) return;
+      addButton.disabled = true;
+      try {
+        await api("POST", "/api/groups/" + encodeURIComponent(group.user_id) + "/members", {
+          user_id: addSelect.value,
+        });
+        await loadGroups();
+        const updated = groups.find((item) => item.user_id === group.user_id);
+        if (updated) renderGroupMembersDialog(updated);
+        addSelect.value = "";
+      } catch (err) {
+        appendSystem(err.message || "Could not add group member.");
+      } finally {
+        addButton.disabled = false;
+      }
     });
-  const addButton = document.createElement("button");
-  addButton.type = "button";
-  addButton.className = "ghost";
-  addButton.textContent = "Add";
-  addButton.addEventListener("click", async () => {
-    if (!addSelect.value) return;
-    addButton.disabled = true;
-    try {
-      await api("POST", "/api/groups/" + encodeURIComponent(group.user_id) + "/members", { user_id: addSelect.value });
-      await loadGroups();
-      const updated = groups.find((item) => item.user_id === group.user_id);
-      if (updated) renderGroupMembersDialog(updated);
-      addSelect.value = "";
-    } catch (err) {
-      appendSystem(err.message || "Could not add group member.");
-    } finally {
-      addButton.disabled = false;
-    }
-  });
-  addBox.append(addSelect, addButton);
-  groupMembersList.append(addBox);
+    addBox.append(addSelect, addButton);
+    groupMembersList.append(addBox);
+  }
+
+  const membersHeading = document.createElement("strong");
+  membersHeading.textContent = group.is_channel ? "Subscribers" : "Members";
+  groupMembersList.append(membersHeading);
 
   for (const memberId of memberIds) {
     const user = users.find((item) => item.user_id === memberId);
-    const joined = groupCallId && groupCallGroupId === group.user_id && groupCallJoinedMembers.has(memberId);
     const online = Boolean(user?.online);
     const row = document.createElement("div");
     row.className = "group-member-row";
 
     const avatar = document.createElement("span");
     avatar.className = "avatar";
-    paintAvatar(avatar, user || { user_id: memberId, display_name: "?" });
+    paintAvatar(avatar, user || {
+      user_id: memberId,
+      display_name: "?",
+      avatar_url: null,
+      is_group: false,
+    });
 
     const copy = document.createElement("div");
     copy.className = "group-member-copy";
     const name = document.createElement("strong");
     name.textContent = user?.display_name || "Unknown member";
     const meta = document.createElement("span");
-    meta.textContent = user?.username ? `@${user.username} · ${online ? "Online" : "Offline"}` : (online ? "Online" : "Offline");
+    meta.textContent = user?.username
+      ? `@${user.username} · ${online ? "Online" : "Offline"}`
+      : (online ? "Online" : "Offline");
     copy.append(name, meta);
 
-    const action = document.createElement("button");
-    action.type = "button";
-    action.className = "ghost group-member-action";
-    if (memberId === me?.user_id) {
-      action.textContent = "You";
-      action.disabled = true;
-    } else if (joined) {
-      action.textContent = "In call";
-      action.disabled = true;
-    } else if (groupCallId && groupCallGroupId === group.user_id && online) {
-      action.textContent = "Invite";
-      action.addEventListener("click", () => {
-        sendGroupCallSignal(memberId, "group_invite", {
-          group_id: group.user_id,
-          call_id: groupCallId,
-          media: callMediaKind,
-        });
-        action.textContent = "Invited";
-        action.disabled = true;
-      });
-    } else {
-      action.textContent = online ? "Available" : "Offline";
-      action.disabled = true;
+    if (isAdmin && group.is_channel && group.admin_ids?.includes(memberId)) {
+      const admin = document.createElement("span");
+      admin.className = "channel-admin-label";
+      admin.textContent = "Admin";
+      copy.append(admin);
     }
 
-    row.append(avatar, copy, action);
+    row.append(avatar, copy);
     groupMembersList.append(row);
   }
 }
-
 function openGroupMembers() {
   const group = groups.find((item) => item.user_id === peerId && item.is_group)
     || groups.find((item) => item.user_id === groupCallGroupId && item.is_group);
@@ -4983,7 +4957,12 @@ async function createChannel(event) {
 
 function renderChannelMemberChoices() {
   channelMemberList.replaceChildren();
-  for (const user of users.filter((item) => item.user_id !== me?.user_id && !item.is_group)) {
+  const friendIds = new Set(
+    friendRequests.friends.map((friend) => friend.user_id)
+  );
+  for (const user of users.filter(
+    (item) => friendIds.has(item.user_id) && item.user_id !== me?.user_id && !item.is_group
+  )) {
     const label = document.createElement("label");
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
