@@ -1778,9 +1778,10 @@ impl Database {
         }
         let used: i64 = conn.query_row(
             "SELECT COUNT(*)
-             FROM messages m
+             FROM message_attachments ma
+             JOIN messages m ON m.id = ma.message_id
              JOIN conversations c ON c.id = m.conversation_id
-             WHERE m.attachment_id = ?1 AND (
+             WHERE ma.attachment_id = ?1 AND (
                  c.user_a = ?2 OR c.user_b = ?2 OR EXISTS (
                      SELECT 1 FROM group_members gm
                      WHERE gm.user_id = ?2
@@ -1790,6 +1791,7 @@ impl Database {
             params![attachment_id, user_id],
             |row| row.get(0),
         )?;
+
         Ok(used > 0)
     }
 
@@ -2374,6 +2376,15 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         );
         CREATE INDEX IF NOT EXISTS messages_conversation_created
             ON messages (conversation_id, created_at);
+        CREATE TABLE IF NOT EXISTS message_attachments (
+            message_id TEXT NOT NULL,
+            attachment_id TEXT NOT NULL,
+            PRIMARY KEY (message_id, attachment_id),
+            FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+            FOREIGN KEY (attachment_id) REFERENCES attachments(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_message_attachments_attachment
+            ON message_attachments(attachment_id);
         "#,
     )?;
     for (column, definition) in [
