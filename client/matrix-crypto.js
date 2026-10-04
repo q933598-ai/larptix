@@ -51,7 +51,7 @@ function requestTypeName(type) {
 }
 
 export class LarptrixMatrixCrypto {
-  constructor({ api, userId, serverName, deviceId, storePassphrase }) {
+  constructor({ api, userId, serverName, deviceId, storePassphrase, freshStart = false }) {
     this.api = api;
     this.internalUserId = userId;
     this.serverName = serverName;
