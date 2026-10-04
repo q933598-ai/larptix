@@ -1380,7 +1380,9 @@ async function sendEncryptedPayloadToPeer(targetId, payloadObject, files = []) {
       }
       encryptedBody = JSON.stringify({ version: 2, message_type: "message", sender_device_id: cryptoDevice.device_id(), ciphertexts });
     }
-    await persistCryptoState();
+    if (!matrixReady) {
+      await persistCryptoState();
+    }
   });
 
   sentPlaintextByCiphertext.set(encryptedBody, rawPayload);
