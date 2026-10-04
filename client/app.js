@@ -4931,6 +4931,7 @@ async function startCall(kind) {
     localMediaStream = await acquireCallMedia(kind);
     showCallStage();
     await attachLocalMediaPreview();
+    startSpeakingMonitor(localMediaStream, "local", callPlaceholderLocalAvatar);
     callStatus.textContent = `Waiting for answer…${callMediaNotice}`;
     peerConnection = await createPeerConnection();
     for (const track of localMediaStream.getTracks()) {
@@ -5148,7 +5149,6 @@ async function handleCallSignal(signal) {
     incomingCallTimeout = setTimeout(() => {
       if (!pendingIncomingCall || pendingIncomingCall.sender_id !== signal.sender_id) return;
       stopCallRingtone();
-      directCallJoin.hidden = false;
       lastDirectCallJoinPeerId = signal.sender_id;
       lastDirectCallJoinKind = callMediaKind || "audio";
       renderDirectCallTopbar(signal.sender_id);
@@ -5207,8 +5207,10 @@ async function handleCallSignal(signal) {
     clearTimeout(noAnswerCleanupTimeout);
     noAnswerCleanupTimeout = null;
     callNoAnswer = false;
+    directCallRemoteVisible = true;
     directCallAnswered = true;
     directCallAnsweredAt = Date.now();
+    updateCallPlaceholder({ force: true });
     renderDirectCallAvatarStack();
     renderDirectCallTopbar(peerId);
     stopCallRingtone();
@@ -5277,6 +5279,7 @@ async function acceptIncomingCall() {
     localMediaStream = await acquireCallMedia(callMediaKind);
     showCallStage();
     await attachLocalMediaPreview();
+    startSpeakingMonitor(localMediaStream, "local", callPlaceholderLocalAvatar);
     callStatus.textContent = `Connecting…${callMediaNotice}`;
     peerConnection = await createPeerConnection();
     for (const track of localMediaStream.getTracks()) peerConnection.addTrack(track, localMediaStream);
@@ -6548,39 +6551,6 @@ function renderDirectCallParticipants() {
   if (!directCallParticipants) return;
   directCallParticipants.replaceChildren();
 
-  if (callStage?.classList.contains("call-ending-notice") && !callNoAnswer) {
-    directCallParticipants.hidden = true;
-    return;
-  }
-
-  const demo = callNoAnswer;
-  if (demo) {
-    const demoId =
-      lastDirectCallAvatarPeerId
-      || lastDirectCallPeerId
-      || pendingIncomingCall?.sender_id
-      || null;
-    if (!demoId) {
-      directCallParticipants.hidden = true;
-      return;
-    }
-    const user = demoId === me?.user_id
-      ? me
-      : users.find((item) => item.user_id === demoId)
-        || { user_id: demoId, display_name: "Larptrix user" };
-    const chip = document.createElement("div");
-    chip.className = "call-participant-chip";
-    const avatar = document.createElement("span");
-    avatar.className = "avatar";
-    paintAvatar(avatar, user);
-    const name = document.createElement("span");
-    name.textContent = user?.display_name || "Participant";
-    chip.append(avatar, name);
-    directCallParticipants.append(chip);
-    directCallParticipants.hidden = false;
-    return;
-  }
-
   const direct = !groupCallId && (
     callPeerId
       || pendingIncomingCall?.sender_id
@@ -6596,19 +6566,16 @@ function renderDirectCallParticipants() {
     || pendingIncomingCall?.sender_id
     || lastDirectCallPeerId
     || lastDirectCallJoinPeerId;
-  const remoteUser = users.find((item) => item.user_id === remoteId)
-    || (pendingIncomingCall?.sender_id === remoteId
-      ? users.find((item) => item.user_id === pendingIncomingCall.sender_id)
-      : null)
-    || { user_id: remoteId, display_name: "Larptrix user" };
-
-  const onlyRemote = callNoAnswer || (!peerConnection && lastDirectCallJoinPeerId === remoteId);
-  const ids = onlyRemote ? [remoteId] : [me?.user_id, remoteId];
+  const remoteUser = getDirectCallUser(remoteId) || { user_id: remoteId, display_name: "Larptrix user" };
+  const ids = directCallRemoteVisible
+    ? [me?.user_id, remoteId]
+    : [me?.user_id];
 
   for (const id of ids.filter(Boolean).filter((item, index, array) => array.indexOf(item) === index)) {
-    const user = id === me?.user_id ? me : users.find((item) => item.user_id === id) || remoteUser;
+    const user = id === me?.user_id ? me : id === remoteId ? remoteUser : getDirectCallUser(id);
     const chip = document.createElement("div");
     chip.className = "call-participant-chip";
+    if (id === me?.user_id) chip.classList.add("call-participant-local");
 
     const avatar = document.createElement("span");
     avatar.className = "avatar";
@@ -6622,7 +6589,6 @@ function renderDirectCallParticipants() {
 
   directCallParticipants.hidden = directCallParticipants.childElementCount === 0;
 }
-
 function showDirectCallNotice(targetPeerId, message, { join = false, persist = false, kind = "audio", duration = 3000, avatarPeerId = targetPeerId } = {}) {
   if (!targetPeerId) return;
   clearTimeout(directCallNoticeTimeout);
