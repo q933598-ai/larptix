@@ -4315,6 +4315,19 @@ function renderDirectCallTopbar(id = peerId) {
   const callButton = document.getElementById("start-audio-call");
   const videoButton = document.getElementById("start-video-call");
   const selected = getChatEntries().find((item) => item.user_id === id);
+  const hasLiveDirectCall = Boolean(
+    directCallSessionId
+      || pendingIncomingCall
+      || peerConnection
+      || directCallOutgoing
+  );
+  if (!hasLiveDirectCall) {
+    directCallJoin.hidden = true;
+    directCallJoin.disabled = false;
+    if (callButton) callButton.hidden = Boolean(selected?.is_group || selected?.is_channel);
+    if (videoButton) videoButton.hidden = Boolean(selected?.is_group || selected?.is_channel);
+    return;
+  }
   // A normal chat is not a call state. Only use an explicit call peer.
   const remoteId = callPeerId
     || pendingIncomingCall?.sender_id
