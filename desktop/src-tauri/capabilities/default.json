@@ -13,6 +13,7 @@
   },
   "permissions": [
     "core:default",
-    "allow-open-call-in-browser"
+    "allow-open-call-in-browser",
+    "notification:default"
   ]
 }
