@@ -1491,12 +1491,19 @@ async fn update_activities(
         }
         let name = raw.name.trim();
         if name.is_empty() || name.chars().count() > 120 {
-            return Err(ApiError::bad("activity name must be between 1 and 120 characters"));
+            return Err(ApiError::bad(
+                "activity name must be between 1 and 120 characters",
+            ));
         }
         if raw.details.chars().count() > 160 {
-            return Err(ApiError::bad("activity details must be 160 characters or fewer"));
+            return Err(ApiError::bad(
+                "activity details must be 160 characters or fewer",
+            ));
         }
-        for url in [raw.url.as_ref(), raw.image_url.as_ref()].into_iter().flatten() {
+        for url in [raw.url.as_ref(), raw.image_url.as_ref()]
+            .into_iter()
+            .flatten()
+        {
             if !url.starts_with("https://") || url.chars().count() > 1000 {
                 return Err(ApiError::bad(
                     "activity links must use HTTPS and be 1000 characters or fewer",
@@ -1518,9 +1525,10 @@ async fn update_activities(
                 .filter(|value| !value.is_empty()),
         };
 
-        if !activities.iter().any(|item: &UserActivity| {
-            item.kind == candidate.kind && item.name == candidate.name
-        }) {
+        if !activities
+            .iter()
+            .any(|item: &UserActivity| item.kind == candidate.kind && item.name == candidate.name)
+        {
             activities.push(candidate);
         }
 
