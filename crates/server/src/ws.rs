@@ -74,14 +74,7 @@ pub async fn handle_socket(
         .groups_for_user(&user.id)
         .unwrap_or_default()
         .into_iter()
-        .map(|group| GroupInfo {
-            group_id: group.id,
-            name: group.name,
-            member_ids: group.member_ids,
-            is_channel: group.is_channel,
-            admin_ids: group.admin_ids,
-            post_policy: group.post_policy,
-        })
+        .map(group_info)
         .collect();
     let _ = tx.send(ServerMessage::Groups { groups });
     send_active_group_calls(&state, &user.id, &tx);
@@ -809,12 +802,12 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
         let online = state.hub.online_ids();
         let _ = tx.send(ServerMessage::Chat {
             peer: UserInfo {
-                user_id: group.id,
-                display_name: group.name,
+                user_id: group.id.clone(),
+                display_name: group.name.clone(),
                 username: String::new(),
                 email: None,
                 online: group.member_ids.iter().any(|id| online.contains(id)),
-                avatar_url: None,
+                avatar_url: group.avatar_id.map(|_| format!("/api/groups/{}/avatar", group.id)),
                 activity: None,
                 is_group: true,
                 is_channel: group.is_channel,
@@ -824,6 +817,10 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
                 friend_status: "accepted".to_string(),
                 message_policy: "everyone".to_string(),
                 group_member_ids: group.member_ids,
+                group_description: group.description,
+                group_avatar_url: group.avatar_id.map(|_| format!("/api/groups/{}/avatar", group.id)),
+                group_banner_url: group.banner_id.map(|_| format!("/api/groups/{}/banner", group.id)),
+                subscriber_count: group.member_ids.len(),
             },
             history,
         });
@@ -1447,6 +1444,22 @@ fn broadcast_friend_directories(state: &AppState) {
     }
 }
 
+fn group_info(group: crate::db::GroupRow) -> GroupInfo {
+    let subscriber_count = group.member_ids.len();
+    GroupInfo {
+        group_id: group.id.clone(),
+        name: group.name,
+        member_ids: group.member_ids,
+        is_channel: group.is_channel,
+        admin_ids: group.admin_ids,
+        post_policy: group.post_policy,
+        description: group.description,
+        avatar_url: group.avatar_id.map(|_| format!("/api/groups/{}/avatar", group.id)),
+        banner_url: group.banner_id.map(|_| format!("/api/groups/{}/banner", group.id)),
+        subscriber_count,
+    }
+}
+
 fn me_info(state: &AppState, user: &UserRow) -> UserInfo {
     let mut info = user_info(user, true);
     if let Ok(Some((_, username, _, _))) = state.db.profile_fields(&user.id) {
@@ -1476,6 +1489,10 @@ fn user_info(user: &UserRow, online: bool) -> UserInfo {
         friend_status: "accepted".to_string(),
         message_policy: "everyone".to_string(),
         group_member_ids: Vec::new(),
+        group_description: String::new(),
+        group_avatar_url: None,
+        group_banner_url: None,
+        subscriber_count: 0,
     }
 }
 
