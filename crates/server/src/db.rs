@@ -1616,6 +1616,9 @@ impl Database {
                 row.get::<_, i64>(2)? != 0,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
             ))
         })?;
         let mut groups = Vec::new();
@@ -1666,6 +1669,9 @@ impl Database {
                         row.get::<_, i64>(2)? != 0,
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
                     ))
                 },
             )
@@ -2034,6 +2040,8 @@ impl Database {
                     _ => None,
                 },
                 attachments: Vec::new(),
+                reactions: Vec::new(),
+                view_count: 0,
                 created_at: row.get(6)?,
             })
         })?;
