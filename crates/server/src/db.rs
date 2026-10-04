@@ -86,6 +86,9 @@ pub struct GroupRow {
     pub is_channel: bool,
     pub admin_ids: Vec<String>,
     pub post_policy: String,
+    pub description: String,
+    pub avatar_id: Option<String>,
+    pub banner_id: Option<String>,
 }
 
 pub struct Database {
@@ -1559,6 +1562,9 @@ impl Database {
             is_channel: false,
             admin_ids: vec![creator_id.to_string()],
             post_policy: "members".to_string(),
+            description: String::new(),
+            avatar_id: None,
+            banner_id: None,
         })
     }
 
@@ -1590,7 +1596,8 @@ impl Database {
     pub fn groups_for_user(&self, user_id: &str) -> rusqlite::Result<Vec<GroupRow>> {
         let conn = self.conn.lock().expect("db lock");
         let mut stmt = conn.prepare(
-            "SELECT g.id, g.name, g.is_channel, g.created_by, g.post_policy
+            "SELECT g.id, g.name, g.is_channel, g.created_by, g.post_policy,
+                    g.description, g.avatar_id, g.banner_id
              FROM groups g
              JOIN group_members gm ON gm.group_id = g.id
              WHERE gm.user_id = ?1 ORDER BY g.name COLLATE NOCASE",
@@ -1606,7 +1613,7 @@ impl Database {
         })?;
         let mut groups = Vec::new();
         for row in rows {
-            let (id, name, is_channel, creator_id, post_policy) = row?;
+            let (id, name, is_channel, creator_id, post_policy, description, avatar_id, banner_id) = row?;
             let member_ids = conn
                 .prepare("SELECT user_id FROM group_members WHERE group_id = ?1 ORDER BY user_id")?
                 .query_map([&id], |member| member.get(0))?
@@ -1628,6 +1635,9 @@ impl Database {
                 is_channel,
                 admin_ids,
                 post_policy,
+                description,
+                avatar_id,
+                banner_id,
             });
         }
         Ok(groups)
@@ -1637,7 +1647,9 @@ impl Database {
         let conn = self.conn.lock().expect("db lock");
         let group = conn
             .query_row(
-                "SELECT id, name, is_channel, created_by, post_policy FROM groups WHERE id = ?1",
+                "SELECT id, name, is_channel, created_by, post_policy,
+                        description, avatar_id, banner_id
+                 FROM groups WHERE id = ?1",
                 [group_id],
                 |row| {
                     Ok((
@@ -1650,7 +1662,7 @@ impl Database {
                 },
             )
             .optional()?;
-        let Some((id, name, is_channel, creator_id, post_policy)) = group else {
+        let Some((id, name, is_channel, creator_id, post_policy, description, avatar_id, banner_id)) = group else {
             return Ok(None);
         };
         let member_ids = conn
@@ -1674,7 +1686,43 @@ impl Database {
             is_channel,
             admin_ids,
             post_policy,
+            description,
+            avatar_id,
+            banner_id,
         }))
+    }
+
+    pub fn update_group_profile(
+        &self,
+        group_id: &str,
+        name: &str,
+        description: &str,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "UPDATE groups SET name = ?1, description = ?2 WHERE id = ?3",
+            params![name, description, group_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_group_media(
+        &self,
+        group_id: &str,
+        column: &str,
+        attachment_id: Option<&str>,
+    ) -> rusqlite::Result<Option<String>> {
+        if !matches!(column, "avatar_id" | "banner_id") {
+            return Err(rusqlite::Error::InvalidParameterName(column.to_string()));
+        }
+        let conn = self.conn.lock().expect("db lock");
+        let old: Option<String> = {
+            let sql = format!("SELECT {column} FROM groups WHERE id = ?1");
+            conn.query_row(&sql, [group_id], |row| row.get(0)).optional()?
+        };
+        let sql = format!("UPDATE groups SET {column} = ?1 WHERE id = ?2");
+        conn.execute(&sql, params![attachment_id, group_id])?;
+        Ok(old)
     }
 
     pub fn is_group_member(&self, group_id: &str, user_id: &str) -> rusqlite::Result<bool> {
@@ -2466,6 +2514,9 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             created_at INTEGER NOT NULL,
             is_channel INTEGER NOT NULL DEFAULT 0,
             post_policy TEXT NOT NULL DEFAULT 'members',
+            description TEXT NOT NULL DEFAULT '',
+            avatar_id TEXT,
+            banner_id TEXT,
             FOREIGN KEY (created_by) REFERENCES users(id)
         );
         CREATE TABLE IF NOT EXISTS group_members (
@@ -2516,11 +2567,35 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_message_attachments_attachment
             ON message_attachments(attachment_id);
+        CREATE TABLE IF NOT EXISTS message_reactions (
+            message_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            emoji TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (message_id, user_id, emoji),
+            FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_message_reactions_message
+            ON message_reactions(message_id);
+        CREATE TABLE IF NOT EXISTS message_views (
+            message_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            viewed_at INTEGER NOT NULL,
+            PRIMARY KEY (message_id, user_id),
+            FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_message_views_message
+            ON message_views(message_id);
         "#,
     )?;
     for (column, definition) in [
         ("is_channel", "INTEGER NOT NULL DEFAULT 0"),
         ("post_policy", "TEXT NOT NULL DEFAULT 'members'"),
+        ("description", "TEXT NOT NULL DEFAULT ''"),
+        ("avatar_id", "TEXT"),
+        ("banner_id", "TEXT"),
     ] {
         let exists: i64 = conn.query_row(
             "SELECT COUNT(*) FROM pragma_table_info('groups') WHERE name = ?1",
