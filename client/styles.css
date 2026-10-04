@@ -3942,3 +3942,236 @@ html[data-theme="custom"] .music-library {
 .music-player .music-volume {
   cursor: ew-resize;
 }
+
+
+/* Music UI correction:
+   - the compact player is a fixed bottom dock again;
+   - only the full library is a movable/resizable window. */
+.music-player {
+  position: absolute;
+  z-index: 10;
+  left: 0;
+  right: 0;
+  top: auto;
+  bottom: 0;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  resize: none;
+  grid-template-columns: minmax(180px, .8fr) minmax(260px, 1.4fr) minmax(190px, .8fr);
+  gap: 18px;
+  padding: 10px 18px;
+  border: 0;
+  border-top: 1px solid var(--line-bright);
+  border-radius: 0;
+  background: rgb(5 12 8 / 97%);
+  box-shadow: none;
+  backdrop-filter: blur(16px);
+  cursor: default;
+  touch-action: auto;
+}
+.music-player.dragging {
+  cursor: default;
+}
+.music-player .music-player-track {
+  pointer-events: auto;
+  cursor: default;
+  touch-action: auto;
+  user-select: auto;
+}
+.music-player button,
+.music-player input,
+.music-player a {
+  pointer-events: auto;
+}
+
+#music-library {
+  position: fixed;
+  z-index: 180;
+  left: 50%;
+  top: 82px;
+  width: min(540px, calc(100vw - 24px));
+  height: min(590px, calc(100vh - 100px));
+  min-width: 340px;
+  min-height: 320px;
+  resize: both;
+  overflow: hidden;
+  border: 1px solid var(--line-bright);
+  border-radius: 11px;
+  background: var(--panel);
+  box-shadow: 0 18px 55px rgb(0 0 0 / 45%);
+}
+
+#music-library .music-window-titlebar {
+  min-height: 38px;
+  padding: 5px 8px;
+  gap: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  border-bottom: 1px solid var(--line);
+  box-shadow: none;
+}
+
+#music-library .music-window-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .8rem;
+}
+
+#music-library .music-window-title strong {
+  font-weight: 600;
+}
+
+#music-library .music-window-caption {
+  color: var(--muted);
+  font-size: .64rem;
+}
+
+#music-library .music-library-actions {
+  gap: 4px;
+}
+
+#music-library .music-library-actions > button,
+#music-library .music-window-close,
+#music-library .window-pin-button {
+  min-width: 30px;
+  width: 30px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+}
+
+#music-library .music-library-actions .music-upload-button {
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border-color: var(--line);
+  background: transparent;
+  color: var(--text);
+  font-size: .7rem;
+  font-weight: 500;
+}
+
+#music-library .music-library-actions .music-upload-button:hover {
+  background: var(--panel-3);
+}
+
+#music-library .music-library-toolbar {
+  gap: 8px;
+  padding: 9px 12px 7px;
+  border-bottom: 1px solid var(--line);
+}
+
+#music-library #music-library-search {
+  padding: 8px 10px;
+  font-size: .8rem;
+}
+
+#music-library .music-library-stats {
+  font-size: .68rem;
+}
+
+#music-library .music-dropzone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin: 8px 12px 5px;
+  min-height: 42px;
+  padding: 7px 10px;
+  border-style: dashed;
+  border-radius: 8px;
+  background: transparent;
+  text-align: center;
+}
+
+#music-library .music-dropzone-icon {
+  font-size: .9rem;
+}
+
+#music-library .music-dropzone strong {
+  font-size: .72rem;
+}
+
+#music-library .music-dropzone > span:last-child {
+  display: none;
+}
+
+#music-library .music-library-content {
+  padding: 0 10px 12px;
+}
+
+#music-library .music-section-title {
+  min-height: 30px;
+  padding: 5px 2px 4px;
+  font-size: .66rem;
+}
+
+#music-library .music-track {
+  grid-template-columns: 28px minmax(0, 1fr) 30px 30px;
+  gap: 6px;
+  padding: 5px 6px;
+  min-height: 42px;
+  border-radius: 7px;
+}
+
+#music-library .music-track-copy strong {
+  font-size: .78rem;
+}
+
+#music-library .music-track-copy span {
+  font-size: .66rem;
+}
+
+#music-library .music-track-size {
+  display: none;
+}
+
+#music-library .music-track-play,
+#music-library .music-track-remove {
+  min-width: 30px;
+  width: 30px;
+  height: 30px;
+}
+
+#music-library .music-library-empty {
+  padding: 28px 8px;
+  font-size: .78rem;
+}
+
+#music-library .music-library-drag-area {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+#music-library .music-library-drag-area:active {
+  cursor: grabbing;
+}
+
+@media (max-width: 760px) {
+  #music-library {
+    left: 8px;
+    top: 60px;
+    width: calc(100vw - 16px);
+    height: min(620px, calc(100dvh - 76px));
+    min-width: 0;
+  }
+
+  #music-library .music-window-caption {
+    display: none;
+  }
+
+  .music-player {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    padding: 8px 10px;
+    border-radius: 0;
+  }
+}
