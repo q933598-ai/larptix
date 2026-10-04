@@ -176,6 +176,8 @@ pub struct GroupInfo {
     pub banner_url: Option<String>,
     #[serde(default)]
     pub subscriber_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 fn default_channel_post_policy() -> String {
