@@ -1585,8 +1585,12 @@ fn group_info(group: crate::db::GroupRow) -> GroupInfo {
         admin_ids: group.admin_ids,
         post_policy: group.post_policy,
         description: group.description,
-        avatar_url: group.avatar_id.map(|_| format!("/api/groups/{}/avatar", group.id)),
-        banner_url: group.banner_id.map(|_| format!("/api/groups/{}/banner", group.id)),
+        avatar_url: group
+            .avatar_id
+            .map(|_| format!("/api/groups/{}/avatar", group.id)),
+        banner_url: group
+            .banner_id
+            .map(|_| format!("/api/groups/{}/banner", group.id)),
         subscriber_count,
     }
 }
