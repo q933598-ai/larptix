@@ -257,12 +257,19 @@ pub async fn handle_socket(
                 let Some(call) = calls.get_mut(&group_id) else {
                     continue;
                 };
-                if call.initiator_id == user.id {
+                if !call.participant_ids.iter().any(|id| id == &user.id) {
+                    continue;
+                }
+
+                call.participant_ids.retain(|id| id != &user.id);
+                if call.participant_ids.is_empty() {
                     let ended_call = call.clone();
                     calls.remove(&group_id);
                     group_ended.push((group_id, ended_call));
-                } else if call.participant_ids.iter().any(|id| id == &user.id) {
-                    call.participant_ids.retain(|id| id != &user.id);
+                } else {
+                    if call.initiator_id == user.id {
+                        call.initiator_id = call.participant_ids[0].clone();
+                    }
                     group_updates.push((group_id.clone(), call.clone()));
                 }
             }
@@ -644,6 +651,7 @@ fn relay_call_signal(
                 .get("call_id")
                 .and_then(serde_json::Value::as_str)
                 .ok_or_else(|| "group call signal is missing call id".to_string())?;
+
             let snapshot = {
                 let mut calls = state.group_calls.lock().expect("group call lock");
                 let call = calls
@@ -652,9 +660,35 @@ fn relay_call_signal(
                 if call.call_id != call_id {
                     return Err("group call id does not match active call".into());
                 }
+
                 call.participant_ids.retain(|id| id != &user.id);
+                if call.participant_ids.is_empty() {
+                    let ended = call.clone();
+                    calls.remove(peer_id);
+                    return {
+                        let ended_message = ServerMessage::GroupCallState {
+                            group_id: peer_id.to_string(),
+                            call_id: ended.call_id,
+                            media: ended.media,
+                            initiator_id: ended.initiator_id,
+                            participant_ids: Vec::new(),
+                            active: false,
+                        };
+                        for member_id in &group.member_ids {
+                            if let Ok(member) = Uuid::parse_str(member_id) {
+                                state.hub.send_to(member, ended_message.clone());
+                            }
+                        }
+                        Ok(())
+                    };
+                }
+
+                if call.initiator_id == user.id {
+                    call.initiator_id = call.participant_ids[0].clone();
+                }
                 call.clone()
             };
+
             let update = ServerMessage::GroupCallState {
                 group_id: peer_id.to_string(),
                 call_id: snapshot.call_id,
