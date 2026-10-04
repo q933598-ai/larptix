@@ -14,6 +14,7 @@
   "permissions": [
     "core:default",
     "allow-open-call-in-browser",
+    "allow-toggle-fullscreen",
     "notification:default"
   ]
 }
