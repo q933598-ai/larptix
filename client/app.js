@@ -4802,12 +4802,10 @@ async function toggleScreenShare() {
     // Start with the browser's simplest valid screen-capture request.
     // This avoids InvalidStateError/TypeError combinations from optional
     // capture hints and leaves quality selection to the selected track.
-    const captureOptions = [
-      { video: true },
-    ];
-    if (!captureAudio && !firefox) {
-      captureOptions.unshift({ video: { frameRate: { ideal: frameRate } } });
-    }
+    // Use the least restrictive request first. Browser-specific display
+    // capture hints are intentionally avoided here because they can trigger
+    // "Invalid capture constraints" before the source picker even opens.
+    const captureOptions = [{ video: true }];
     let captureError = null;
     for (const options of captureOptions) {
       try {
