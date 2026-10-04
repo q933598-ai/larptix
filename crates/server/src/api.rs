@@ -1853,7 +1853,9 @@ async fn update_group_settings(
         return Err(ApiError::bad("use channel settings for a channel"));
     }
     if group.admin_ids.first().map(String::as_str) != Some(user.id.as_str()) {
-        return Err(ApiError::bad("only the group creator can change group settings"));
+        return Err(ApiError::bad(
+            "only the group creator can change group settings",
+        ));
     }
     let name = body
         .name
@@ -1914,7 +1916,9 @@ async fn set_group_media(
         group.admin_ids.first().map(String::as_str) == Some(user.id.as_str())
     };
     if !can_edit {
-        return Err(ApiError::bad("you do not have permission to change this group media"));
+        return Err(ApiError::bad(
+            "you do not have permission to change this group media",
+        ));
     }
     let saved = save_image(state, &user.id, multipart).await?;
     let old = state
@@ -1923,16 +1927,17 @@ async fn set_group_media(
         .map_err(ApiError::db)?;
     if let Some(old_id) = old {
         if let Ok(Some(old_file)) = state.db.attachment(&old_id) {
-            let _ = std::fs::remove_file(upload_path(
-                &state.upload_dir,
-                &old_file.id,
-                &old_file.ext,
-            ));
+            let _ =
+                std::fs::remove_file(upload_path(&state.upload_dir, &old_file.id, &old_file.ext));
         }
     }
     let url = format!(
         "/api/groups/{id}/{}",
-        if column == "avatar_id" { "avatar" } else { "banner" }
+        if column == "avatar_id" {
+            "avatar"
+        } else {
+            "banner"
+        }
     );
     if column == "avatar_id" {
         Ok(Json(serde_json::json!({ "avatar_url": url })))
@@ -1977,7 +1982,8 @@ async fn get_group_media(
         "banner_id" => group.banner_id,
         _ => None,
     };
-    let attachment_id = attachment_id.ok_or_else(|| ApiError::not_found("group media not found"))?;
+    let attachment_id =
+        attachment_id.ok_or_else(|| ApiError::not_found("group media not found"))?;
     file_response(state, &attachment_id)
 }
 
@@ -2018,15 +2024,13 @@ async fn update_channel_settings(
         .update_group_profile(&id, &name, &description)
         .map_err(ApiError::db)?;
 
-    Ok(Json(
-        serde_json::json!({
-            "ok": true,
-            "channel_id": id,
-            "post_policy": body.post_policy,
-            "name": name,
-            "description": description,
-        }),
-    ))
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "channel_id": id,
+        "post_policy": body.post_policy,
+        "name": name,
+        "description": description,
+    })))
 }
 
 #[derive(Deserialize)]
@@ -2069,7 +2073,9 @@ async fn add_group_member(
         .are_friends(&user.id, &body.user_id)
         .map_err(ApiError::db)?
     {
-        return Err(ApiError::bad("only friends can be added to groups or channels"));
+        return Err(ApiError::bad(
+            "only friends can be added to groups or channels",
+        ));
     }
     if state
         .db
@@ -2126,17 +2132,23 @@ fn group_info(group: crate::db::GroupRow) -> GroupInfo {
         admin_ids: group.admin_ids,
         post_policy: group.post_policy,
         description: group.description,
-        avatar_url: group.avatar_id.map(|_| format!("/api/groups/{}/avatar", group.id)),
-        banner_url: group.banner_id.map(|_| format!("/api/groups/{}/banner", group.id)),
+        avatar_url: group
+            .avatar_id
+            .map(|_| format!("/api/groups/{}/avatar", group.id)),
+        banner_url: group
+            .banner_id
+            .map(|_| format!("/api/groups/{}/banner", group.id)),
         subscriber_count,
     }
 }
 
 fn group_json(group: crate::db::GroupRow) -> serde_json::Value {
-    let avatar_url = group.avatar_id
+    let avatar_url = group
+        .avatar_id
         .as_ref()
         .map(|_| format!("/api/groups/{}/avatar", group.id));
-    let banner_url = group.banner_id
+    let banner_url = group
+        .banner_id
         .as_ref()
         .map(|_| format!("/api/groups/{}/banner", group.id));
     serde_json::json!({
