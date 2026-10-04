@@ -423,13 +423,16 @@
   }
 
   function wirePlayerDragging() {
-    const handle = document.querySelector(".music-player-drag-area");
-    if (!handle || !els.player) return;
+    const handle = els.player;
+    if (!handle) return;
 
     let dragging = false;
     let pointerId = null;
     let offsetX = 0;
     let offsetY = 0;
+
+    const isInteractiveTarget = (target) =>
+      target?.closest?.("button,input,select,textarea,a,label,[contenteditable=\"true\"]");
 
     const stopDragging = (event) => {
       if (!dragging) return;
@@ -439,14 +442,14 @@
         handle.releasePointerCapture(pointerId);
       }
       pointerId = null;
-      const rect = els.player.getBoundingClientRect();
+      const rect = handle.getBoundingClientRect();
       savePlayerPosition(rect.left, rect.top);
       event?.preventDefault?.();
     };
 
     handle.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0 || event.target.closest("button,input,select,textarea,a,label")) return;
-      const rect = els.player.getBoundingClientRect();
+      if (event.button !== 0 || isInteractiveTarget(event.target)) return;
+      const rect = handle.getBoundingClientRect();
       dragging = true;
       pointerId = event.pointerId;
       offsetX = event.clientX - rect.left;
@@ -457,12 +460,12 @@
     });
 
     handle.addEventListener("pointermove", (event) => {
-      if (!dragging) return;
+      if (!dragging || event.pointerId !== pointerId) return;
       const position = clampPlayerPosition(event.clientX - offsetX, event.clientY - offsetY);
-      els.player.style.left = position.x + "px";
-      els.player.style.top = position.y + "px";
-      els.player.style.right = "auto";
-      els.player.style.bottom = "auto";
+      handle.style.left = position.x + "px";
+      handle.style.top = position.y + "px";
+      handle.style.right = "auto";
+      handle.style.bottom = "auto";
     });
 
     handle.addEventListener("pointerup", stopDragging);
