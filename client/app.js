@@ -502,6 +502,7 @@ let screenMediaStream = null;
 let pendingIncomingCall = null;
 let callPeerId = null;
 let callMediaKind = null;
+let directCallSessionId = null;
 let callMediaNotice = "";
 let pendingIceCandidates = [];
 let outgoingCallTimeout = null;
@@ -509,6 +510,7 @@ let incomingCallTimeout = null;
 let noAnswerCleanupTimeout = null;
 let lastDirectCallAvatarTimeout = null;
 let lastDirectCallPeerId = null;
+let lastDirectCallAvatarPeerId = null;
 let lastDirectCallJoinPeerId = null;
 let lastDirectCallJoinKind = "audio";
 let directCallNoticeTimeout = null;
@@ -4790,8 +4792,10 @@ async function startCall(kind) {
   clearTimeout(directCallNoticeTimeout);
   directCallNoticeTimeout = null;
   lastDirectCallPeerId = null;
+  lastDirectCallAvatarPeerId = null;
   lastDirectCallJoinPeerId = null;
   lastDirectCallJoinKind = kind;
+  directCallSessionId = crypto.randomUUID();
   callPeerId = peerId;
   callMediaKind = kind;
   callNoAnswer = false;
@@ -4815,6 +4819,7 @@ async function startCall(kind) {
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
     sendCallSignal("offer", {
+      call_id: directCallSessionId,
       description: peerConnection.localDescription,
       media: kind,
     });
@@ -4835,12 +4840,13 @@ async function startCall(kind) {
         if (!callNoAnswer || callPeerId !== peerId) return;
         const unansweredPeerId = callPeerId;
         const unansweredKind = callMediaKind || "audio";
-        sendCallSignal("hangup", {});
+        sendCallSignal("hangup", { call_id: directCallSessionId });
         endCall(false);
         showDirectCallNotice(unansweredPeerId, "No answer", {
           join: true,
           kind: unansweredKind,
           duration: 3000,
+          avatarPeerId: me?.user_id,
         });
       }, 3000);
     }, 20000);
@@ -4971,8 +4977,10 @@ async function handleCallSignal(signal) {
     return;
   }
   if (!me || signal.sender_id === me.user_id) return;
+  const incomingCallId = signal.payload?.call_id || null;
   if (signal.kind === "offer" && !peerConnection) {
     pendingIncomingCall = signal;
+    directCallSessionId = incomingCallId;
     callPeerId = signal.sender_id;
     renderDirectCallAvatarStack();
     pendingIceCandidates = iceCandidatesBeforeOffer.get(signal.sender_id) || [];
@@ -5010,6 +5018,7 @@ async function handleCallSignal(signal) {
   if (
     (signal.kind === "hangup" || signal.kind === "reject")
     && pendingIncomingCall?.sender_id === signal.sender_id
+    && (!pendingIncomingCall.payload?.call_id || pendingIncomingCall.payload.call_id === incomingCallId)
   ) {
     clearTimeout(incomingCallTimeout);
     incomingCallTimeout = null;
@@ -5032,6 +5041,7 @@ async function handleCallSignal(signal) {
 
   if (signal.sender_id !== callPeerId) return;
   if (!peerConnection) return;
+  if (directCallSessionId && incomingCallId && incomingCallId !== directCallSessionId) return;
   if (signal.kind === "answer") {
     clearTimeout(outgoingCallTimeout);
     outgoingCallTimeout = null;
@@ -5040,7 +5050,7 @@ async function handleCallSignal(signal) {
     callNoAnswer = false;
     renderDirectCallAvatarStack();
     stopCallRingtone();
-    await peerConnection.setRemoteDescription(signal.payload);
+    await peerConnection.setRemoteDescription(signal.payload.description || signal.payload);
     await flushIceCandidates();
   } else if (signal.kind === "ice_candidate") {
     const candidate = signal.payload;
@@ -5052,7 +5062,10 @@ async function handleCallSignal(signal) {
     applyCallCodecPreferences(peerConnection);
     const answer = await peerConnection.createAnswer();
     await peerConnection.setLocalDescription(answer);
-    sendCallSignal("answer", peerConnection.localDescription);
+    sendCallSignal("answer", {
+      call_id: directCallSessionId,
+      description: peerConnection.localDescription,
+    });
   } else if (signal.kind === "reject" || signal.kind === "hangup") {
     clearTimeout(outgoingCallTimeout);
     outgoingCallTimeout = null;
@@ -5109,7 +5122,7 @@ async function acceptIncomingCall() {
     sendCallSignal("answer", peerConnection.localDescription);
   } catch (err) {
     appendSystem(err.message || "Could not accept the call. Check camera and microphone permissions.");
-    sendCallSignal("reject", {});
+    sendCallSignal("reject", { call_id: directCallSessionId });
     endCall(false);
   }
 }
@@ -5137,7 +5150,8 @@ function rejectIncomingCall() {
   if (pendingIncomingCall) {
     const rejectedPeerId = pendingIncomingCall.sender_id;
     callPeerId = pendingIncomingCall.sender_id;
-    sendCallSignal("reject", {});
+    directCallSessionId = pendingIncomingCall.payload?.call_id || directCallSessionId;
+    sendCallSignal("reject", { call_id: directCallSessionId });
     iceCandidatesBeforeOffer.delete(rejectedPeerId);
   }
   pendingIncomingCall = null;
@@ -5574,6 +5588,7 @@ function endCall(notifyPeer) {
   if (endedDirectPeerId) iceCandidatesBeforeOffer.delete(endedDirectPeerId);
   callPeerId = null;
   callMediaKind = null;
+  directCallSessionId = null;
   callNoAnswer = false;
 
   if (preserveNoAnswerAvatar && endedDirectPeerId) {
@@ -5584,6 +5599,7 @@ function endCall(notifyPeer) {
     lastDirectCallAvatarTimeout = setTimeout(() => {
       if (lastDirectCallPeerId === endedDirectPeerId) {
         lastDirectCallPeerId = null;
+        lastDirectCallAvatarPeerId = null;
         lastDirectCallAvatarTimeout = null;
         renderDirectCallAvatarStack();
       }
@@ -5592,6 +5608,7 @@ function endCall(notifyPeer) {
     clearTimeout(lastDirectCallAvatarTimeout);
     lastDirectCallAvatarTimeout = null;
     lastDirectCallPeerId = null;
+    lastDirectCallAvatarPeerId = null;
     lastDirectCallJoinPeerId = null;
     lastDirectCallJoinKind = "audio";
   }
@@ -6333,6 +6350,13 @@ function renderDirectCallParticipants() {
   if (!directCallParticipants) return;
   directCallParticipants.replaceChildren();
 
+  // The mini avatar is the no-answer demo. Do not render a second
+  // participant row underneath it.
+  if (callNoAnswer || callStage?.classList.contains("call-ending-notice")) {
+    directCallParticipants.hidden = true;
+    return;
+  }
+
   const direct = !groupCallId && (
     callPeerId
       || pendingIncomingCall?.sender_id
@@ -6375,12 +6399,13 @@ function renderDirectCallParticipants() {
   directCallParticipants.hidden = directCallParticipants.childElementCount === 0;
 }
 
-function showDirectCallNotice(targetPeerId, message, { join = false, kind = "audio", duration = 3000 } = {}) {
+function showDirectCallNotice(targetPeerId, message, { join = false, kind = "audio", duration = 3000, avatarPeerId = targetPeerId } = {}) {
   if (!targetPeerId || !callStage) return;
   clearTimeout(directCallNoticeTimeout);
   directCallNoticeTimeout = null;
 
   lastDirectCallPeerId = targetPeerId;
+  lastDirectCallAvatarPeerId = avatarPeerId || targetPeerId;
   lastDirectCallJoinPeerId = join ? targetPeerId : null;
   lastDirectCallJoinKind = kind;
   callNoAnswer = join;
@@ -6407,6 +6432,7 @@ function showDirectCallNotice(targetPeerId, message, { join = false, kind = "aud
     lastDirectCallJoinPeerId = null;
     callNoAnswer = false;
     lastDirectCallPeerId = null;
+    lastDirectCallAvatarPeerId = null;
     lastDirectCallAvatarTimeout = null;
     directCallNoticeTimeout = null;
     renderDirectCallParticipants();
@@ -6421,8 +6447,8 @@ function renderDirectCallAvatarStack() {
   const ids = [];
   // The compact avatar stack is only the no-answer/missed-call preview.
   // Normal calls use the full participant row inside the call stage.
-  if (callNoAnswer && lastDirectCallPeerId) {
-    ids.push(lastDirectCallPeerId);
+  if (callNoAnswer && lastDirectCallAvatarPeerId) {
+    ids.push(lastDirectCallAvatarPeerId);
   }
   for (const id of ids.filter(Boolean).slice(0, 1)) {
     const avatar = document.createElement("span");
