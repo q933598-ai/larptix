@@ -1858,12 +1858,12 @@ composer.addEventListener("submit", async (event) => {
     await saveManualSavedMessage(body, replyingToMessage ? { reply_to: replyingToMessage } : {});
     return;
   }
-  if (!socket || socket.readyState !== WebSocket.OPEN) return;
   if (!cryptoEnabled) {
     appendSystem("Set up E2E before sending messages.");
     return;
   }
   try {
+    await waitForSocketOpen();
     await cryptoReady;
     if (!cryptoDevice) throw new Error("Unlock E2E before sending messages.");
     if (!body && !file) return;
@@ -2534,6 +2534,47 @@ function showAuthError(text, success = false) {
   authError.classList.toggle("notice", success);
   authError.classList.toggle("error", !success);
   authError.textContent = text;
+}
+
+async function waitForSocketOpen(timeoutMs = 8000) {
+  if (socket?.readyState === WebSocket.OPEN) return;
+  if (!me) throw new Error("Not connected to a Larptrix account.");
+
+  if (!socket || socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
+    connect();
+  }
+
+  const candidate = socket;
+  if (!candidate) throw new Error("Could not reconnect to the server.");
+  if (candidate.readyState === WebSocket.OPEN) return;
+
+  await new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      candidate.removeEventListener("open", onOpen);
+      candidate.removeEventListener("error", onFailure);
+      candidate.removeEventListener("close", onFailure);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onOpen = () => finish();
+    const onFailure = () => finish(new Error("Connection to the server was lost. Please try again."));
+    const timer = setTimeout(
+      () => finish(new Error("Still reconnecting to Larptrix. Please try sending again in a moment.")),
+      timeoutMs,
+    );
+
+    candidate.addEventListener("open", onOpen, { once: true });
+    candidate.addEventListener("error", onFailure, { once: true });
+    candidate.addEventListener("close", onFailure, { once: true });
+  });
+
+  if (socket !== candidate || candidate.readyState !== WebSocket.OPEN) {
+    throw new Error("Connection changed while reconnecting. Please try again.");
+  }
 }
 
 function connect() {
