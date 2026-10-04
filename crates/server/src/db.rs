@@ -2022,6 +2022,8 @@ impl Database {
                     _ => None,
                 },
                 attachments: Vec::new(),
+                reactions: Vec::new(),
+                view_count: 0,
                 created_at: row.get(6)?,
             })
         })?;
