@@ -478,6 +478,7 @@ let callMediaNotice = "";
 let pendingIceCandidates = [];
 let outgoingCallTimeout = null;
 let incomingCallTimeout = null;
+let callNoAnswer = false;
 let voiceRecordingTimer = null;
 let voiceRecordingStartedAt = 0;
 const speakingMonitors = new Map();
@@ -1038,8 +1039,11 @@ function toggleCallDeafen() {
 async function replaceCallMicrophoneTrack() {
   const oldTrack = localMediaStream?.getAudioTracks()[0];
   if (!oldTrack || !navigator.mediaDevices?.getUserMedia) return;
+  const baseAudio = callAudioConstraints();
+  const micId = selectedCallDeviceId("audioinput");
+  const audio = micId ? { ...baseAudio, deviceId: { exact: micId } } : baseAudio;
   const stream = await navigator.mediaDevices.getUserMedia({
-    audio: callAudioConstraints(),
+    audio,
     video: false,
   });
   const newTrack = stream.getAudioTracks()[0];
@@ -4469,6 +4473,7 @@ async function startCall(kind) {
   if (peerConnection) endCall(true);
   callPeerId = peerId;
   callMediaKind = kind;
+  callNoAnswer = false;
   updateDirectCallButtons(peerId);
   renderDirectCallAvatarStack();
   updateCallPlaceholder({ force: true });
@@ -4496,6 +4501,7 @@ async function startCall(kind) {
     outgoingCallTimeout = setTimeout(() => {
       if (!peerConnection || callPeerId !== peerId) return;
       stopCallRingtone();
+      callNoAnswer = true;
       callStatus.textContent = "No answer";
       callAudioPlaceholder.hidden = true;
       callPlaceholderRemoteAvatar.replaceChildren();
@@ -4663,6 +4669,8 @@ async function handleCallSignal(signal) {
   if (signal.kind === "answer") {
     clearTimeout(outgoingCallTimeout);
     outgoingCallTimeout = null;
+    callNoAnswer = false;
+    renderDirectCallAvatarStack();
     stopCallRingtone();
     await peerConnection.setRemoteDescription(signal.payload);
     await flushIceCandidates();
@@ -4709,6 +4717,7 @@ async function acceptIncomingCall() {
   stopCallRingtone();
   incomingCallDialog.close();
   peerId = incoming.sender_id;
+  callNoAnswer = false;
   updateCallPlaceholder({ force: true });
   renderDirectCallAvatarStack();
   renderUsers();
@@ -4902,6 +4911,7 @@ async function acquireCallMedia(kind) {
   for (const constraints of attempts) {
     try {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      void populateCallDeviceSelects();
       if (kind === "video" && !stream.getVideoTracks().length) {
         callMediaNotice = " · camera unavailable, audio-only";
       } else if (!stream.getAudioTracks().length) {
@@ -5190,6 +5200,7 @@ function endCall(notifyPeer) {
   if (endedPeerId) iceCandidatesBeforeOffer.delete(endedPeerId);
   callPeerId = null;
   callMediaKind = null;
+  callNoAnswer = false;
   updateDirectCallButtons(peerId);
   renderDirectCallAvatarStack();
   localVideo.srcObject = null;
@@ -5927,8 +5938,12 @@ function renderDirectCallAvatarStack() {
   if (!directCallAvatarStack) return;
   directCallAvatarStack.replaceChildren();
   const ids = [];
-  if (peerConnection && callPeerId) ids.push(me?.user_id, callPeerId);
-  else if (pendingIncomingCall?.sender_id) ids.push(pendingIncomingCall.sender_id);
+  if (pendingIncomingCall?.sender_id && !peerConnection) {
+    ids.push(pendingIncomingCall.sender_id);
+  } else if (peerConnection && callPeerId) {
+    ids.push(me?.user_id);
+    if (!callNoAnswer) ids.push(callPeerId);
+  }
   for (const id of ids.filter(Boolean).slice(0, 4)) {
     const avatar = document.createElement("span");
     avatar.className = "avatar call-mini-avatar";
