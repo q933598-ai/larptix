@@ -87,6 +87,7 @@ const attachmentPreview = document.getElementById("attachment-preview");
 const recordAudioButton = document.getElementById("record-audio");
 const emptyEl = document.getElementById("empty");
 const peerName = document.getElementById("peer-name");
+const peerMeta = document.getElementById("peer-meta");
 const peerVerified = document.getElementById("peer-verified");
 const chatTitlebar = document.getElementById("chat-titlebar");
 const callStage = document.getElementById("call-stage");
@@ -135,6 +136,7 @@ const settingsE2eFingerprint = document.getElementById("settings-e2e-fingerprint
 const settingsLayoutStatus = document.getElementById("settings-layout-status");
 const settingsTheme = document.getElementById("settings-theme");
 const settingsWallpaperTint = document.getElementById("settings-wallpaper-tint");
+const settingsAvatarShape = document.getElementById("settings-avatar-shape");
 const customThemeEditor = document.getElementById("custom-theme-editor");
 const themeBg = document.getElementById("theme-bg");
 const themePanel = document.getElementById("theme-panel");
@@ -172,6 +174,13 @@ const groupMembersClose = document.getElementById("group-members-close");
 const groupMembersTitle = document.getElementById("group-members-title");
 const groupMembersHelp = document.getElementById("group-members-help");
 const groupMembersList = document.getElementById("group-members-list");
+const groupProfileForm = document.getElementById("group-profile-form");
+const groupProfileName = document.getElementById("group-profile-name");
+const groupProfileDescription = document.getElementById("group-profile-description");
+const groupProfileAvatar = document.getElementById("group-profile-avatar");
+const groupProfileBanner = document.getElementById("group-profile-banner");
+const groupProfileBannerLabel = document.getElementById("group-profile-banner-label");
+const groupProfileError = document.getElementById("group-profile-error");
 const groupCallInvite = document.getElementById("group-call-invite");
 const groupCallCount = document.getElementById("group-call-count");
 const callDeafenButton = document.getElementById("toggle-call-deafen");
@@ -253,6 +262,7 @@ const messageBodyElementsById = new Map();
 const messagesById = new Map();
 const deletedMessageIds = new Set();
 const SAVED_MESSAGES_ID = "__larptrix_saved_messages__";
+const AVATAR_SHAPE_KEY = "larptrix_avatar_shape";
 let replyingToMessage = null;
 const decryptedPayloadByMessageId = new Map();
 const mutedRemoteUserIds = new Set();
@@ -1516,6 +1526,13 @@ function openExternalReleaseUrl(url) {
   link.click();
 }
 
+function applyAvatarShape(shape = localStorage.getItem(AVATAR_SHAPE_KEY) || "circle") {
+  const value = shape === "square" ? "square" : "circle";
+  document.body.classList.toggle("avatar-shape-square", value === "square");
+  localStorage.setItem(AVATAR_SHAPE_KEY, value);
+  if (settingsAvatarShape) settingsAvatarShape.value = value;
+}
+
 function openSettings() {
   if (!me) return;
   settingsServer.value = location.host;
@@ -1616,6 +1633,7 @@ profileOpen.addEventListener("click", async () => {
 });
 menuSettings.addEventListener("click", openSettings);
 document.getElementById("settings-close").addEventListener("click", () => settingsDialog.close());
+settingsAvatarShape?.addEventListener("change", () => applyAvatarShape(settingsAvatarShape.value));
 settingsCheckUpdates?.addEventListener("click", () => {
   void checkForClientUpdate({ silent: false });
 });
@@ -2415,6 +2433,12 @@ document.getElementById("toggle-call-fullscreen").addEventListener("click", asyn
   try {
     if (globalThis.larptrixDesktop?.toggleFullscreen) {
       const fullscreen = await globalThis.larptrixDesktop.toggleFullscreen();
+      callStage.classList.toggle("native-window-fullscreen", Boolean(fullscreen));
+      return;
+    }
+    const tauriInvoke = globalThis.__TAURI__?.core?.invoke;
+    if (typeof tauriInvoke === "function") {
+      const fullscreen = await tauriInvoke("toggle_fullscreen");
       callStage.classList.toggle("native-window-fullscreen", Boolean(fullscreen));
       return;
     }
@@ -4758,7 +4782,6 @@ function renderUsers() {
 
     const button = document.createElement("button");
     button.type = "button";
-    button.classList.toggle("active", user.user_id === peerId);
     const avatar = document.createElement("span");
     avatar.className = "avatar";
     paintAvatar(avatar, user);
@@ -4860,7 +4883,13 @@ async function loadGroups() {
       is_channel: Boolean(group.is_channel),
       admin_ids: Array.isArray(group.admin_ids) ? group.admin_ids : [],
       post_policy: group.post_policy || (group.is_channel ? "admins" : "members"),
-      group_member_ids: group.member_ids,
+      group_member_ids: Array.isArray(group.member_ids) ? group.member_ids : [],
+      group_description: group.description || "",
+      group_avatar_url: group.avatar_url || null,
+      group_banner_url: group.banner_url || null,
+      avatar_url: group.avatar_url || null,
+      banner_url: group.banner_url || null,
+      subscriber_count: Number(group.subscriber_count || group.member_ids?.length || 0),
     }));
     renderUsers();
   } catch (err) {
@@ -4870,7 +4899,12 @@ async function loadGroups() {
 
 function renderGroupMemberChoices() {
   groupMemberList.replaceChildren();
-  for (const user of users.filter((item) => item.user_id !== me?.user_id && !item.is_group)) {
+  const friendIds = new Set(
+    friendRequests.friends.map((friend) => friend.user_id)
+  );
+  for (const user of users.filter(
+    (item) => friendIds.has(item.user_id) && item.user_id !== me?.user_id && !item.is_group
+  )) {
     const label = document.createElement("label");
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
@@ -4967,6 +5001,15 @@ function paintAvatar(el, user) {
     el.classList.add("saved-avatar");
     el.classList.remove("emoji-avatar");
     el.textContent = "★";
+    return;
+  }
+  if (user?.avatar_url) {
+    el.classList.remove("saved-avatar", "emoji-avatar");
+    const img = document.createElement("img");
+    const cacheKey = user.avatar_id || user.avatar_version || user.updated_at || Date.now();
+    img.src = user.avatar_url + (user.avatar_url.includes("?") ? "&" : "?") + "v=" + encodeURIComponent(cacheKey);
+    img.alt = "";
+    el.append(img);
     return;
   }
   if (user?.is_channel) {
