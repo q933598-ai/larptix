@@ -1427,15 +1427,28 @@ fn validate_e2e_message(
     Ok(())
 }
 
-fn fanout_message_metadata(state: &AppState, peer_id: &str, payload: ServerMessage) {
+fn fanout_message_metadata(
+    state: &AppState,
+    actor_id: &str,
+    peer_id: &str,
+    payload: ServerMessage,
+) {
     if let Ok(Some(group)) = state.db.group(peer_id) {
         for member_id in group.member_ids {
             if let Ok(member) = Uuid::parse_str(&member_id) {
                 state.hub.send_to(member, payload.clone());
             }
         }
-    } else if let Ok(peer) = Uuid::parse_str(peer_id) {
-        state.hub.send_to(peer, payload);
+        return;
+    }
+
+    if let Ok(actor) = Uuid::parse_str(actor_id) {
+        state.hub.send_to(actor, payload.clone());
+    }
+    if peer_id != actor_id {
+        if let Ok(peer) = Uuid::parse_str(peer_id) {
+            state.hub.send_to(peer, payload);
+        }
     }
 }
 
@@ -1469,6 +1482,7 @@ fn react_to_message(
         .map_err(db_err)?;
     fanout_message_metadata(
         state,
+        &user.id,
         peer_id,
         ServerMessage::MessageReaction {
             peer_id: peer_id.to_string(),
@@ -1502,6 +1516,7 @@ fn view_channel_message(
         .map_err(db_err)?;
     fanout_message_metadata(
         state,
+        &user.id,
         peer_id,
         ServerMessage::MessageViewUpdate {
             peer_id: peer_id.to_string(),
