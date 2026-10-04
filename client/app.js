@@ -182,6 +182,7 @@ const groupCallBanner = document.getElementById("group-call-banner");
 const groupCallBannerTitle = document.getElementById("group-call-banner-title");
 const groupCallBannerMeta = document.getElementById("group-call-banner-meta");
 const groupCallBannerAvatars = document.getElementById("group-call-banner-avatars");
+const directCallAvatarStack = document.getElementById("direct-call-avatar-stack");
 const groupCallJoin = document.getElementById("group-call-join");
 const callWindowTitle = document.getElementById("call-window-title");
 const callRingtone = document.getElementById("call-ringtone");
@@ -476,6 +477,7 @@ let callMediaKind = null;
 let callMediaNotice = "";
 let pendingIceCandidates = [];
 let outgoingCallTimeout = null;
+let incomingCallTimeout = null;
 let voiceRecordingTimer = null;
 let voiceRecordingStartedAt = 0;
 const speakingMonitors = new Map();
@@ -1786,6 +1788,7 @@ profileOpen.addEventListener("click", async () => {
     renderNotificationSettings();
     resetE2eKeysButton.hidden = !cryptoEnabled;
     resetE2eHelp.hidden = true;
+    await populateCallDeviceSelects();
     profileDialog.showModal();
   } catch (err) {
     profileError.textContent = err.message;
@@ -4386,6 +4389,7 @@ function renderGroupRemoteTrack(remoteId, stream, kind) {
     identity.className = "group-participant";
     const avatar = document.createElement("span");
     avatar.className = "avatar";
+    avatar.dataset.groupAvatarId = remoteId;
     const user = users.find((item) => item.user_id === remoteId);
     paintAvatar(avatar, user || { display_name: "?" });
     const name = document.createElement("span");
@@ -4408,6 +4412,11 @@ function renderGroupRemoteTrack(remoteId, stream, kind) {
       }
       media.srcObject = audioStream;
       void applyCallSpeakerDevice(selectedCallDeviceId("audiooutput"));
+      startSpeakingMonitor(
+        audioStream,
+        "group-" + remoteId,
+        tile.querySelector("[data-group-avatar-id=\"" + CSS.escape(remoteId) + "\"]"),
+      );
       for (const track of stream.getAudioTracks()) {
         track.addEventListener("ended", () => {
           if (media.srcObject instanceof MediaStream && media.srcObject.getTracks().includes(track)) {
@@ -4429,6 +4438,7 @@ function removeGroupPeer(remoteId) {
   connection?.close();
   groupPeerConnections.delete(remoteId);
   groupPendingIceCandidates.delete(remoteId);
+  stopSpeakingMonitor("group-" + remoteId);
   document.getElementById("group-remotes")
     ?.querySelectorAll('[data-group-remote-id="' + CSS.escape(remoteId) + '"]')
     .forEach((element) => element.remove());
@@ -4461,6 +4471,7 @@ async function startCall(kind) {
   callPeerId = peerId;
   callMediaKind = kind;
   updateDirectCallButtons(peerId);
+  renderDirectCallAvatarStack();
   updateCallPlaceholder({ force: true });
   startOutgoingCallRingtone();
   try {
@@ -4540,6 +4551,7 @@ async function createPeerConnection() {
       if (!stream.getTracks().includes(event.track)) stream.addTrack(event.track);
       remoteAudio.srcObject = stream;
       void applyCallSpeakerDevice(selectedCallDeviceId("audiooutput"));
+      startSpeakingMonitor(stream, "remote", callPlaceholderRemoteAvatar);
       event.track.addEventListener("ended", () => {
         if (remoteAudio.srcObject instanceof MediaStream && remoteAudio.srcObject.getTracks().includes(event.track)) {
           remoteAudio.srcObject.removeTrack(event.track);
@@ -4610,6 +4622,7 @@ async function handleCallSignal(signal) {
   if (signal.kind === "offer" && !peerConnection) {
     pendingIncomingCall = signal;
     callPeerId = signal.sender_id;
+    renderDirectCallAvatarStack();
     pendingIceCandidates = iceCandidatesBeforeOffer.get(signal.sender_id) || [];
     iceCandidatesBeforeOffer.delete(signal.sender_id);
     callMediaKind = signal.payload.media === "video" ? "video" : "audio";
@@ -4624,6 +4637,15 @@ async function handleCallSignal(signal) {
       ? "Accept"
       : "Open browser";
     startCallRingtone();
+    clearTimeout(incomingCallTimeout);
+    incomingCallTimeout = setTimeout(() => {
+      if (!pendingIncomingCall || pendingIncomingCall.sender_id !== signal.sender_id) return;
+      stopCallRingtone();
+      incomingCallDialog.open && incomingCallDialog.close();
+      callStatus.textContent = "Missed call — Join from the chat when you're ready.";
+      renderDirectCallAvatarStack();
+      updateDirectCallButtons(peerId);
+    }, 30000);
     incomingCallDialog.showModal();
     return;
   }
@@ -4683,10 +4705,13 @@ async function acceptIncomingCall() {
     return;
   }
   const incoming = pendingIncomingCall;
+  clearTimeout(incomingCallTimeout);
+  incomingCallTimeout = null;
   stopCallRingtone();
   incomingCallDialog.close();
   peerId = incoming.sender_id;
   updateCallPlaceholder({ force: true });
+  renderDirectCallAvatarStack();
   renderUsers();
   if (socket?.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "open", peer_id: peerId }));
@@ -4713,6 +4738,8 @@ async function acceptIncomingCall() {
 }
 
 function rejectIncomingCall() {
+  clearTimeout(incomingCallTimeout);
+  incomingCallTimeout = null;
   stopCallRingtone();
   if (pendingIncomingCall?.payload?.group_id) {
     const incoming = pendingIncomingCall;
@@ -5098,7 +5125,14 @@ async function stopScreenShare() {
 function endCall(notifyPeer) {
   clearTimeout(outgoingCallTimeout);
   outgoingCallTimeout = null;
+  clearTimeout(incomingCallTimeout);
+  incomingCallTimeout = null;
   stopCallRingtone();
+  stopSpeakingMonitor("local");
+  stopSpeakingMonitor("remote");
+  for (const key of [...speakingMonitors.keys()].filter((item) => item.startsWith("group-"))) {
+    stopSpeakingMonitor(key);
+  }
   if (groupCallGroupId && groupCallId) {
     const groupId = groupCallGroupId;
     const callId = groupCallId;
@@ -5158,6 +5192,7 @@ function endCall(notifyPeer) {
   callPeerId = null;
   callMediaKind = null;
   updateDirectCallButtons(peerId);
+  renderDirectCallAvatarStack();
   localVideo.srcObject = null;
   localScreenVideo.srcObject = null;
   localScreenVideo.hidden = true;
@@ -5296,10 +5331,8 @@ function renderUsers() {
     name.className = "person-name";
     const label = document.createElement("span");
     label.textContent = user.is_saved_chat ? "Saved Messages" : user.is_group ? "👥 " + user.display_name : user.display_name;
+    appendUserTag(label, user, { compact: true });
     name.append(label);
-    if (!user.is_saved_chat && !user.is_group) {
-      appendUserTag(name, user, { compact: true });
-    }
     if (!user.is_saved_chat && user.username && !user.is_group) {
       const handle = document.createElement("small");
       handle.textContent = "@" + user.username;
@@ -5849,9 +5882,72 @@ function appendMessage(message) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-async function attachLocalMediaPreview() {
+async function stopSpeakingMonitor(key) {
+  const monitor = speakingMonitors.get(key);
+  if (!monitor) return;
+  monitor.stopped = true;
+  if (monitor.raf) cancelAnimationFrame(monitor.raf);
+  try { monitor.source?.disconnect(); } catch {}
+  try { monitor.analyser?.disconnect(); } catch {}
+  monitor.audioContext?.close?.().catch?.(() => {});
+  monitor.element?.classList.remove("speaking");
+  speakingMonitors.delete(key);
+}
+
+function startSpeakingMonitor(stream, key, element) {
+  stopSpeakingMonitor(key);
+  if (!stream?.getAudioTracks().length || !element || typeof AudioContext === "undefined") return;
+  try {
+    const audioContext = new AudioContext();
+    const source = audioContext.createMediaStreamSource(stream);
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.78;
+    source.connect(analyser);
+    const data = new Uint8Array(analyser.fftSize);
+    const state = { audioContext, source, analyser, element, raf: 0, stopped: false };
+    const tick = () => {
+      if (state.stopped) return;
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (const value of data) {
+        const centered = (value - 128) / 128;
+        sum += centered * centered;
+      }
+      const rms = Math.sqrt(sum / data.length);
+      element.classList.toggle("speaking", rms > 0.055);
+      state.raf = requestAnimationFrame(tick);
+    };
+    speakingMonitors.set(key, state);
+    tick();
+    audioContext.resume?.().catch?.(() => {});
+  } catch {}
+}
+
+function renderDirectCallAvatarStack() {
+  if (!directCallAvatarStack) return;
+  directCallAvatarStack.replaceChildren();
+  const ids = [];
+  if (peerConnection && callPeerId) ids.push(me?.user_id, callPeerId);
+  else if (pendingIncomingCall?.sender_id) ids.push(pendingIncomingCall.sender_id);
+  for (const id of ids.filter(Boolean).slice(0, 4)) {
+    const avatar = document.createElement("span");
+    avatar.className = "avatar call-mini-avatar";
+    const user = id === me?.user_id ? me : users.find((item) => item.user_id === id);
+    paintAvatar(avatar, user || { user_id: id, display_name: "?" });
+    directCallAvatarStack.append(avatar);
+  }
+  directCallAvatarStack.hidden = ids.length === 0;
+}
+
+function attachLocalMediaPreview() {
   localVideo.srcObject = localMediaStream;
   localVideo.hidden = !localMediaStream?.getVideoTracks().length;
+  startSpeakingMonitor(
+    localMediaStream,
+    "local",
+    callPlaceholderLocalAvatar,
+  );
   document.getElementById("toggle-microphone").disabled = !localMediaStream?.getAudioTracks().length;
   document.getElementById("toggle-camera").disabled = !localMediaStream?.getVideoTracks().length;
   if (!localVideo.hidden) {
