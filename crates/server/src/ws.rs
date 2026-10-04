@@ -844,7 +844,7 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
                 e2e_enabled: true,
                 friend_status: "accepted".to_string(),
                 message_policy: "everyone".to_string(),
-                group_member_ids: group.member_ids,
+                group_member_ids: group.member_ids.clone(),
                 group_description: group.description,
                 group_avatar_url: group
                     .avatar_id
