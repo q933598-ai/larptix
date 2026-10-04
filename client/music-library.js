@@ -529,6 +529,13 @@
 
   function setMode(libraryMode) {
     els.library.hidden = !libraryMode;
+    if (els.player) {
+      if (libraryMode) {
+        els.player.hidden = true;
+      } else {
+        updatePlayer();
+      }
+    }
     if (libraryMode) applySavedPosition();
   }
 
