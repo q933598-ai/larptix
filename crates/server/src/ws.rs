@@ -1023,8 +1023,7 @@ fn send_dm(
             .db
             .attachment(id)
             .map(|attachment| {
-                attachment
-                    .is_some_and(|attachment| attachment.mime == "application/octet-stream")
+                attachment.is_some_and(|attachment| attachment.mime == "application/octet-stream")
             })
             .unwrap_or(false)
     });
