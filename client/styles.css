@@ -405,6 +405,11 @@ h1 {
   bottom: 24px;
 }
 
+#settings-incoming-call-volume,
+#settings-outgoing-call-volume {
+  width: min(360px, 100%);
+}
+
 .call-controls select {
   min-width: 210px;
   max-width: 100%;
@@ -521,8 +526,11 @@ h1 {
 }
 
 .message-grouped {
-  margin-top: -8px;
+  margin-top: -12px;
+  margin-bottom: 3px !important;
   padding-top: 2px !important;
+  border-top-left-radius: 4px;
+  border-top-right-radius: 4px;
 }
 
 .message-grouped .message-avatar,
@@ -812,6 +820,41 @@ dialog form {
   max-width: none;
   padding: 24px;
   overflow-x: hidden;
+}
+
+.profile-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.profile-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: .72rem;
+}
+
+.profile-server {
+  margin: 8px 20px 0;
+  color: var(--muted);
+  font-size: .72rem;
+}
+
+.saved-theme-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.saved-theme-row select {
+  min-width: 0;
 }
 
 .profile-banner {
@@ -4811,6 +4854,51 @@ html[data-theme="custom"] .music-library {
   gap: 4px;
   margin: 5px 0 0;
 }
+.reaction-picker-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.reaction-open {
+  min-height: 28px;
+  padding: 4px 8px !important;
+}
+
+.reaction-picker {
+  position: absolute;
+  z-index: 30;
+  left: 0;
+  bottom: calc(100% + 6px);
+  display: flex;
+  gap: 3px;
+  padding: 5px;
+  border: 1px solid var(--line-bright);
+  border-radius: 9px;
+  background: var(--panel);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 35%);
+}
+
+.reaction-picker[hidden] {
+  display: none;
+}
+
+.reaction-picker-item {
+  width: 32px;
+  height: 32px;
+  min-height: 32px !important;
+  padding: 0 !important;
+  display: grid;
+  place-items: center;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 0;
+  font-size: 1rem;
+}
+
+.reaction-picker-item:hover {
+  background: var(--panel-3);
+}
+
 .reaction-chip,
 .reaction-add {
   min-width: 0;
