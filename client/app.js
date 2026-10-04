@@ -5030,7 +5030,11 @@ async function handleCallSignal(signal) {
   }
 
   if (signal.kind === "ice_candidate" && !peerConnection) {
-    if (pendingIncomingCall && signal.sender_id === callPeerId) {
+    if (
+      pendingIncomingCall
+      && signal.sender_id === callPeerId
+      && (!directCallSessionId || !incomingCallId || incomingCallId === directCallSessionId)
+    ) {
       pendingIceCandidates.push(signal.payload);
     }
 
@@ -5119,7 +5123,10 @@ async function acceptIncomingCall() {
     const answer = await peerConnection.createAnswer();
     await peerConnection.setLocalDescription(answer);
     pendingIncomingCall = null;
-    sendCallSignal("answer", peerConnection.localDescription);
+    sendCallSignal("answer", {
+      call_id: directCallSessionId,
+      description: peerConnection.localDescription,
+    });
   } catch (err) {
     appendSystem(err.message || "Could not accept the call. Check camera and microphone permissions.");
     sendCallSignal("reject", { call_id: directCallSessionId });
@@ -5317,9 +5324,18 @@ async function acquireCallMedia(kind) {
   throw new Error(lastError?.message || "Could not access a camera or microphone.");
 }
 
-function sendCallSignal(kind, payload) {
+function sendCallSignal(kind, payload = {}) {
   if (!callPeerId || !socket || socket.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify({ type: "call_signal", peer_id: callPeerId, kind, payload }));
+  const nextPayload = { ...payload };
+  if (directCallSessionId && !nextPayload.call_id) {
+    nextPayload.call_id = directCallSessionId;
+  }
+  socket.send(JSON.stringify({
+    type: "call_signal",
+    peer_id: callPeerId,
+    kind,
+    payload: nextPayload,
+  }));
 }
 
 function toggleMicrophone() {
@@ -5595,6 +5611,7 @@ function endCall(notifyPeer) {
     lastDirectCallJoinPeerId = endedDirectPeerId;
     lastDirectCallJoinKind = endedDirectCallKind;
     lastDirectCallPeerId = endedDirectPeerId;
+    lastDirectCallAvatarPeerId = me?.user_id || endedDirectPeerId;
     clearTimeout(lastDirectCallAvatarTimeout);
     lastDirectCallAvatarTimeout = setTimeout(() => {
       if (lastDirectCallPeerId === endedDirectPeerId) {
