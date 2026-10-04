@@ -2174,6 +2174,7 @@ mod call_signal_tests {
                 recipient_id: group.id,
                 body: "ciphertext".into(),
                 attachment: None,
+                attachments: Vec::new(),
                 created_at: 1,
             },
         );
