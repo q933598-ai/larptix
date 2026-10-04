@@ -2596,7 +2596,10 @@ fn decode_activities(raw: &str) -> Vec<UserActivity> {
         return Vec::new();
     }
     if let Ok(activities) = serde_json::from_str::<Vec<UserActivity>>(value) {
-        return activities;
+        return activities
+            .into_iter()
+            .filter(|activity| matches!(activity.kind.as_str(), "custom" | "music"))
+            .collect();
     }
     vec![UserActivity {
         kind: "custom".to_string(),

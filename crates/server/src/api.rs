@@ -36,7 +36,6 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/me", patch(update_profile))
         .route("/api/me/activity", post(update_activity))
         .route("/api/me/activities", post(update_activities))
-        .route("/api/integrations/spotify/config", get(spotify_config))
         .route("/api/me/settings", patch(update_message_policy))
         .route("/api/friends", get(list_friends))
         .route(
@@ -1486,7 +1485,7 @@ async fn update_activities(
 
     for raw in body.activities {
         let kind = raw.kind.trim().to_ascii_lowercase();
-        if !matches!(kind.as_str(), "custom" | "spotify" | "music") {
+        if !matches!(kind.as_str(), "custom" | "music") {
             return Err(ApiError::bad("unsupported activity type"));
         }
         let name = raw.name.trim();
@@ -2628,19 +2627,6 @@ fn public_me(user: &UserRow) -> UserInfo {
         tags: Vec::new(),
         activities: Vec::new(),
     }
-}
-
-async fn spotify_config(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    require_user(&state, &headers)?;
-    let client_id = std::env::var("SPOTIFY_CLIENT_ID").unwrap_or_default();
-    let client_id = client_id.trim();
-    Ok(Json(serde_json::json!({
-        "enabled": !client_id.is_empty(),
-        "client_id": client_id,
-    })))
 }
 
 #[derive(Debug)]
