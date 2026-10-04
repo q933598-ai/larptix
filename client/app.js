@@ -7194,7 +7194,7 @@ async function showPeerProfile(id) {
     nameEl.textContent = profile.display_name;
     usernameEl.textContent = profile.username ? `@${profile.username}` : "";
     aboutEl.textContent = profile.about || "No profile description";
-    tagsEl.replaceChildren();
+    tagsEl?.replaceChildren();
     for (const tag of Array.isArray(profile.tags) ? profile.tags : []) {
       const chip = document.createElement("span");
       chip.className = "profile-tag";
