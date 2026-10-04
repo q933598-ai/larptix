@@ -5056,15 +5056,7 @@ async function handleCallSignal(signal) {
   } else if (signal.kind === "reject" || signal.kind === "hangup") {
     clearTimeout(outgoingCallTimeout);
     outgoingCallTimeout = null;
-    const endedPeerId = callPeerId;
-    const endedKind = callMediaKind || "audio";
-    const notice = signal.kind === "reject" ? "Call declined" : "Call ended";
     endCall(false);
-    showDirectCallNotice(endedPeerId, notice, {
-      join: false,
-      kind: endedKind,
-      duration: 3000,
-    });
   }
 }
 
@@ -6414,6 +6406,8 @@ function showDirectCallNotice(targetPeerId, message, { join = false, kind = "aud
     callStage.hidden = true;
     lastDirectCallJoinPeerId = null;
     callNoAnswer = false;
+    lastDirectCallPeerId = null;
+    lastDirectCallAvatarTimeout = null;
     directCallNoticeTimeout = null;
     renderDirectCallParticipants();
     renderDirectCallAvatarStack();
@@ -6425,15 +6419,12 @@ function renderDirectCallAvatarStack() {
   if (!directCallAvatarStack) return;
   directCallAvatarStack.replaceChildren();
   const ids = [];
-  if (pendingIncomingCall?.sender_id && !peerConnection) {
-    ids.push(pendingIncomingCall.sender_id);
-  } else if (peerConnection && callPeerId) {
-    if (!callNoAnswer) ids.push(me?.user_id);
-    ids.push(callPeerId);
-  } else if (lastDirectCallPeerId && lastDirectCallPeerId === peerId) {
+  // The compact avatar stack is only the no-answer/missed-call preview.
+  // Normal calls use the full participant row inside the call stage.
+  if (callNoAnswer && lastDirectCallPeerId) {
     ids.push(lastDirectCallPeerId);
   }
-  for (const id of ids.filter(Boolean).slice(0, 4)) {
+  for (const id of ids.filter(Boolean).slice(0, 1)) {
     const avatar = document.createElement("span");
     avatar.className = "avatar call-mini-avatar";
     const user = id === me?.user_id ? me : users.find((item) => item.user_id === id);
@@ -7837,7 +7828,7 @@ function cancelVoiceRecording() {
   if (recordAudioButton) recordAudioButton.textContent = "🎙";
 }
 
-async function selectedVideoMessageShape() {
+function selectedVideoMessageShape() {
   return videoMessageShape === "square" ? "square" : "circle";
 }
 
@@ -8015,7 +8006,7 @@ async function toggleVideoRecording() {
   }
 }
 
-function toggleRecording() {
+async function toggleRecording() {
   if (recorder && recorder.state === "recording") {
     recorder.stop();
     return;
