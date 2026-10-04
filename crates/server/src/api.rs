@@ -459,8 +459,16 @@ async fn search_users(
 
     users.sort_by(|a, b| {
         a.0.cmp(&b.0)
-            .then_with(|| a.1.display_name.to_lowercase().cmp(&b.1.display_name.to_lowercase()))
-            .then_with(|| a.1.username.to_lowercase().cmp(&b.1.username.to_lowercase()))
+            .then_with(|| {
+                a.1.display_name
+                    .to_lowercase()
+                    .cmp(&b.1.display_name.to_lowercase())
+            })
+            .then_with(|| {
+                a.1.username
+                    .to_lowercase()
+                    .cmp(&b.1.username.to_lowercase())
+            })
     });
 
     let users = users
