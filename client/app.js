@@ -2385,6 +2385,7 @@ async function completeCryptoDialog() {
       cryptoEnabled = true;
       cryptoProfileStatus.textContent = "E2E is required for every chat. Verify each peer fingerprint before messaging.";
       enableE2eButton.textContent = "E2E enabled";
+      resetE2eKeysButton.hidden = false;
       cryptoOwnFingerprint.textContent = cryptoDeviceBundle.fingerprint;
       cryptoOwnFingerprint.hidden = false;
       cryptoDialog.close();
@@ -2421,6 +2422,7 @@ async function completeCryptoDialog() {
       cryptoOwnFingerprint.textContent = restoredBundle.fingerprint;
       cryptoOwnFingerprint.hidden = false;
       cryptoProfileStatus.textContent = "E2E enabled and unlocked on this device.";
+      resetE2eKeysButton.hidden = false;
       cryptoDialog.close();
       cryptoDialogMode = null;
       await persistCryptoState();
@@ -2507,7 +2509,7 @@ async function loadCryptoStatus({ forceSetup = false } = {}) {
   });
 }
 
-async function loadMatrixCryptoStatus() {
+async function loadMatrixCryptoStatus({ freshStart = false } = {}) {
   if (!me || !cryptoRecoveryKey) return false;
 
   const config = await api("GET", "/api/matrix/config");
@@ -2523,6 +2525,7 @@ async function loadMatrixCryptoStatus() {
     serverName: matrixServerName,
     deviceId,
     storePassphrase: cryptoRecoveryKey,
+    freshStart,
   });
 
   try {
