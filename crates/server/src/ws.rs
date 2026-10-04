@@ -67,7 +67,7 @@ pub async fn handle_socket(
     }
     let _ = tx.send(ServerMessage::Welcome {
         user: me_info(&state, &user),
-        users: directory(&state, &user.id),
+        users: directory_for_user(&state, &user.id),
     });
     let groups = state
         .db
@@ -112,9 +112,7 @@ pub async fn handle_socket(
             send_crypto_resync_response(&tx, response);
         }
     }
-    state.hub.broadcast(ServerMessage::Directory {
-        users: directory(&state, ""),
-    });
+    broadcast_friend_directories(&state);
     tracing::info!(user_id = %user.id, "connected");
 
     while let Some(frame) = stream.next().await {
@@ -295,9 +293,7 @@ pub async fn handle_socket(
         });
     }
     drop(tx);
-    state.hub.broadcast(ServerMessage::Directory {
-        users: directory(&state, ""),
-    });
+    broadcast_friend_directories(&state);
     tracing::info!(user_id = %user.id, "disconnected");
     let _ = writer.await;
 }
@@ -819,6 +815,8 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
                 admin_ids: group.admin_ids,
                 post_policy: group.post_policy,
                 e2e_enabled: true,
+                friend_status: "accepted".to_string(),
+                message_policy: "everyone".to_string(),
                 group_member_ids: group.member_ids,
             },
             history,
@@ -833,6 +831,18 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
         .user_by_id(peer_id)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| "unknown user".to_string())?;
+    if state
+        .db
+        .message_policy(&peer.id)
+        .map_err(|err| err.to_string())?
+        == "friends"
+        && !state
+            .db
+            .are_friends(&user.id, &peer.id)
+            .map_err(|err| err.to_string())?
+    {
+        return Err("this user only accepts messages from friends".into());
+    }
     let history = state
         .db
         .dm_history(&user.id, peer_id, HISTORY_LIMIT)
@@ -981,6 +991,18 @@ fn send_dm(
         .user_by_id(peer_id)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| "unknown user".to_string())?;
+    if state
+        .db
+        .message_policy(&recipient.id)
+        .map_err(|err| err.to_string())?
+        == "friends"
+        && !state
+            .db
+            .are_friends(&user.id, &recipient.id)
+            .map_err(|err| err.to_string())?
+    {
+        return Err("this user only accepts messages from friends".into());
+    }
     let recipient_e2e = state
         .db
         .user_has_crypto_devices(&recipient.id)
@@ -1385,19 +1407,28 @@ fn fanout(state: &AppState, message: &ChatMessage) {
     }
 }
 
-fn directory(state: &AppState, hide_email_except: &str) -> Vec<UserInfo> {
+fn directory_for_user(state: &AppState, user_id: &str) -> Vec<UserInfo> {
     let online = state.hub.online_ids();
+    let friend_ids = state.db.friend_ids(user_id).unwrap_or_default();
     let mut users = state.db.list_users(&online).unwrap_or_default();
+    users.retain(|user| friend_ids.iter().any(|friend_id| friend_id == &user.user_id));
     for user in &mut users {
-        if user.user_id == hide_email_except {
-            if let Ok(Some(row)) = state.db.user_by_id(&user.user_id) {
-                if !row.email.ends_with("@key.larptrix.invalid") {
-                    user.email = Some(row.email);
-                }
-            }
-        }
+        user.friend_status = "accepted".to_string();
     }
     users
+}
+
+fn broadcast_friend_directories(state: &AppState) {
+    for id in state.hub.online_ids() {
+        if let Ok(uuid) = Uuid::parse_str(&id) {
+            let _ = state.hub.send_to(
+                uuid,
+                ServerMessage::Directory {
+                    users: directory_for_user(state, &id),
+                },
+            );
+        }
+    }
 }
 
 fn me_info(state: &AppState, user: &UserRow) -> UserInfo {
@@ -1426,6 +1457,8 @@ fn user_info(user: &UserRow, online: bool) -> UserInfo {
         admin_ids: Vec::new(),
         post_policy: String::new(),
         e2e_enabled: false,
+        friend_status: "accepted".to_string(),
+        message_policy: "everyone".to_string(),
         group_member_ids: Vec::new(),
     }
 }
