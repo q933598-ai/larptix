@@ -4470,3 +4470,31 @@ html[data-theme="custom"] .music-library {
   width: 64px;
   min-width: 46px;
 }
+
+
+/* Chat file drag-and-drop feedback. */
+.chat.file-drop-active {
+  position: relative;
+}
+
+.chat.file-drop-active .log {
+  outline: 2px dashed var(--accent);
+  outline-offset: -8px;
+  background-color: color-mix(in srgb, var(--bg) 88%, var(--accent) 12%);
+}
+
+.chat.file-drop-active .log::after {
+  content: "Drop files to send";
+  position: absolute;
+  inset: 12px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--accent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+  color: var(--accent-strong);
+  font-size: .9rem;
+  font-weight: 600;
+  pointer-events: none;
+  backdrop-filter: blur(3px);
+}
