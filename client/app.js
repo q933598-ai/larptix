@@ -4346,8 +4346,9 @@ function renderDirectCallTopbar(id = peerId) {
     directCallJoin.hidden = true;
   }
 
-  if (callButton) callButton.hidden = true;
-  if (videoButton) videoButton.hidden = true;
+  const headerCallState = active || incoming || joinable;
+  if (callButton) callButton.hidden = headerCallState;
+  if (videoButton) videoButton.hidden = headerCallState;
 }
 
 async function sendDirectCallLog(peerTargetId, kind, answered, startedAt, answeredAt = 0, endedAt = Date.now(), sessionId = null) {
