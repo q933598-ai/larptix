@@ -247,6 +247,7 @@
           <input id="body" type="text" maxlength="4000" autocomplete="off" enterkeyhint="send" spellcheck="true" placeholder="Write a message" />
           <div class="composer-send-cluster">
             <button id="record-audio" type="button" class="voice-record-button" title="Record a voice message" aria-label="Record a voice message">🎙</button>
+            <button id="record-video" type="button" class="voice-record-button video-record-button" title="Record a video message" aria-label="Record a video message">📹</button>
             <button type="submit" class="send-button" title="Send message" aria-label="Send message">📨</button>
           </div>
           <div id="voice-recording" class="voice-recording" hidden>
@@ -257,6 +258,17 @@
             </span>
             <span id="voice-recording-status">Recording voice message…</span>
             <button id="voice-recording-cancel" type="button" class="ghost">Cancel</button>
+          </div>
+          <div id="video-recording" class="video-recording" hidden>
+            <div class="video-recording-preview-wrap" data-shape="circle">
+              <video id="video-recording-preview" autoplay playsinline muted></video>
+              <span class="video-recording-live"><span class="video-recording-dot"></span> REC <strong id="video-recording-time">0:00</strong></span>
+            </div>
+            <div class="video-recording-tools">
+              <button id="video-recording-shape" type="button" class="ghost" aria-pressed="true" title="Switch between circular and square video message">Circle</button>
+              <span id="video-recording-status">Recording video message…</span>
+              <button id="video-recording-cancel" type="button" class="ghost">Cancel</button>
+            </div>
           </div>
         </form>
 
