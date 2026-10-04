@@ -4352,7 +4352,7 @@ function renderDirectCallTopbar(id = peerId) {
 }
 
 async function sendDirectCallLog(peerTargetId, kind, answered, startedAt, answeredAt = 0, endedAt = Date.now(), sessionId = null) {
-  if (!peerTargetId || !startedAt || !directCallOfferSent) return;
+  if (!peerTargetId || !startedAt) return;
   if (sessionId && loggedDirectCallSessions.has(sessionId)) return;
   if (sessionId) loggedDirectCallSessions.add(sessionId);
   const durationStart = answered && answeredAt ? answeredAt : startedAt;
@@ -5289,6 +5289,7 @@ async function acceptIncomingCall() {
       call_id: directCallSessionId,
       description: peerConnection.localDescription,
     });
+    renderDirectCallTopbar(peerId);
   } catch (err) {
     appendSystem(err.message || "Could not accept the call. Check camera and microphone permissions.");
     sendCallSignal("reject", { call_id: directCallSessionId });
