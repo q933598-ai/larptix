@@ -1532,6 +1532,8 @@ profileOpen.addEventListener("click", async () => {
     showMusicActivity.checked = musicActivityEnabled;
     profileBanner.style.backgroundImage = profile.banner_url ? 'url("' + profile.banner_url + '?v=' + Date.now() + '")' : "";
     renderNotificationSettings();
+    resetE2eKeysButton.hidden = !cryptoEnabled;
+    resetE2eHelp.hidden = true;
     profileDialog.showModal();
   } catch (err) {
     profileError.textContent = err.message;
@@ -1745,6 +1747,7 @@ forgetE2eDeviceButton.addEventListener("click", async () => {
   cryptoProfileStatus.textContent = "This device will ask for the recovery key at the next sign-in.";
   forgetE2eDeviceButton.hidden = true;
 });
+resetE2eKeysButton?.addEventListener("click", () => void resetE2eKeys());
 
 document.getElementById("create-group-cancel").addEventListener("click", () => createGroupDialog.close());
 document.getElementById("create-group-form").addEventListener("submit", createGroup);
@@ -2795,6 +2798,122 @@ async function refreshPeerVerification(userId) {
     setPeerVerified(userId, verified);
   } catch {
     setPeerVerified(userId, false);
+  }
+}
+
+async function clearLocalE2eCaches() {
+  if (typeof indexedDB === "undefined") return;
+  let db;
+  try {
+    db = await openLocalCryptoDb();
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction("items", "readwrite");
+      const store = transaction.objectStore("items");
+      const cursorRequest = store.openCursor();
+      cursorRequest.onsuccess = () => {
+        const cursor = cursorRequest.result;
+        if (!cursor) return;
+        const id = String(cursor.key || "");
+        if (id.startsWith("decrypted-message:") || id.startsWith("sent-plaintext:")) {
+          cursor.delete();
+        }
+        cursor.continue();
+      };
+      transaction.addEventListener("complete", resolve, { once: true });
+      transaction.addEventListener("error", () => reject(transaction.error), { once: true });
+      transaction.addEventListener("abort", () => reject(transaction.error), { once: true });
+    });
+  } catch {
+    // Best-effort cleanup; the new recovery key cannot decrypt old cache records anyway.
+  } finally {
+    db?.close();
+  }
+}
+
+async function resetE2eKeys() {
+  if (!me || !cryptoDevice || !cryptoRecoveryKey) {
+    appendSystem("Unlock E2E before resetting your keys.");
+    return;
+  }
+  const currentPeerId = peerId && peerId !== SAVED_MESSAGES_ID
+    && !groups.some((group) => group.user_id === peerId)
+    ? peerId
+    : null;
+
+  const confirmed = window.confirm(
+    "Reset your E2E keys? This device will start a new encryption identity. The server will keep the encrypted history, and the other participant will keep their readable copy. This device will show a fresh chat from the reset point."
+  );
+  if (!confirmed) return;
+
+  const oldCryptoDeviceId = cryptoDevice.device_id();
+  const oldMatrixDeviceId = matrixCrypto?.deviceId || null;
+  const resetAt = Date.now();
+
+  resetE2eKeysButton.disabled = true;
+  resetE2eKeysButton.textContent = "Resetting…";
+
+  try {
+    await withCryptoStateLock(async () => {
+      if (matrixCrypto) {
+        await matrixCrypto.close().catch(() => {});
+        matrixCrypto = null;
+      }
+
+      if (oldMatrixDeviceId) {
+        await api("DELETE", "/api/me/matrix-devices/" + encodeURIComponent(oldMatrixDeviceId));
+      }
+      await api("DELETE", "/api/me/crypto-devices/" + encodeURIComponent(oldCryptoDeviceId));
+
+      await clearLocalE2eCaches();
+      sentPlaintextByCiphertext.clear();
+      decryptedPayloadByMessageId.clear();
+      recoveredBodiesByMessageId.clear();
+      cryptoRecoveryPending.clear();
+      cryptoRecoveryResponsesByMessageId.clear();
+      messageBodyElementsById.clear();
+
+      if (currentPeerId) {
+        setE2eResetAt(currentPeerId, resetAt);
+      }
+
+      localStorage.removeItem(savedMessagesKey());
+
+      cryptoDevice?.free();
+      cryptoRecoveryKey = createRecoveryKey();
+      cryptoDevice = new CryptoDevice(cryptoRecoveryKey);
+      cryptoDeviceBundle = JSON.parse(cryptoDevice.public_bundle_json());
+      cryptoStoredState = null;
+      cryptoEnabled = true;
+      await persistCryptoState();
+      await rememberRecoveryKey(me.user_id, cryptoRecoveryKey);
+      forgetE2eDeviceButton.hidden = false;
+      resetE2eKeysButton.hidden = false;
+    });
+
+    matrixCryptoReady = (async () => {
+      try {
+        return Boolean(await loadMatrixCryptoStatus({ freshStart: true }));
+      } catch (err) {
+        console.error("[E2E] Matrix crypto reset initialization failed", err);
+        return false;
+      }
+    })();
+    await matrixCryptoReady;
+
+    if (currentPeerId === peerId) {
+      logEl.replaceChildren();
+      messageBodyElementsById.clear();
+      renderE2eResetNotice(currentPeerId);
+    }
+    resetE2eHelp.hidden = false;
+    cryptoProfileStatus.textContent = "New E2E identity created. Save the new recovery key below.";
+    openCryptoDialog("enable", { required: true });
+  } catch (err) {
+    cryptoProfileStatus.textContent = "E2E reset failed: " + (err.message || String(err));
+    appendSystem("Could not reset E2E keys: " + (err.message || String(err)));
+  } finally {
+    resetE2eKeysButton.disabled = false;
+    resetE2eKeysButton.textContent = "Reset E2E keys";
   }
 }
 
