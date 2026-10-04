@@ -1491,7 +1491,7 @@ document.addEventListener("keydown", (event) => {
   }
 });
 menuChats.addEventListener("click", () => {
-  document.getElementById("chat-view-open").click();
+  setPeopleView("chats");
   closeAppMenu();
 });
 menuMusic.addEventListener("click", () => {
@@ -1752,33 +1752,196 @@ document.getElementById("create-channel-cancel")?.addEventListener("click", () =
 document.getElementById("create-channel-form")?.addEventListener("submit", createChannel);
 let friendSearchTimer = null;
 
+function normalizePeopleSearch(raw) {
+  return raw.trim().replace(/^@+/, "").replace(/\s+/g, " ").toLocaleLowerCase();
+}
+function searchScore(user, query) {
+  const name = (user?.display_name || "").toLocaleLowerCase();
+  const username = (user?.username || "").toLocaleLowerCase();
+  if (!query) return 99;
+  if (username === query) return 0;
+  if (username.startsWith(query)) return 1;
+  if (name === query) return 2;
+  if (name.startsWith(query)) return 3;
+  if (username.includes(query)) return 4;
+  if (name.includes(query)) return 5;
+  return 9;
+}
+function updateFriendRequestsBadge() {
+  if (!friendRequestsBadge) return;
+  const count = friendRequests.incoming.length;
+  friendRequestsBadge.hidden = count === 0;
+  friendRequestsBadge.textContent = count > 99 ? "99+" : String(count);
+}
+async function loadFriendRequests() {
+  if (!me) return;
+  const requestId = ++friendRequestsRequestId;
+  try {
+    const result = await api("GET", "/api/friends");
+    if (requestId !== friendRequestsRequestId) return;
+    friendRequests = {
+      incoming: Array.isArray(result?.incoming) ? result.incoming : [],
+      outgoing: Array.isArray(result?.outgoing) ? result.outgoing : [],
+    };
+    updateFriendRequestsBadge();
+    if (peopleView === "requests") renderUsers();
+  } catch (err) {
+    if (requestId === friendRequestsRequestId) {
+      appendSystem("Friend requests failed: " + (err.message || err));
+    }
+  }
+}
+function requestUserButton(user) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "request-user-button";
+  const avatar = document.createElement("span");
+  avatar.className = "avatar";
+  paintAvatar(avatar, user);
+  const name = document.createElement("span");
+  name.className = "person-name";
+  const label = document.createElement("span");
+  label.textContent = user.display_name || "Larptrix user";
+  name.append(label);
+  if (user.username) {
+    const handle = document.createElement("small");
+    handle.textContent = "@" + user.username;
+    name.append(handle);
+  }
+  button.append(avatar, name);
+  button.addEventListener("click", () => openChat(user.user_id));
+  return button;
+}
+function renderFriendRequests() {
+  usersEl.replaceChildren();
+  const addSection = (title, entries, kind) => {
+    if (!entries.length) return;
+    const heading = document.createElement("li");
+    heading.className = "friend-requests-heading";
+    heading.textContent = title;
+    usersEl.append(heading);
+    for (const user of entries) {
+      const li = document.createElement("li");
+      li.className = "friend-request-row";
+      li.append(requestUserButton(user));
+      const actions = document.createElement("div");
+      actions.className = "friend-request-actions";
+      if (kind === "incoming") {
+        const accept = document.createElement("button");
+        accept.type = "button";
+        accept.className = "ghost request-accept";
+        accept.textContent = "Accept";
+        accept.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          accept.disabled = true;
+          try {
+            await api("POST", "/api/friends/" + encodeURIComponent(user.user_id) + "/accept", {});
+            await loadFriendRequests();
+          } catch (err) {
+            accept.disabled = false;
+            appendSystem(err.message || "Could not accept friend request.");
+          }
+        });
+        const decline = document.createElement("button");
+        decline.type = "button";
+        decline.className = "ghost";
+        decline.textContent = "Decline";
+        decline.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          decline.disabled = true;
+          try {
+            await api("DELETE", "/api/friends/" + encodeURIComponent(user.user_id));
+            await loadFriendRequests();
+          } catch (err) {
+            decline.disabled = false;
+            appendSystem(err.message || "Could not decline friend request.");
+          }
+        });
+        actions.append(accept, decline);
+      } else {
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "ghost";
+        cancel.textContent = "Cancel";
+        cancel.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          cancel.disabled = true;
+          try {
+            await api("DELETE", "/api/friends/" + encodeURIComponent(user.user_id));
+            await loadFriendRequests();
+          } catch (err) {
+            cancel.disabled = false;
+            appendSystem(err.message || "Could not cancel friend request.");
+          }
+        });
+        actions.append(cancel);
+      }
+      li.append(actions);
+      usersEl.append(li);
+    }
+  };
+  addSection("Incoming", friendRequests.incoming, "incoming");
+  addSection("Sent", friendRequests.outgoing, "outgoing");
+  if (!friendRequests.incoming.length && !friendRequests.outgoing.length) {
+    const empty = document.createElement("li");
+    empty.className = "search-empty";
+    empty.textContent = "No pending friend requests.";
+    usersEl.append(empty);
+  }
+}
+function setPeopleView(view) {
+  peopleView = view === "requests" ? "requests" : "chats";
+  const showingRequests = peopleView === "requests";
+  friendRequestsOpen?.classList.toggle("active", showingRequests);
+  chatViewOpen?.classList.toggle("active", !showingRequests);
+  if (userSearchInput) {
+    userSearchInput.hidden = showingRequests;
+    if (showingRequests) userSearchInput.value = "";
+  }
+  if (peopleSearchHint) peopleSearchHint.hidden = showingRequests;
+  if (showingRequests) {
+    searchResults = [];
+    void loadFriendRequests();
+  }
+  renderUsers();
+}
 async function refreshFriendSearch() {
-  const query = userSearchInput.value.trim();
+  const query = normalizePeopleSearch(userSearchInput.value);
   const requestId = ++searchRequestId;
   if (!query) {
+    friendSearchLoading = false;
     searchResults = [];
     renderUsers();
     return;
   }
+  friendSearchLoading = true;
+  renderUsers();
   try {
     const result = await api("GET", "/api/users/search?q=" + encodeURIComponent(query));
     if (requestId !== searchRequestId) return;
     searchResults = Array.isArray(result?.users) ? result.users : [];
-    renderUsers();
   } catch (err) {
     if (requestId !== searchRequestId) return;
     searchResults = [];
     appendSystem("User search failed: " + (err.message || err));
-    renderUsers();
+  } finally {
+    if (requestId === searchRequestId) {
+      friendSearchLoading = false;
+      renderUsers();
+    }
   }
 }
-
 function scheduleFriendSearch() {
   clearTimeout(friendSearchTimer);
-  friendSearchTimer = setTimeout(() => void refreshFriendSearch(), 180);
+  friendSearchTimer = setTimeout(() => void refreshFriendSearch(), 160);
 }
-
 userSearchInput.addEventListener("input", scheduleFriendSearch);
+friendRequestsOpen?.addEventListener("click", () => setPeopleView("requests"));
+chatViewOpen?.addEventListener("click", () => setPeopleView("chats"));
+
 document.getElementById("emoji-picker-toggle").addEventListener("click", () => {
   emojiPicker.hidden = !emojiPicker.hidden;
 });
@@ -2807,6 +2970,7 @@ function connect() {
         renderMe();
         renderUsers();
         void loadGroups();
+        void loadFriendRequests();
         const deepLink = new URLSearchParams(location.search);
         const deepLinkPeer = deepLink.get("peer");
         const deepLinkCall = deepLink.get("call");
@@ -4290,8 +4454,12 @@ function renderMe() {
 }
 
 function renderUsers() {
+  if (peopleView === "requests") {
+    renderFriendRequests();
+    return;
+  }
   usersEl.replaceChildren();
-  const query = userSearchInput.value.trim().replace(/^@/, "").toLocaleLowerCase();
+  const query = normalizePeopleSearch(userSearchInput.value);
   const base = query
     ? [...users.filter((user) => user.display_name.toLocaleLowerCase().includes(query)
         || (user.username || "").toLocaleLowerCase().includes(query)),
@@ -4305,11 +4473,20 @@ function renderUsers() {
   const matches = [...dedupe.values()];
   const pinned = getPinnedChats();
   matches.sort((a, b) =>
-    (a.is_saved_chat ? -2 : 0) - (b.is_saved_chat ? -2 : 0)
+    (query ? searchScore(a, query) - searchScore(b, query) : 0)
+    || (a.is_saved_chat ? -2 : 0) - (b.is_saved_chat ? -2 : 0)
     || (a.friend_status === "accepted" ? -1 : 0) - (b.friend_status === "accepted" ? -1 : 0)
     || (pinned.has(b.user_id) ? 1 : 0) - (pinned.has(a.user_id) ? 1 : 0)
     || a.display_name.localeCompare(b.display_name)
   );
+
+  if (query && friendSearchLoading) {
+    const loading = document.createElement("li");
+    loading.className = "search-empty";
+    loading.textContent = "Searching…";
+    usersEl.append(loading);
+    return;
+  }
 
   if (query && !matches.length) {
     const empty = document.createElement("li");
@@ -4322,6 +4499,7 @@ function renderUsers() {
   for (const user of matches) {
     const li = document.createElement("li");
     li.className = user.friend_status && user.friend_status !== "accepted" ? "search-person" : "";
+    li.classList.toggle("chat-active", user.user_id === peerId);
 
     const button = document.createElement("button");
     button.type = "button";
@@ -4371,7 +4549,7 @@ function renderUsers() {
           event.stopPropagation();
           try {
             await api("POST", "/api/friends/" + encodeURIComponent(user.user_id) + "/accept", {});
-            await refreshFriendSearch();
+            await Promise.all([refreshFriendSearch(), loadFriendRequests()]);
           } catch (err) {
             appendSystem(err.message || "Could not accept friend request.");
           }
@@ -4389,7 +4567,7 @@ function renderUsers() {
           relation.disabled = true;
           try {
             await api("POST", "/api/friends/" + encodeURIComponent(user.user_id), {});
-            await refreshFriendSearch();
+            await Promise.all([refreshFriendSearch(), loadFriendRequests()]);
           } catch (err) {
             relation.disabled = false;
             appendSystem(err.message || "Could not add friend.");
