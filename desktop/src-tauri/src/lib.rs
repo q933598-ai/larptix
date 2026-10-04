@@ -83,6 +83,7 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![open_call_in_browser])
         .setup(|app| {
             let url = match std::env::var("LARPTRIX_SERVER_URL") {
