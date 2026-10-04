@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-toggle-fullscreen"
+description = "Allows the desktop client to toggle native fullscreen."
+commands.allow = ["toggle_fullscreen"]
