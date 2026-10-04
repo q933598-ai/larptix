@@ -1296,6 +1296,7 @@ impl Database {
                 group_avatar_url: None,
                 group_banner_url: None,
                 subscriber_count: 0,
+        tags: Vec::new(),
                 friend_status: "none".to_string(),
                 message_policy,
                 tags,
