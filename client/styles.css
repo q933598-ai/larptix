@@ -5749,3 +5749,190 @@ html[data-theme="catppuccin-mocha"] .call-stage .call-dock-heading > .ghost {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+
+/* Telegram-style video messages and live camera recorder. */
+.video-recording[hidden] {
+  display: none !important;
+}
+
+.video-recording {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-2);
+}
+
+.video-recording-preview-wrap {
+  position: relative;
+  flex: 0 0 132px;
+  width: 132px;
+  height: 132px;
+  overflow: hidden;
+  background: #050506;
+  border: 2px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 0 0 3px rgb(0 0 0 / 18%);
+}
+
+.video-recording-preview-wrap[data-shape="circle"] {
+  border-radius: 50%;
+}
+
+.video-recording-preview-wrap[data-shape="square"] {
+  border-radius: 12px;
+}
+
+#video-recording-preview {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+  background: #050506;
+}
+
+.video-recording-live {
+  position: absolute;
+  left: 7px;
+  bottom: 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 70%);
+  color: #fff;
+  font-size: .72rem;
+  font-weight: 700;
+  line-height: 1;
+  backdrop-filter: blur(5px);
+}
+
+.video-recording-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: video-recording-blink .8s ease-in-out infinite alternate;
+}
+
+@keyframes video-recording-blink {
+  from { opacity: .35; transform: scale(.8); }
+  to { opacity: 1; transform: scale(1.15); }
+}
+
+.video-recording-tools {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 0;
+}
+
+.video-recording-tools > span {
+  flex: 1 1 180px;
+  min-width: 0;
+  color: var(--text);
+  font-size: .82rem;
+}
+
+.video-recording-shape {
+  min-width: 74px;
+}
+
+.video-recording-cancel {
+  flex: 0 0 auto;
+}
+
+.video-record-button {
+  position: relative;
+}
+
+.video-record-button.is-recording {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 20%, transparent);
+}
+
+.video-message-preview {
+  display: block;
+  width: 180px;
+  height: 180px;
+  max-width: 100%;
+  object-fit: cover;
+  background: #050506;
+  border: 1px solid var(--line);
+}
+
+.video-message-preview.video-message-circle {
+  width: 180px;
+  height: 180px;
+  border-radius: 50%;
+}
+
+.video-message-preview.video-message-square {
+  width: min(260px, 100%);
+  height: 260px;
+  border-radius: 12px;
+}
+
+.message-media-stack .video-message-media {
+  display: block;
+  width: 280px;
+  height: 280px;
+  max-width: min(70vw, 420px);
+  object-fit: cover;
+  background: #050506;
+  border: 1px solid var(--line);
+}
+
+.message-media-stack .video-message-circle {
+  width: min(280px, 46vw);
+  height: min(280px, 46vw);
+  min-width: 180px;
+  min-height: 180px;
+  border-radius: 50%;
+}
+
+.message-media-stack .video-message-square {
+  width: min(360px, 70vw);
+  height: min(360px, 70vw);
+  min-width: 180px;
+  min-height: 180px;
+  border-radius: 12px;
+}
+
+.message-media-stack .video-message-media::-webkit-media-controls-panel {
+  border-radius: inherit;
+}
+
+@media (max-width: 680px) {
+  .video-recording {
+    align-items: flex-start;
+  }
+
+  .video-recording-preview-wrap {
+    flex-basis: 108px;
+    width: 108px;
+    height: 108px;
+  }
+
+  .video-recording-tools > span {
+    flex-basis: 100%;
+  }
+
+  .message-media-stack .video-message-circle {
+    width: min(220px, 62vw);
+    height: min(220px, 62vw);
+  }
+
+  .message-media-stack .video-message-square {
+    width: min(260px, 74vw);
+    height: min(260px, 74vw);
+  }
+}
