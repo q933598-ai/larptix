@@ -44,6 +44,7 @@ const profileForm = document.getElementById("profile-form");
 const profileName = document.getElementById("profile-name");
 const profileUsername = document.getElementById("profile-username");
 const profileAbout = document.getElementById("profile-about");
+const profileTags = document.getElementById("profile-tags");
 const profileEmail = document.getElementById("profile-email");
 const profileEmailLabel = document.getElementById("profile-email-label");
 const profileActivity = document.getElementById("profile-activity");
@@ -1756,7 +1757,7 @@ profileOpen.addEventListener("click", async () => {
     profileName.value = profile.display_name;
     profileUsername.value = profile.username;
     profileAbout.value = profile.about;
-    profileTags.value = Array.isArray(profile.tags) ? profile.tags.join(", ") : "";
+    if (profileTags) profileTags.value = Array.isArray(profile.tags) ? profile.tags.join(", ") : "";
     updateOwnProfileCard(profile);
     customActivity = profile.activity?.startsWith("Listening to ") ? "" : (profile.activity || "");
     profileActivity.value = customActivity;
@@ -2366,7 +2367,7 @@ profileForm.addEventListener("submit", async (event) => {
       display_name: profileName.value.trim(),
       username: profileUsername.value.trim(),
       about: profileAbout.value.trim(),
-      tags: profileTags.value.split(",").map((tag) => tag.trim()).filter(Boolean),
+      tags: profileTags ? profileTags.value.split(",").map((tag) => tag.trim()).filter(Boolean) : [],
     });
     customActivity = profileActivity.value.trim();
     musicActivityEnabled = showMusicActivity.checked;
@@ -5619,6 +5620,13 @@ function appendMessage(message) {
   renderMessageReactions(message, li);
   logEl.append(li);
 
+  const currentChannel = groups.find(
+    (item) => item.user_id === peerId && item.is_channel
+  );
+  if (currentChannel && channelViewObserver) {
+    channelViewObserver.observe(li);
+  }
+
   if (encryptedBodyElement) {
     messageBodyElementsById.set(message.id, encryptedBodyElement);
 
@@ -7165,13 +7173,13 @@ async function showPeerProfile(id) {
         ? `${group.subscriber_count || group.group_member_ids.length} subscribers`
         : `${group.group_member_ids.length} members`;
       aboutEl.textContent = group.group_description || "No description";
-      tagsEl.replaceChildren();
+      tagsEl?.replaceChildren();
       const groupTag = document.createElement("span");
       groupTag.className = "profile-tag";
       groupTag.textContent = group.is_channel ? "Channel" : "Group";
-      tagsEl.append(groupTag);
-      serverEl.textContent = "Server: " + location.host;
-      activityEl.textContent = "";
+      tagsEl?.append(groupTag);
+      if (serverEl) serverEl.textContent = "Server: " + location.host;
+      if (activityEl) activityEl.textContent = "";
       peerProfileDialog.showModal();
       return;
     }
@@ -7191,10 +7199,10 @@ async function showPeerProfile(id) {
       const chip = document.createElement("span");
       chip.className = "profile-tag";
       chip.textContent = tag;
-      tagsEl.append(chip);
+      tagsEl?.append(chip);
     }
-    serverEl.textContent = "Server: " + (profile.server || location.host);
-    activityEl.textContent = profile.activity || "No activity";
+    if (serverEl) serverEl.textContent = "Server: " + (profile.server || location.host);
+    if (activityEl) activityEl.textContent = profile.activity || "No activity";
     peerProfileDialog.showModal();
   } catch (err) {
     appendSystem(err.message || "Could not load profile.");
