@@ -618,6 +618,7 @@ fn relay_call_signal(
             | "reject"
             | "group_invite"
             | "group_join"
+            | "group_leave"
             | "group_end"
     ) {
         return Err("unsupported call signal".into());
@@ -636,6 +637,38 @@ fn relay_call_signal(
     if let Some(group) = state.db.group(peer_id).map_err(|err| err.to_string())? {
         if !group.member_ids.iter().any(|member| member == &user.id) {
             return Err("not a member of this group".into());
+        }
+
+        if kind == "group_leave" {
+            let call_id = payload
+                .get("call_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "group call signal is missing call id".to_string())?;
+            let snapshot = {
+                let mut calls = state.group_calls.lock().expect("group call lock");
+                let call = calls
+                    .get_mut(peer_id)
+                    .ok_or_else(|| "group call is no longer active".to_string())?;
+                if call.call_id != call_id {
+                    return Err("group call id does not match active call".into());
+                }
+                call.participant_ids.retain(|id| id != &user.id);
+                call.clone()
+            };
+            let update = ServerMessage::GroupCallState {
+                group_id: peer_id.to_string(),
+                call_id: snapshot.call_id,
+                media: snapshot.media,
+                initiator_id: snapshot.initiator_id,
+                participant_ids: snapshot.participant_ids,
+                active: true,
+            };
+            for member_id in &group.member_ids {
+                if let Ok(member) = Uuid::parse_str(member_id) {
+                    state.hub.send_to(member, update.clone());
+                }
+            }
+            return Ok(());
         }
 
         if kind == "group_end" {

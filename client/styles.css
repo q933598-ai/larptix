@@ -361,6 +361,27 @@ h1 {
   z-index: 2;
 }
 
+.call-stage.screen-sharing #local-screen-video {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+  object-fit: contain;
+  background: #050506;
+  z-index: 3;
+}
+
+.call-stage.screen-sharing #local-video:not([hidden]) {
+  z-index: 4;
+}
+
+.call-stage.screen-sharing #call-audio-placeholder {
+  display: none;
+}
+
 #remote-audio {
   position: absolute;
   width: 1px;
@@ -592,7 +613,7 @@ h1 {
 
 #composer {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 44px;
+  grid-template-columns: minmax(0, 1fr) minmax(94px, auto);
   grid-template-rows: auto 44px;
   flex: 0 0 auto;
   gap: 8px;
@@ -666,6 +687,7 @@ h1 {
   }
 
   #composer {
+    grid-template-columns: minmax(0, 1fr) minmax(94px, auto);
     gap: 6px;
     padding: 6px 8px;
   }

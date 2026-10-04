@@ -190,6 +190,8 @@ const groupCallBannerMeta = document.getElementById("group-call-banner-meta");
 const groupCallBannerAvatars = document.getElementById("group-call-banner-avatars");
 const directCallAvatarStack = document.getElementById("direct-call-avatar-stack");
 const groupCallJoin = document.getElementById("group-call-join");
+const endCallButton = document.getElementById("end-call");
+const endGroupCallButton = document.getElementById("end-group-call");
 const callWindowTitle = document.getElementById("call-window-title");
 const callRingtone = document.getElementById("call-ringtone");
 const voiceRecording = document.getElementById("voice-recording");
@@ -492,6 +494,9 @@ let callMediaNotice = "";
 let pendingIceCandidates = [];
 let outgoingCallTimeout = null;
 let incomingCallTimeout = null;
+let noAnswerCleanupTimeout = null;
+let lastDirectCallAvatarTimeout = null;
+let lastDirectCallPeerId = null;
 let callNoAnswer = false;
 let voiceRecordingTimer = null;
 let voiceRecordingStartedAt = 0;
@@ -2704,7 +2709,8 @@ groupCallStart?.addEventListener("click", () => {
 groupCallJoin?.addEventListener("click", () => void joinActiveGroupCall());
 document.getElementById("accept-call").addEventListener("click", acceptIncomingCall);
 document.getElementById("reject-call").addEventListener("click", rejectIncomingCall);
-document.getElementById("end-call").addEventListener("click", () => endCall(true));
+endCallButton?.addEventListener("click", () => endCall(true));
+endGroupCallButton?.addEventListener("click", endGroupCallForEveryone);
 const savedCallVolume = Number(localStorage.getItem("larptrix_call_audio_volume"));
 if (Number.isFinite(savedCallVolume)) {
   remoteAudio.volume = Math.min(1, Math.max(0, savedCallVolume));
@@ -3964,6 +3970,7 @@ function renderGroupCallBanner() {
   groupCallJoin.textContent = joined ? "Open call" : "Join";
   groupCallJoin.disabled = joined && groupCallGroupId !== group.user_id;
   groupCallJoin.hidden = groupCallId === state.call_id && groupCallGroupId === group.user_id;
+  updateGroupCallControls();
   if (groupCallStart) {
     groupCallStart.hidden = false;
     groupCallStart.textContent = joined ? "Group call" : "Join group call";
@@ -3974,6 +3981,13 @@ function handleGroupCallState(message) {
   if (!message?.group_id || !message?.call_id) return;
   if (message.active) {
     activeGroupCalls.set(message.group_id, message);
+    if (groupCallId === message.call_id && groupCallGroupId === message.group_id) {
+      groupCallJoinedMembers.clear();
+      for (const id of message.participant_ids || []) groupCallJoinedMembers.add(id);
+      for (const remoteId of [...groupPeerConnections.keys()]) {
+        if (!(message.participant_ids || []).includes(remoteId)) removeGroupPeer(remoteId);
+      }
+    }
   } else {
     const current = activeGroupCalls.get(message.group_id);
     if (!current || current.call_id === message.call_id) activeGroupCalls.delete(message.group_id);
@@ -4011,6 +4025,14 @@ async function joinActiveGroupCall() {
   pendingIncomingCall = null;
 }
 
+function updateGroupCallControls() {
+  const inGroupCall = Boolean(groupCallId && groupCallGroupId);
+  if (endCallButton) endCallButton.textContent = inGroupCall ? "Leave call" : "End call";
+  if (endGroupCallButton) {
+    endGroupCallButton.hidden = !(inGroupCall && groupCallInitiatorId === me?.user_id);
+  }
+}
+
 function sendGroupCallControl(kind) {
   if (!groupCallGroupId || !groupCallId || !socket || socket.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify({
@@ -4023,6 +4045,12 @@ function sendGroupCallControl(kind) {
       media: callMediaKind || "audio",
     },
   }));
+}
+
+function endGroupCallForEveryone() {
+  if (!groupCallGroupId || !groupCallId || groupCallInitiatorId !== me?.user_id) return;
+  sendGroupCallControl("group_end");
+  endCall(false);
 }
 
 function isDirectCallActive(id) {
@@ -4092,7 +4120,9 @@ function openChat(id) {
   applyChatWallpaper(id);
   chatTitlebar.hidden = false;
   renderUsers();
+  renderDirectCallAvatarStack();
   renderGroupCallBanner();
+  updateGroupCallControls();
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "open", peer_id: id }));
   }
@@ -4128,6 +4158,7 @@ async function startGroupCall(kind) {
   groupCallGroupId = group.user_id;
   groupCallMemberIds = [...group.group_member_ids];
   groupCallInitiatorId = me.user_id;
+  updateGroupCallControls();
   startOutgoingCallRingtone();
   groupCallJoinedMembers.clear();
   groupCallJoinedMembers.add(me.user_id);
@@ -4262,6 +4293,7 @@ async function acceptGroupInvite(signal) {
   groupCallId = callId;
   groupCallMemberIds = [...group.group_member_ids];
   groupCallInitiatorId = signal.sender_id;
+  updateGroupCallControls();
   callPeerId = groupId;
   callMediaKind = payload.media === "video" ? "video" : "audio";
   callWindowTitle.textContent = "group call.exe";
@@ -4529,6 +4561,9 @@ async function startCall(kind) {
     return;
   }
   if (peerConnection) endCall(true);
+  clearTimeout(lastDirectCallAvatarTimeout);
+  lastDirectCallAvatarTimeout = null;
+  lastDirectCallPeerId = null;
   callPeerId = peerId;
   callMediaKind = kind;
   callNoAnswer = false;
@@ -4567,6 +4602,11 @@ async function startCall(kind) {
       callPlaceholderRemoteName.classList.add("call-no-answer");
       renderDirectCallAvatarStack();
       updateDirectCallButtons(peerId);
+      clearTimeout(noAnswerCleanupTimeout);
+      noAnswerCleanupTimeout = setTimeout(() => {
+        if (!callNoAnswer || callPeerId !== peerId) return;
+        endCall(false);
+      }, 4500);
     }, 20000);
   } catch (err) {
     appendSystem(`Call setup failed: ${err.message || "Check camera and microphone permissions."}`);
@@ -4742,6 +4782,8 @@ async function handleCallSignal(signal) {
   if (signal.kind === "answer") {
     clearTimeout(outgoingCallTimeout);
     outgoingCallTimeout = null;
+    clearTimeout(noAnswerCleanupTimeout);
+    noAnswerCleanupTimeout = null;
     callNoAnswer = false;
     renderDirectCallAvatarStack();
     stopCallRingtone();
@@ -5099,6 +5141,7 @@ async function toggleScreenShare() {
       ? ` · sharing ${actualWidth}×${actualHeight} @ ${actualFps} fps + audio`
       : ` · sharing ${actualWidth}×${actualHeight} @ ${actualFps} fps`;
     callStage.classList.add("screen-sharing");
+    callAudioPlaceholder.hidden = true;
     localScreenVideo.srcObject = screenMediaStream;
     localScreenVideo.muted = true;
     localScreenVideo.defaultMuted = true;
@@ -5205,34 +5248,41 @@ async function stopScreenShare() {
 
 
 function endCall(notifyPeer) {
+  const preserveNoAnswerAvatar = Boolean(callNoAnswer && callPeerId);
+  const endedDirectPeerId = callPeerId;
   clearTimeout(outgoingCallTimeout);
   outgoingCallTimeout = null;
   clearTimeout(incomingCallTimeout);
   incomingCallTimeout = null;
+  clearTimeout(noAnswerCleanupTimeout);
+  noAnswerCleanupTimeout = null;
   stopCallRingtone();
   stopSpeakingMonitor("local");
   stopSpeakingMonitor("remote");
   for (const key of [...speakingMonitors.keys()].filter((item) => item.startsWith("group-"))) {
     stopSpeakingMonitor(key);
   }
+
   if (groupCallGroupId && groupCallId) {
     const groupId = groupCallGroupId;
     const callId = groupCallId;
     const remoteIds = [...groupPeerConnections.keys()];
-    const isInitiator = groupCallInitiatorId === me?.user_id;
-    if (notifyPeer && isInitiator) {
-      sendGroupCallControl("group_end");
-      activeGroupCalls.delete(groupId);
-    } else if (notifyPeer) {
+
+    if (notifyPeer) {
       for (const remoteId of remoteIds) {
-        sendGroupCallSignal(remoteId, "hangup", { group_id: groupId, call_id: callId });
+        sendGroupCallSignal(remoteId, "hangup", {
+          group_id: groupId,
+          call_id: callId,
+        });
       }
+      sendGroupCallControl("group_leave");
       const state = activeGroupCalls.get(groupId);
       if (state) {
         state.participant_ids = state.participant_ids.filter((id) => id !== me?.user_id);
         activeGroupCalls.set(groupId, state);
       }
     }
+
     for (const [remoteId, connection] of groupPeerConnections) {
       connection.close();
       document.getElementById("group-remotes")
@@ -5260,7 +5310,6 @@ function endCall(notifyPeer) {
     callDeafenButton.textContent = "🔊 Deafen";
     callDeafenButton.setAttribute("aria-pressed", "false");
   }
-  const endedPeerId = callPeerId;
   if (incomingCallDialog.open) incomingCallDialog.close();
   screenMediaStream?.getTracks().forEach((track) => track.stop());
   localMediaStream?.getTracks().forEach((track) => track.stop());
@@ -5270,11 +5319,29 @@ function endCall(notifyPeer) {
   screenMediaStream = null;
   pendingIncomingCall = null;
   pendingIceCandidates = [];
-  if (endedPeerId) iceCandidatesBeforeOffer.delete(endedPeerId);
+  if (endedDirectPeerId) iceCandidatesBeforeOffer.delete(endedDirectPeerId);
   callPeerId = null;
   callMediaKind = null;
   callNoAnswer = false;
+
+  if (preserveNoAnswerAvatar && endedDirectPeerId) {
+    lastDirectCallPeerId = endedDirectPeerId;
+    clearTimeout(lastDirectCallAvatarTimeout);
+    lastDirectCallAvatarTimeout = setTimeout(() => {
+      if (lastDirectCallPeerId === endedDirectPeerId) {
+        lastDirectCallPeerId = null;
+        lastDirectCallAvatarTimeout = null;
+        renderDirectCallAvatarStack();
+      }
+    }, 8000);
+  } else {
+    clearTimeout(lastDirectCallAvatarTimeout);
+    lastDirectCallAvatarTimeout = null;
+    lastDirectCallPeerId = null;
+  }
+
   updateDirectCallButtons(peerId);
+  updateGroupCallControls();
   renderDirectCallAvatarStack();
   localVideo.srcObject = null;
   localScreenVideo.srcObject = null;
@@ -5299,7 +5366,6 @@ function endCall(notifyPeer) {
   document.getElementById("toggle-camera").textContent = "📷 Turn camera off";
   document.getElementById("toggle-screen-share").textContent = "Share screen";
 }
-
 function isForOpenChat(message) {
   if (peerId === SAVED_MESSAGES_ID) return false;
   if (!peerId || !me) return false;
@@ -6012,8 +6078,10 @@ function renderDirectCallAvatarStack() {
   if (pendingIncomingCall?.sender_id && !peerConnection) {
     ids.push(pendingIncomingCall.sender_id);
   } else if (peerConnection && callPeerId) {
-    ids.push(me?.user_id);
-    if (!callNoAnswer) ids.push(callPeerId);
+    if (!callNoAnswer) ids.push(me?.user_id);
+    ids.push(callPeerId);
+  } else if (lastDirectCallPeerId && lastDirectCallPeerId === peerId) {
+    ids.push(lastDirectCallPeerId);
   }
   for (const id of ids.filter(Boolean).slice(0, 4)) {
     const avatar = document.createElement("span");
