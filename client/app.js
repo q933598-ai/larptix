@@ -32,6 +32,7 @@ const keySaved = document.getElementById("key-saved");
 const keyContinue = document.getElementById("key-continue");
 const imageViewer = document.getElementById("image-viewer");
 const imageViewerImage = document.getElementById("image-viewer-image");
+const imageViewerVideo = document.getElementById("image-viewer-video");
 const logoutBtn = document.getElementById("logout");
 const meLabel = document.getElementById("me-label");
 const meUsername = document.getElementById("me-username");
@@ -211,9 +212,9 @@ let mode = "login";
 let legacyLogin = false;
 let registerWithPassword = false;
 let pendingKeyUser = null;
-let pendingAttachment = null;
+let pendingAttachments = [];
 let pendingGif = null;
-let previewUrl = null;
+let previewUrls = [];
 let recorder = null;
 let recordingStream = null;
 let recordedChunks = [];
@@ -1775,9 +1776,17 @@ gifOpenButton.addEventListener("click", () => {
   gifDialog.showModal();
 });
 gifCloseButton.addEventListener("click", () => gifDialog.close());
-document.getElementById("image-viewer-close").addEventListener("click", () => imageViewer.close());
+function closeMediaViewer() {
+  imageViewerVideo?.pause();
+  imageViewerVideo?.removeAttribute("src");
+  imageViewerVideo?.load();
+  imageViewerVideo?.setAttribute("hidden", "");
+  imageViewerImage.hidden = false;
+  imageViewer.close();
+}
+document.getElementById("image-viewer-close").addEventListener("click", closeMediaViewer);
 imageViewer.addEventListener("click", (event) => {
-  if (event.target === imageViewer) imageViewer.close();
+  if (event.target === imageViewer) closeMediaViewer();
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && imageViewer.open) {
@@ -6232,34 +6241,75 @@ function base64ToBytes(value) {
   return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
 }
 
-function queueAttachment(file) {
-  if (!file) return;
-  pendingAttachment = file;
-  if (previewUrl) URL.revokeObjectURL(previewUrl);
-  previewUrl = URL.createObjectURL(file);
-  attachmentPreview.replaceChildren();
-  if (file.type.startsWith("image/")) {
-    const image = document.createElement("img");
-    image.src = previewUrl;
-    image.alt = "Selected image preview";
-    attachmentPreview.append(image);
-  } else if (file.type.startsWith("audio/")) {
-    const audio = document.createElement("audio");
-    audio.controls = true;
-    audio.src = previewUrl;
-    attachmentPreview.append(audio);
-  }
-  const details = document.createElement("span");
-  details.textContent = `${file.name} · ${formatSize(file.size)}`;
-  attachmentPreview.append(details);
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.className = "ghost";
-  remove.textContent = "Remove";
-  remove.addEventListener("click", clearAttachment);
-  attachmentPreview.append(remove);
-  attachmentPreview.hidden = false;
+function queueAttachments(files) {
+  const incoming = [...files].filter((file) => file instanceof File && file.size > 0);
+  if (!incoming.length) return;
+  pendingAttachments.push(...incoming);
+  renderAttachmentPreview();
 }
+
+function renderAttachmentPreview() {
+  for (const url of previewUrls) URL.revokeObjectURL(url);
+  previewUrls = [];
+  attachmentPreview.replaceChildren();
+
+  pendingAttachments.forEach((file, index) => {
+    const item = document.createElement("div");
+    item.className = "attachment-preview-item";
+    const url = URL.createObjectURL(file);
+    previewUrls.push(url);
+
+    if (file.type.startsWith("image/")) {
+      const image = document.createElement("img");
+      image.src = url;
+      image.alt = file.name;
+      item.append(image);
+    } else if (file.type.startsWith("video/")) {
+      const video = document.createElement("video");
+      video.src = url;
+      video.muted = true;
+      video.playsInline = true;
+      video.preload = "metadata";
+      item.append(video);
+    } else if (file.type.startsWith("audio/")) {
+      const audio = document.createElement("audio");
+      audio.controls = true;
+      audio.src = url;
+      item.append(audio);
+    } else {
+      const fileIcon = document.createElement("span");
+      fileIcon.className = "attachment-file-icon";
+      fileIcon.textContent = "↗";
+      item.append(fileIcon);
+    }
+
+    const info = document.createElement("span");
+    info.className = "attachment-preview-name";
+    info.textContent = file.name;
+    info.title = file.name;
+    item.append(info);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ghost";
+    remove.textContent = "×";
+    remove.title = "Remove attachment";
+    remove.setAttribute("aria-label", `Remove ${file.name}`);
+    remove.addEventListener("click", () => {
+      pendingAttachments.splice(index, 1);
+      renderAttachmentPreview();
+    });
+    item.append(remove);
+    attachmentPreview.append(item);
+  });
+
+  attachmentPreview.hidden = pendingAttachments.length === 0;
+}
+
+function queueAttachment(file) {
+  queueAttachments(file ? [file] : []);
+}
+
 
 function browserLocale() {
   const locale = (navigator.language || "en-US").replace("-", "_").trim();
@@ -6318,10 +6368,10 @@ function renderSelectedGif(gif, container) {
 }
 
 function clearAttachment() {
-  pendingAttachment = null;
+  pendingAttachments = [];
   pendingGif = null;
-  if (previewUrl) URL.revokeObjectURL(previewUrl);
-  previewUrl = null;
+  for (const url of previewUrls) URL.revokeObjectURL(url);
+  previewUrls = [];
   attachmentPreview.replaceChildren();
   attachmentPreview.hidden = true;
   photoInput.value = "";
@@ -6377,9 +6427,26 @@ function appendSystem(text) {
 }
 
 function openImageViewer(src, alt) {
+  if (imageViewerVideo) {
+    imageViewerVideo.pause();
+    imageViewerVideo.removeAttribute("src");
+    imageViewerVideo.hidden = true;
+  }
+  imageViewerImage.hidden = false;
   imageViewerImage.src = src;
   imageViewerImage.alt = alt;
   imageViewer.showModal();
+}
+
+function openVideoViewer(src, name = "Video") {
+  imageViewerImage.hidden = true;
+  imageViewerImage.removeAttribute("src");
+  if (!imageViewerVideo) return;
+  imageViewerVideo.hidden = false;
+  imageViewerVideo.setAttribute("aria-label", name);
+  imageViewerVideo.src = src;
+  imageViewer.showModal();
+  imageViewerVideo.play().catch(() => {});
 }
 
 function updateOwnProfileCard(profile) {
