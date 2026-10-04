@@ -47,6 +47,8 @@ const profileEmailLabel = document.getElementById("profile-email-label");
 const profileActivity = document.getElementById("profile-activity");
 const showMusicActivity = document.getElementById("show-music-activity");
 const forgetE2eDeviceButton = document.getElementById("forget-e2e-device");
+const resetE2eKeysButton = document.getElementById("reset-e2e-keys");
+const resetE2eHelp = document.getElementById("reset-e2e-help");
 const profileCardName = document.getElementById("profile-card-name");
 const profileCardHandle = document.getElementById("profile-card-handle");
 const profileCardActivity = document.getElementById("profile-card-activity");
@@ -104,6 +106,10 @@ const createChannelDialog = document.getElementById("create-channel-dialog");
 const groupMemberList = document.getElementById("group-member-list");
 const channelMemberList = document.getElementById("channel-member-list");
 const userSearchInput = document.getElementById("user-search");
+const chatViewOpen = document.getElementById("chat-view-open");
+const friendRequestsOpen = document.getElementById("friend-requests-open");
+const friendRequestsBadge = document.getElementById("friend-requests-badge");
+const peopleSearchHint = document.querySelector(".friends-search-hint");
 const emojiPicker = document.getElementById("emoji-picker");
 const menuOpenButton = document.getElementById("menu-open");
 const menuCloseButton = document.getElementById("menu-close");
@@ -196,6 +202,10 @@ let users = [];
 let searchResults = [];
 let groups = [];
 let searchRequestId = 0;
+let friendRequests = { incoming: [], outgoing: [] };
+let peopleView = "chats";
+let friendRequestsRequestId = 0;
+let friendSearchLoading = false;
 let reconnect = false;
 let mode = "login";
 let legacyLogin = false;
@@ -247,6 +257,36 @@ const decryptedPayloadByMessageId = new Map();
 const mutedRemoteUserIds = new Set();
 let callDeafened = false;
 
+function e2eResetStorageKey(peerUserId) {
+  return me && peerUserId ? `larptrix_e2e_reset_${me.user_id}_${peerUserId}` : null;
+}
+function getE2eResetAt(peerUserId) {
+  const key = e2eResetStorageKey(peerUserId);
+  if (!key) return 0;
+  const value = Number(localStorage.getItem(key));
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+function setE2eResetAt(peerUserId, timestamp) {
+  const key = e2eResetStorageKey(peerUserId);
+  if (!key) return;
+  localStorage.setItem(key, String(timestamp));
+}
+function isMessageVisibleAfterE2eReset(message) {
+  if (!message || !peerId || !me) return true;
+  const resetAt = getE2eResetAt(peerId);
+  return !resetAt || Number(message.created_at) > resetAt;
+}
+function renderE2eResetNotice(peerUserId) {
+  if (!getE2eResetAt(peerUserId)) return;
+  const li = document.createElement("li");
+  li.className = "e2e-reset-notice";
+  const title = document.createElement("strong");
+  title.textContent = "You reset your encryption key";
+  const detail = document.createElement("span");
+  detail.textContent = "Older messages remain stored for the other participant, but this device starts a fresh encrypted history.";
+  li.append(title, detail);
+  logEl.append(li);
+}
 function pinnedChatsKey() {
   return me ? `larptrix_pinned_chats_${me.user_id}` : null;
 }
@@ -2830,6 +2870,7 @@ function connect() {
         renderGroupCallBanner();
         logEl.replaceChildren();
         messageBodyElementsById.clear();
+        renderE2eResetNotice(msg.peer.user_id);
         msg.history.forEach(appendMessage);
         void retryVisibleMatrixMessages({ attempts: 10, delayMs: 300 });
         break;
@@ -4519,6 +4560,7 @@ function paintAvatar(el, user) {
 function appendMessage(message) {
   messagesById.set(message.id, message);
   if (deletedMessageIds.has(message.id)) return;
+  if (!isMessageVisibleAfterE2eReset(message)) return;
   const li = document.createElement("li");
   li.dataset.messageId = message.id;
   if (me && message.sender_id === me.user_id) li.classList.add("me");
