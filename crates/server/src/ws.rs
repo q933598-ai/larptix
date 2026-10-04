@@ -856,6 +856,7 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
                     .map(|_| format!("/api/groups/{}/banner", group.id)),
                 subscriber_count: group.member_ids.len(),
                 tags: Vec::new(),
+                activities: Vec::new(),
             },
             history,
         });
@@ -1612,6 +1613,13 @@ fn me_info(state: &AppState, user: &UserRow) -> UserInfo {
 }
 
 fn user_info(state: &AppState, user: &UserRow, online: bool) -> UserInfo {
+    let activities = if online {
+        state.db.profile_activities(&user.id).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let activity = activities.first().map(|item| item.name.clone());
+
     UserInfo {
         user_id: user.id.clone(),
         display_name: user.display_name.clone(),
@@ -1619,7 +1627,8 @@ fn user_info(state: &AppState, user: &UserRow, online: bool) -> UserInfo {
         email: None,
         online,
         avatar_url: user.avatar_id.as_ref().map(|_| avatar_url(&user.id)),
-        activity: None,
+        activity,
+        activities,
         is_group: false,
         is_channel: false,
         admin_ids: Vec::new(),
