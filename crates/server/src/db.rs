@@ -1944,6 +1944,8 @@ impl Database {
             body: body.to_string(),
             attachment: attachment_infos.first().cloned(),
             attachments: attachment_infos,
+            reactions: Vec::new(),
+            view_count: 0,
             created_at,
         })
     }
@@ -2160,6 +2162,8 @@ impl Database {
             body: body.to_string(),
             attachment: attachment_infos.first().cloned(),
             attachments: attachment_infos,
+            reactions: Vec::new(),
+            view_count: 0,
             created_at,
         })
     }
@@ -2369,6 +2373,8 @@ impl Database {
                         _ => None,
                     },
                     attachments: Vec::new(),
+                    reactions: Vec::new(),
+                    view_count: 0,
                     created_at: row.get(6)?,
                 })
             },
