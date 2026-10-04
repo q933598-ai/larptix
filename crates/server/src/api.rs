@@ -6,7 +6,7 @@ use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use larptrix_protocol::{
     attachment_url, avatar_url, sanitize_display_name, sanitize_email, sanitize_password,
@@ -228,9 +228,7 @@ async fn register(
         .db
         .create_key_user(&display_name, &username, &access_key_hash, now_ms())
         .map_err(ApiError::from_db)?;
-    let online = state.hub.online_ids();
-    let users = state.db.list_users(&online).map_err(ApiError::db)?;
-    state.hub.broadcast(ServerMessage::Directory { users });
+    broadcast_friend_directories(&state, &state.hub.online_ids());
     let mut info = public_me(&user);
     info.username = username;
     Ok(Json(serde_json::json!({
