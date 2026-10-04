@@ -1411,7 +1411,11 @@ fn directory_for_user(state: &AppState, user_id: &str) -> Vec<UserInfo> {
     let online = state.hub.online_ids();
     let friend_ids = state.db.friend_ids(user_id).unwrap_or_default();
     let mut users = state.db.list_users(&online).unwrap_or_default();
-    users.retain(|user| friend_ids.iter().any(|friend_id| friend_id == &user.user_id));
+    users.retain(|user| {
+        friend_ids
+            .iter()
+            .any(|friend_id| friend_id == &user.user_id)
+    });
     for user in &mut users {
         user.friend_status = "accepted".to_string();
     }
