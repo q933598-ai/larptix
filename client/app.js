@@ -6406,7 +6406,12 @@ function renderDirectCallParticipants() {
   if (!directCallParticipants) return;
   directCallParticipants.replaceChildren();
 
-  const demo = callNoAnswer || callStage?.classList.contains("call-ending-notice");
+  if (callStage?.classList.contains("call-ending-notice") && !callNoAnswer) {
+    directCallParticipants.hidden = true;
+    return;
+  }
+
+  const demo = callNoAnswer;
   if (demo) {
     const demoId =
       lastDirectCallAvatarPeerId
@@ -6485,7 +6490,9 @@ function showDirectCallNotice(targetPeerId, message, { join = false, kind = "aud
   lastDirectCallAvatarPeerId = avatarPeerId || targetPeerId;
   lastDirectCallJoinPeerId = join ? targetPeerId : null;
   lastDirectCallJoinKind = kind;
-  callNoAnswer = join;
+  // Keep the avatar hidden during the short "No answer" notice.
+  // It appears together with Join after the notice expires.
+  callNoAnswer = false;
   callStage.hidden = false;
   callStage.classList.add("call-ending-notice");
   callStatus.textContent = message;
@@ -6528,6 +6535,8 @@ function showDirectCallNotice(targetPeerId, message, { join = false, kind = "aud
   directCallNoticeTimeout = setTimeout(() => {
     if (lastDirectCallPeerId !== targetPeerId) return;
     directCallNoticeTimeout = null;
+    callNoAnswer = true;
+    lastDirectCallAvatarPeerId = avatarPeerId || targetPeerId;
     if (directCallJoin) directCallJoin.hidden = false;
     callStatus.textContent = "No answer · ready to join";
     renderDirectCallParticipants();
