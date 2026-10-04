@@ -6721,6 +6721,32 @@ function mergeCryptoRecoveryResponse(message, response) {
   };
 }
 
+function renderCallLogMessage(bodyElement, payload) {
+  if (!bodyElement || !payload?.call_log) return false;
+  const row = bodyElement.closest("li");
+  if (!row) return false;
+  const log = payload.call_log;
+  const status = log.status === "completed" ? "completed" : "missed";
+  const kind = log.kind === "video" ? "video" : "audio";
+  const duration = formatCallDuration(log.duration_seconds);
+  row.classList.remove("call-log-message", "call-log-missed", "call-log-completed");
+  row.classList.add(
+    "call-log-message",
+    status === "missed" ? "call-log-missed" : "call-log-completed",
+  );
+  bodyElement.replaceChildren();
+  const icon = document.createElement("span");
+  icon.className = "call-log-icon";
+  icon.textContent = kind === "video" ? "📹" : "📞";
+  const label = document.createElement("span");
+  label.textContent = status === "missed"
+    ? "Missed call · " + duration
+    : (kind === "video" ? "Video call · " : "Call · ") + duration;
+  bodyElement.append(icon, label);
+  row.querySelector(".message-actions")?.remove();
+  return true;
+}
+
 function parseCryptoEnvelope(raw) {
   try {
     const envelope = JSON.parse(raw);
@@ -6823,6 +6849,7 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
       void cacheDecryptedMessagePayload(message.id, payload);
       message._decryptedPayload = payload;
       renderMessageDecorations(bodyElement.parentElement, payload);
+      if (renderCallLogMessage(bodyElement, payload)) return true;
       bodyElement.textContent =
         typeof payload?.text === "string" ? payload.text : JSON.stringify(payload);
 
@@ -6858,6 +6885,7 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
     decryptedPayloadByMessageId.set(message.id, payload);
     message._decryptedPayload = payload;
     renderMessageDecorations(bodyElement.parentElement, payload);
+    if (renderCallLogMessage(bodyElement, payload)) return true;
     bodyElement.textContent = payload?.text || "Encrypted message sent from this device";
     if (payload?.files?.length || (payload?.file && message.attachment)) {
       try {
@@ -7098,6 +7126,7 @@ async function displayEncryptedMessage(message, bodyElement, { allowRecovery = t
     decryptedPayloadByMessageId.set(message.id, payload);
     message._decryptedPayload = payload;
     renderMessageDecorations(bodyElement.parentElement, payload);
+    if (renderCallLogMessage(bodyElement, payload)) return true;
     bodyElement.textContent = payload?.text ?? result;
 
     if (payload?.files?.length || (payload?.file && message.attachment)) {
