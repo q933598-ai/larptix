@@ -184,16 +184,16 @@
           </div>
           <div class="composer-tools">
             <label class="photo-btn" title="Send a photo">
-              <input id="photo" type="file" accept="image/jpeg,image/png,image/gif,image/webp" hidden />
+              <input id="photo" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple hidden />
               Image
             </label>
             <button id="gif-open" type="button" class="ghost" title="Saved GIFs">GIF</button>
             <label class="photo-btn" title="Attach a file">
-              <input id="file" type="file" hidden />
+              <input id="file" type="file" multiple hidden />
               File
             </label>
             <label class="photo-btn" title="Attach an audio file">
-              <input id="audio-file" type="file" accept="audio/*" hidden />
+              <input id="audio-file" type="file" accept="audio/*" multiple hidden />
               Audio
             </label>
             <button id="record-audio" type="button" class="ghost" title="Record a voice message">Record</button>
@@ -632,9 +632,12 @@
       </form>
     </dialog>
 
-    <dialog id="image-viewer" class="image-viewer" aria-label="Image preview">
+    <dialog id="image-viewer" class="image-viewer" aria-label="Media preview">
       <button id="image-viewer-close" type="button" class="ghost">Close</button>
-      <img id="image-viewer-image" alt="" />
+      <div class="media-viewer-content">
+        <img id="image-viewer-image" alt="" />
+        <video id="image-viewer-video" controls playsinline preload="metadata" hidden></video>
+      </div>
     </dialog>
 
     <dialog id="incoming-call-dialog" class="incoming-call-dialog">
