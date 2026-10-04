@@ -74,14 +74,7 @@ pub async fn handle_socket(
         .groups_for_user(&user.id)
         .unwrap_or_default()
         .into_iter()
-        .map(|group| GroupInfo {
-            group_id: group.id,
-            name: group.name,
-            member_ids: group.member_ids,
-            is_channel: group.is_channel,
-            admin_ids: group.admin_ids,
-            post_policy: group.post_policy,
-        })
+        .map(group_info)
         .collect();
     let _ = tx.send(ServerMessage::Groups { groups });
     send_active_group_calls(&state, &user.id, &tx);
@@ -159,6 +152,26 @@ pub async fn handle_socket(
                         send_dm(&state, &user, &peer_id, body, attachment_ids, &server_name)
                     {
                         send_error(&tx, "bad_send", err);
+                    }
+                }
+                Ok(ClientMessage::React {
+                    peer_id,
+                    message_id,
+                    emoji,
+                    add,
+                }) => {
+                    if let Err(err) =
+                        react_to_message(&state, &user, &peer_id, &message_id, &emoji, add)
+                    {
+                        send_error(&tx, "bad_reaction", err);
+                    }
+                }
+                Ok(ClientMessage::ViewMessage {
+                    peer_id,
+                    message_id,
+                }) => {
+                    if let Err(err) = view_channel_message(&state, &user, &peer_id, &message_id) {
+                        send_error(&tx, "bad_message_view", err);
                     }
                 }
                 Ok(ClientMessage::Delete {
@@ -591,6 +604,11 @@ fn relay_call_signal(
     kind: &str,
     payload: serde_json::Value,
 ) -> Result<(), String> {
+    if let Some(group) = state.db.group(peer_id).map_err(|err| err.to_string())? {
+        if group.is_channel {
+            return Err("channels do not support calls".into());
+        }
+    }
     if !matches!(
         kind,
         "offer"
@@ -809,12 +827,15 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
         let online = state.hub.online_ids();
         let _ = tx.send(ServerMessage::Chat {
             peer: UserInfo {
-                user_id: group.id,
-                display_name: group.name,
+                user_id: group.id.clone(),
+                display_name: group.name.clone(),
                 username: String::new(),
                 email: None,
                 online: group.member_ids.iter().any(|id| online.contains(id)),
-                avatar_url: None,
+                avatar_url: group
+                    .avatar_id
+                    .as_ref()
+                    .map(|_| format!("/api/groups/{}/avatar", group.id)),
                 activity: None,
                 is_group: true,
                 is_channel: group.is_channel,
@@ -823,7 +844,17 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
                 e2e_enabled: true,
                 friend_status: "accepted".to_string(),
                 message_policy: "everyone".to_string(),
-                group_member_ids: group.member_ids,
+                group_member_ids: group.member_ids.clone(),
+                group_description: group.description,
+                group_avatar_url: group
+                    .avatar_id
+                    .as_ref()
+                    .map(|_| format!("/api/groups/{}/avatar", group.id)),
+                group_banner_url: group
+                    .banner_id
+                    .as_ref()
+                    .map(|_| format!("/api/groups/{}/banner", group.id)),
+                subscriber_count: group.member_ids.len(),
             },
             history,
         });
@@ -1398,6 +1429,106 @@ fn validate_e2e_message(
     Ok(())
 }
 
+fn fanout_message_metadata(
+    state: &AppState,
+    actor_id: &str,
+    peer_id: &str,
+    payload: ServerMessage,
+) {
+    if let Ok(Some(group)) = state.db.group(peer_id) {
+        for member_id in group.member_ids {
+            if let Ok(member) = Uuid::parse_str(&member_id) {
+                state.hub.send_to(member, payload.clone());
+            }
+        }
+        return;
+    }
+
+    if let Ok(actor) = Uuid::parse_str(actor_id) {
+        state.hub.send_to(actor, payload.clone());
+    }
+    if peer_id != actor_id {
+        if let Ok(peer) = Uuid::parse_str(peer_id) {
+            state.hub.send_to(peer, payload);
+        }
+    }
+}
+
+fn react_to_message(
+    state: &AppState,
+    user: &UserRow,
+    peer_id: &str,
+    message_id: &str,
+    emoji: &str,
+    add: bool,
+) -> Result<(), String> {
+    let group = state.db.group(peer_id).map_err(|err| err.to_string())?;
+    if let Some(group) = group {
+        if !group.member_ids.iter().any(|id| id == &user.id) {
+            return Err("not a member of this group".into());
+        }
+    } else if peer_id == user.id {
+        return Err("cannot react in a self chat".into());
+    } else if state
+        .db
+        .user_by_id(peer_id)
+        .map_err(|err| err.to_string())?
+        .is_none()
+    {
+        return Err("unknown chat".into());
+    }
+
+    let reactions = state
+        .db
+        .toggle_message_reaction(message_id, &user.id, emoji, add)
+        .map_err(db_err)?;
+    fanout_message_metadata(
+        state,
+        &user.id,
+        peer_id,
+        ServerMessage::MessageReaction {
+            peer_id: peer_id.to_string(),
+            message_id: message_id.to_string(),
+            reactions,
+        },
+    );
+    Ok(())
+}
+
+fn view_channel_message(
+    state: &AppState,
+    user: &UserRow,
+    peer_id: &str,
+    message_id: &str,
+) -> Result<(), String> {
+    let group = state
+        .db
+        .group(peer_id)
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| "channel not found".to_string())?;
+    if !group.is_channel {
+        return Err("message views are only available in channels".into());
+    }
+    if !group.member_ids.iter().any(|id| id == &user.id) {
+        return Err("not a channel member".into());
+    }
+    let view_count = state
+        .db
+        .mark_channel_message_viewed(message_id, &user.id)
+        .map_err(db_err)?;
+    fanout_message_metadata(
+        state,
+        &user.id,
+        peer_id,
+        ServerMessage::MessageViewUpdate {
+            peer_id: peer_id.to_string(),
+            message_id: message_id.to_string(),
+            view_count,
+        },
+    );
+    Ok(())
+}
+
 fn fanout(state: &AppState, message: &ChatMessage) {
     let payload = ServerMessage::Message {
         message: message.clone(),
@@ -1447,6 +1578,26 @@ fn broadcast_friend_directories(state: &AppState) {
     }
 }
 
+fn group_info(group: crate::db::GroupRow) -> GroupInfo {
+    let subscriber_count = group.member_ids.len();
+    GroupInfo {
+        group_id: group.id.clone(),
+        name: group.name,
+        member_ids: group.member_ids,
+        is_channel: group.is_channel,
+        admin_ids: group.admin_ids,
+        post_policy: group.post_policy,
+        description: group.description,
+        avatar_url: group
+            .avatar_id
+            .map(|_| format!("/api/groups/{}/avatar", group.id)),
+        banner_url: group
+            .banner_id
+            .map(|_| format!("/api/groups/{}/banner", group.id)),
+        subscriber_count,
+    }
+}
+
 fn me_info(state: &AppState, user: &UserRow) -> UserInfo {
     let mut info = user_info(user, true);
     if let Ok(Some((_, username, _, _))) = state.db.profile_fields(&user.id) {
@@ -1476,6 +1627,10 @@ fn user_info(user: &UserRow, online: bool) -> UserInfo {
         friend_status: "accepted".to_string(),
         message_policy: "everyone".to_string(),
         group_member_ids: Vec::new(),
+        group_description: String::new(),
+        group_avatar_url: None,
+        group_banner_url: None,
+        subscriber_count: 0,
     }
 }
 
@@ -2175,6 +2330,8 @@ mod call_signal_tests {
                 body: "ciphertext".into(),
                 attachment: None,
                 attachments: Vec::new(),
+                reactions: Vec::new(),
+                view_count: 0,
                 created_at: 1,
             },
         );

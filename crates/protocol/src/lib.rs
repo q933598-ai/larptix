@@ -60,6 +60,18 @@ pub enum ClientMessage {
         message_id: String,
         device_id: String,
     },
+    /// Add or remove an emoji reaction from a message.
+    React {
+        peer_id: String,
+        message_id: String,
+        emoji: String,
+        add: bool,
+    },
+    /// Mark a channel message as viewed by the current member.
+    ViewMessage {
+        peer_id: String,
+        message_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +99,16 @@ pub enum ServerMessage {
     MessageDeleted {
         peer_id: String,
         message_id: String,
+    },
+    MessageReaction {
+        peer_id: String,
+        message_id: String,
+        reactions: Vec<ReactionSummary>,
+    },
+    MessageViewUpdate {
+        peer_id: String,
+        message_id: String,
+        view_count: usize,
     },
     Presence {
         user_id: String,
@@ -146,6 +168,14 @@ pub struct GroupInfo {
     pub admin_ids: Vec<String>,
     #[serde(default = "default_channel_post_policy")]
     pub post_policy: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub banner_url: Option<String>,
+    #[serde(default)]
+    pub subscriber_count: usize,
 }
 
 fn default_channel_post_policy() -> String {
@@ -181,6 +211,22 @@ pub struct UserInfo {
     pub message_policy: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub group_member_ids: Vec<String>,
+    #[serde(default)]
+    pub group_description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_avatar_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_banner_url: Option<String>,
+    #[serde(default)]
+    pub subscriber_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReactionSummary {
+    pub emoji: String,
+    pub count: usize,
+    #[serde(default)]
+    pub reacted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,6 +242,10 @@ pub struct ChatMessage {
     /// field remains the primary attachment for wire compatibility.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<AttachmentInfo>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reactions: Vec<ReactionSummary>,
+    #[serde(default)]
+    pub view_count: usize,
     pub created_at: i64,
 }
 

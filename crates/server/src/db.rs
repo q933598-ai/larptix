@@ -1,7 +1,10 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 
-use larptrix_protocol::{attachment_url, avatar_url, AttachmentInfo, ChatMessage, UserInfo};
+use larptrix_protocol::{
+    attachment_url, avatar_url, AttachmentInfo, ChatMessage, ReactionSummary, UserInfo,
+};
 use rusqlite::{params, Connection, ErrorCode, OptionalExtension, TransactionBehavior};
 use uuid::Uuid;
 
@@ -86,6 +89,9 @@ pub struct GroupRow {
     pub is_channel: bool,
     pub admin_ids: Vec<String>,
     pub post_policy: String,
+    pub description: String,
+    pub avatar_id: Option<String>,
+    pub banner_id: Option<String>,
 }
 
 pub struct Database {
@@ -1284,6 +1290,10 @@ impl Database {
                 post_policy: String::new(),
                 e2e_enabled,
                 group_member_ids: Vec::new(),
+                group_description: String::new(),
+                group_avatar_url: None,
+                group_banner_url: None,
+                subscriber_count: 0,
                 friend_status: "none".to_string(),
                 message_policy,
             })
@@ -1559,6 +1569,9 @@ impl Database {
             is_channel: false,
             admin_ids: vec![creator_id.to_string()],
             post_policy: "members".to_string(),
+            description: String::new(),
+            avatar_id: None,
+            banner_id: None,
         })
     }
 
@@ -1590,7 +1603,8 @@ impl Database {
     pub fn groups_for_user(&self, user_id: &str) -> rusqlite::Result<Vec<GroupRow>> {
         let conn = self.conn.lock().expect("db lock");
         let mut stmt = conn.prepare(
-            "SELECT g.id, g.name, g.is_channel, g.created_by, g.post_policy
+            "SELECT g.id, g.name, g.is_channel, g.created_by, g.post_policy,
+                    g.description, g.avatar_id, g.banner_id
              FROM groups g
              JOIN group_members gm ON gm.group_id = g.id
              WHERE gm.user_id = ?1 ORDER BY g.name COLLATE NOCASE",
@@ -1602,11 +1616,15 @@ impl Database {
                 row.get::<_, i64>(2)? != 0,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
             ))
         })?;
         let mut groups = Vec::new();
         for row in rows {
-            let (id, name, is_channel, creator_id, post_policy) = row?;
+            let (id, name, is_channel, creator_id, post_policy, description, avatar_id, banner_id) =
+                row?;
             let member_ids = conn
                 .prepare("SELECT user_id FROM group_members WHERE group_id = ?1 ORDER BY user_id")?
                 .query_map([&id], |member| member.get(0))?
@@ -1628,6 +1646,9 @@ impl Database {
                 is_channel,
                 admin_ids,
                 post_policy,
+                description,
+                avatar_id,
+                banner_id,
             });
         }
         Ok(groups)
@@ -1637,7 +1658,9 @@ impl Database {
         let conn = self.conn.lock().expect("db lock");
         let group = conn
             .query_row(
-                "SELECT id, name, is_channel, created_by, post_policy FROM groups WHERE id = ?1",
+                "SELECT id, name, is_channel, created_by, post_policy,
+                        description, avatar_id, banner_id
+                 FROM groups WHERE id = ?1",
                 [group_id],
                 |row| {
                     Ok((
@@ -1646,11 +1669,24 @@ impl Database {
                         row.get::<_, i64>(2)? != 0,
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((id, name, is_channel, creator_id, post_policy)) = group else {
+        let Some((
+            id,
+            name,
+            is_channel,
+            creator_id,
+            post_policy,
+            description,
+            avatar_id,
+            banner_id,
+        )) = group
+        else {
             return Ok(None);
         };
         let member_ids = conn
@@ -1674,7 +1710,44 @@ impl Database {
             is_channel,
             admin_ids,
             post_policy,
+            description,
+            avatar_id,
+            banner_id,
         }))
+    }
+
+    pub fn update_group_profile(
+        &self,
+        group_id: &str,
+        name: &str,
+        description: &str,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "UPDATE groups SET name = ?1, description = ?2 WHERE id = ?3",
+            params![name, description, group_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_group_media(
+        &self,
+        group_id: &str,
+        column: &str,
+        attachment_id: Option<&str>,
+    ) -> rusqlite::Result<Option<String>> {
+        if !matches!(column, "avatar_id" | "banner_id") {
+            return Err(rusqlite::Error::InvalidParameterName(column.to_string()));
+        }
+        let conn = self.conn.lock().expect("db lock");
+        let old: Option<String> = {
+            let sql = format!("SELECT {column} FROM groups WHERE id = ?1");
+            conn.query_row(&sql, [group_id], |row| row.get(0))
+                .optional()?
+        };
+        let sql = format!("UPDATE groups SET {column} = ?1 WHERE id = ?2");
+        conn.execute(&sql, params![attachment_id, group_id])?;
+        Ok(old)
     }
 
     pub fn is_group_member(&self, group_id: &str, user_id: &str) -> rusqlite::Result<bool> {
@@ -1894,6 +1967,8 @@ impl Database {
             body: body.to_string(),
             attachment: attachment_infos.first().cloned(),
             attachments: attachment_infos,
+            reactions: Vec::new(),
+            view_count: 0,
             created_at,
         })
     }
@@ -1965,6 +2040,8 @@ impl Database {
                     _ => None,
                 },
                 attachments: Vec::new(),
+                reactions: Vec::new(),
+                view_count: 0,
                 created_at: row.get(6)?,
             })
         })?;
@@ -1973,6 +2050,34 @@ impl Database {
             messages.push(row.map_err(DbError::Sqlite)?);
         }
         messages.reverse();
+
+        let mut reaction_stmt = conn.prepare(
+            "SELECT message_id, emoji, COUNT(*),
+                    MAX(CASE WHEN user_id = ?2 THEN 1 ELSE 0 END)
+             FROM message_reactions
+             WHERE message_id IN (
+                 SELECT id FROM messages WHERE conversation_id = ?1
+             )
+             GROUP BY message_id, emoji",
+        )?;
+        let reaction_rows = reaction_stmt.query_map(params![conversation_id, user_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                ReactionSummary {
+                    emoji: row.get(1)?,
+                    count: row.get::<_, i64>(2)? as usize,
+                    reacted: row.get::<_, i64>(3)? != 0,
+                },
+            ))
+        })?;
+        let mut reactions_by_message: HashMap<String, Vec<ReactionSummary>> = HashMap::new();
+        for row in reaction_rows {
+            let (message_id, reaction) = row?;
+            reactions_by_message
+                .entry(message_id)
+                .or_default()
+                .push(reaction);
+        }
 
         for message in &mut messages {
             let mut stmt = conn.prepare(
@@ -2002,6 +2107,7 @@ impl Database {
                 }
             }
             message.attachments = attachments;
+            message.reactions = reactions_by_message.remove(&message.id).unwrap_or_default();
         }
 
         Ok(messages)
@@ -2110,8 +2216,143 @@ impl Database {
             body: body.to_string(),
             attachment: attachment_infos.first().cloned(),
             attachments: attachment_infos,
+            reactions: Vec::new(),
+            view_count: 0,
             created_at,
         })
+    }
+
+    pub fn message_accessible_to_user(
+        &self,
+        message_id: &str,
+        user_id: &str,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM messages m
+                WHERE m.id = ?1
+                  AND (
+                    EXISTS (
+                        SELECT 1
+                        FROM conversations c
+                        WHERE c.id = m.conversation_id
+                          AND (c.user_a = ?2 OR c.user_b = ?2)
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM group_members gm
+                        WHERE m.conversation_id = 'group_' || gm.group_id
+                          AND gm.user_id = ?2
+                    )
+                  )
+            )",
+            params![message_id, user_id],
+            |row| row.get(0),
+        )
+    }
+
+    pub fn message_is_channel(&self, message_id: &str, user_id: &str) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM messages m
+                JOIN groups g ON m.conversation_id = 'group_' || g.id
+                JOIN group_members gm ON gm.group_id = g.id
+                WHERE m.id = ?1
+                  AND g.is_channel = 1
+                  AND gm.user_id = ?2
+            )",
+            params![message_id, user_id],
+            |row| row.get(0),
+        )
+    }
+
+    pub fn reaction_summaries(
+        &self,
+        message_id: &str,
+        viewer_id: &str,
+    ) -> rusqlite::Result<Vec<ReactionSummary>> {
+        let conn = self.conn.lock().expect("db lock");
+        let mut stmt = conn.prepare(
+            "SELECT emoji, COUNT(*),
+                    MAX(CASE WHEN user_id = ?2 THEN 1 ELSE 0 END)
+             FROM message_reactions
+             WHERE message_id = ?1
+             GROUP BY emoji
+             ORDER BY COUNT(*) DESC, emoji ASC",
+        )?;
+        let rows = stmt.query_map(params![message_id, viewer_id], |row| {
+            Ok(ReactionSummary {
+                emoji: row.get(0)?,
+                count: row.get::<_, i64>(1)? as usize,
+                reacted: row.get::<_, i64>(2)? != 0,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn toggle_message_reaction(
+        &self,
+        message_id: &str,
+        user_id: &str,
+        emoji: &str,
+        add: bool,
+    ) -> Result<Vec<ReactionSummary>, DbError> {
+        let emoji = emoji.trim();
+        if emoji.is_empty() || emoji.chars().count() > 8 {
+            return Err(DbError::BadRequest("invalid reaction"));
+        }
+        if !self
+            .message_accessible_to_user(message_id, user_id)
+            .map_err(DbError::Sqlite)?
+        {
+            return Err(DbError::BadRequest("message not found"));
+        }
+        let conn = self.conn.lock().expect("db lock");
+        if add {
+            conn.execute(
+                "INSERT OR IGNORE INTO message_reactions (message_id, user_id, emoji, created_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![message_id, user_id, emoji, crate::now_ms()],
+            )?;
+        } else {
+            conn.execute(
+                "DELETE FROM message_reactions
+                 WHERE message_id = ?1 AND user_id = ?2 AND emoji = ?3",
+                params![message_id, user_id, emoji],
+            )?;
+        }
+        drop(conn);
+        self.reaction_summaries(message_id, user_id)
+            .map_err(DbError::Sqlite)
+    }
+
+    pub fn mark_channel_message_viewed(
+        &self,
+        message_id: &str,
+        user_id: &str,
+    ) -> Result<usize, DbError> {
+        if !self
+            .message_is_channel(message_id, user_id)
+            .map_err(DbError::Sqlite)?
+        {
+            return Err(DbError::BadRequest("channel message not found"));
+        }
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "INSERT OR IGNORE INTO message_views (message_id, user_id, viewed_at)
+             VALUES (?1, ?2, ?3)",
+            params![message_id, user_id, crate::now_ms()],
+        )?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM message_views WHERE message_id = ?1",
+            [message_id],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
     }
 
     pub fn delete_message(
@@ -2182,12 +2423,48 @@ impl Database {
                         _ => None,
                     },
                     attachments: Vec::new(),
+                    reactions: Vec::new(),
+                    view_count: 0,
                     created_at: row.get(6)?,
                 })
             },
         )?;
         let mut messages = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         messages.reverse();
+
+        let conversation_id = group_conversation_key(group_id);
+        let mut reaction_stmt = conn.prepare(
+            "SELECT message_id, emoji, COUNT(*),
+                    MAX(CASE WHEN user_id = ?2 THEN 1 ELSE 0 END)
+             FROM message_reactions
+             WHERE message_id IN (
+                 SELECT id FROM messages WHERE conversation_id = ?1
+             )
+             GROUP BY message_id, emoji",
+        )?;
+        let reaction_rows = reaction_stmt.query_map(params![conversation_id, user_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                ReactionSummary {
+                    emoji: row.get(1)?,
+                    count: row.get::<_, i64>(2)? as usize,
+                    reacted: row.get::<_, i64>(3)? != 0,
+                },
+            ))
+        })?;
+        let mut reactions_by_message: HashMap<String, Vec<ReactionSummary>> = HashMap::new();
+        for row in reaction_rows {
+            let (message_id, reaction) = row?;
+            reactions_by_message
+                .entry(message_id)
+                .or_default()
+                .push(reaction);
+        }
+        let is_channel: bool = conn.query_row(
+            "SELECT is_channel FROM groups WHERE id = ?1",
+            [group_id],
+            |row| row.get::<_, i64>(0),
+        )? != 0;
 
         for message in &mut messages {
             let mut stmt = conn.prepare(
@@ -2217,6 +2494,14 @@ impl Database {
                 }
             }
             message.attachments = attachments;
+            message.reactions = reactions_by_message.remove(&message.id).unwrap_or_default();
+            if is_channel {
+                message.view_count = conn.query_row(
+                    "SELECT COUNT(*) FROM message_views WHERE message_id = ?1",
+                    [&message.id],
+                    |row| row.get::<_, i64>(0),
+                )? as usize;
+            }
         }
 
         Ok(messages)
@@ -2466,6 +2751,9 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             created_at INTEGER NOT NULL,
             is_channel INTEGER NOT NULL DEFAULT 0,
             post_policy TEXT NOT NULL DEFAULT 'members',
+            description TEXT NOT NULL DEFAULT '',
+            avatar_id TEXT,
+            banner_id TEXT,
             FOREIGN KEY (created_by) REFERENCES users(id)
         );
         CREATE TABLE IF NOT EXISTS group_members (
@@ -2516,11 +2804,35 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_message_attachments_attachment
             ON message_attachments(attachment_id);
+        CREATE TABLE IF NOT EXISTS message_reactions (
+            message_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            emoji TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (message_id, user_id, emoji),
+            FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_message_reactions_message
+            ON message_reactions(message_id);
+        CREATE TABLE IF NOT EXISTS message_views (
+            message_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            viewed_at INTEGER NOT NULL,
+            PRIMARY KEY (message_id, user_id),
+            FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_message_views_message
+            ON message_views(message_id);
         "#,
     )?;
     for (column, definition) in [
         ("is_channel", "INTEGER NOT NULL DEFAULT 0"),
         ("post_policy", "TEXT NOT NULL DEFAULT 'members'"),
+        ("description", "TEXT NOT NULL DEFAULT ''"),
+        ("avatar_id", "TEXT"),
+        ("banner_id", "TEXT"),
     ] {
         let exists: i64 = conn.query_row(
             "SELECT COUNT(*) FROM pragma_table_info('groups') WHERE name = ?1",

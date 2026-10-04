@@ -87,6 +87,7 @@ const attachmentPreview = document.getElementById("attachment-preview");
 const recordAudioButton = document.getElementById("record-audio");
 const emptyEl = document.getElementById("empty");
 const peerName = document.getElementById("peer-name");
+const peerMeta = document.getElementById("peer-meta");
 const peerVerified = document.getElementById("peer-verified");
 const chatTitlebar = document.getElementById("chat-titlebar");
 const callStage = document.getElementById("call-stage");
@@ -135,6 +136,7 @@ const settingsE2eFingerprint = document.getElementById("settings-e2e-fingerprint
 const settingsLayoutStatus = document.getElementById("settings-layout-status");
 const settingsTheme = document.getElementById("settings-theme");
 const settingsWallpaperTint = document.getElementById("settings-wallpaper-tint");
+const settingsAvatarShape = document.getElementById("settings-avatar-shape");
 const customThemeEditor = document.getElementById("custom-theme-editor");
 const themeBg = document.getElementById("theme-bg");
 const themePanel = document.getElementById("theme-panel");
@@ -172,6 +174,13 @@ const groupMembersClose = document.getElementById("group-members-close");
 const groupMembersTitle = document.getElementById("group-members-title");
 const groupMembersHelp = document.getElementById("group-members-help");
 const groupMembersList = document.getElementById("group-members-list");
+const groupProfileForm = document.getElementById("group-profile-form");
+const groupProfileName = document.getElementById("group-profile-name");
+const groupProfileDescription = document.getElementById("group-profile-description");
+const groupProfileAvatar = document.getElementById("group-profile-avatar");
+const groupProfileBanner = document.getElementById("group-profile-banner");
+const groupProfileBannerLabel = document.getElementById("group-profile-banner-label");
+const groupProfileError = document.getElementById("group-profile-error");
 const groupCallInvite = document.getElementById("group-call-invite");
 const groupCallCount = document.getElementById("group-call-count");
 const callDeafenButton = document.getElementById("toggle-call-deafen");
@@ -253,9 +262,28 @@ const messageBodyElementsById = new Map();
 const messagesById = new Map();
 const deletedMessageIds = new Set();
 const SAVED_MESSAGES_ID = "__larptrix_saved_messages__";
+const AVATAR_SHAPE_KEY = "larptrix_avatar_shape";
 let replyingToMessage = null;
 const decryptedPayloadByMessageId = new Map();
 const mutedRemoteUserIds = new Set();
+const viewedChannelMessages = new Set();
+const channelViewObserver = typeof IntersectionObserver === "function"
+  ? new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting || entry.intersectionRatio < 0.45) continue;
+        const messageId = entry.target?.dataset?.messageId;
+        if (!messageId || viewedChannelMessages.has(messageId) || !peerId) continue;
+        const group = groups.find((item) => item.user_id === peerId && item.is_channel);
+        if (!group || !socket || socket.readyState !== WebSocket.OPEN) continue;
+        viewedChannelMessages.add(messageId);
+        socket.send(JSON.stringify({
+          type: "view_message",
+          peer_id: peerId,
+          message_id: messageId,
+        }));
+      }
+    }, { threshold: [0.45] })
+  : null;
 let callDeafened = false;
 
 function e2eResetStorageKey(peerUserId) {
@@ -1152,7 +1180,11 @@ function appendSavedMessage(item) {
   });
   actions.append(reply, remove);
   li.append(actions);
+  renderMessageReactions(message, li);
   logEl.append(li);
+  if (channelViewObserver && groups.some((item) => item.user_id === peerId && item.is_channel)) {
+    channelViewObserver.observe(li);
+  }
 }
 
 async function saveManualSavedMessage(text, extras = {}) {
@@ -1173,8 +1205,11 @@ async function saveManualSavedMessage(text, extras = {}) {
 }
 
 function openSavedMessagesChat() {
+  channelViewObserver?.disconnect();
+  viewedChannelMessages.clear();
   peerId = SAVED_MESSAGES_ID;
   peerName.textContent = "Saved Messages";
+  peerMeta.textContent = "";
   chatTitlebar.hidden = false;
   peerName.hidden = false;
   composer.hidden = false;
@@ -1516,6 +1551,13 @@ function openExternalReleaseUrl(url) {
   link.click();
 }
 
+function applyAvatarShape(shape = localStorage.getItem(AVATAR_SHAPE_KEY) || "circle") {
+  const value = shape === "square" ? "square" : "circle";
+  document.body.classList.toggle("avatar-shape-square", value === "square");
+  localStorage.setItem(AVATAR_SHAPE_KEY, value);
+  if (settingsAvatarShape) settingsAvatarShape.value = value;
+}
+
 function openSettings() {
   if (!me) return;
   settingsServer.value = location.host;
@@ -1616,6 +1658,7 @@ profileOpen.addEventListener("click", async () => {
 });
 menuSettings.addEventListener("click", openSettings);
 document.getElementById("settings-close").addEventListener("click", () => settingsDialog.close());
+settingsAvatarShape?.addEventListener("change", () => applyAvatarShape(settingsAvatarShape.value));
 settingsCheckUpdates?.addEventListener("click", () => {
   void checkForClientUpdate({ silent: false });
 });
@@ -2368,6 +2411,49 @@ recordAudioButton.addEventListener("click", toggleRecording);
 document.getElementById("start-audio-call").addEventListener("click", () => startCall("audio"));
 document.getElementById("start-video-call").addEventListener("click", () => startCall("video"));
 groupMembersOpen?.addEventListener("click", openGroupMembers);
+groupProfileForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const group = groups.find((item) => item.user_id === peerId && item.is_group);
+  if (!group) return;
+  groupProfileError.hidden = true;
+  try {
+    const endpoint = group.is_channel
+      ? "/api/channels/" + encodeURIComponent(group.user_id) + "/settings"
+      : "/api/groups/" + encodeURIComponent(group.user_id) + "/settings";
+    const updated = await api("PATCH", endpoint, {
+      name: groupProfileName.value.trim(),
+      description: groupProfileDescription.value.trim(),
+      ...(group.is_channel ? { post_policy: group.post_policy || "admins" } : {}),
+    });
+
+    if (groupProfileAvatar.files[0]) {
+      await uploadFile(
+        "/api/groups/" + encodeURIComponent(group.user_id) + "/avatar",
+        groupProfileAvatar.files[0],
+      );
+    }
+    if (group.is_channel && groupProfileBanner.files[0]) {
+      await uploadFile(
+        "/api/groups/" + encodeURIComponent(group.user_id) + "/banner",
+        groupProfileBanner.files[0],
+      );
+    }
+
+    await loadGroups();
+    const refreshed = groups.find((item) => item.user_id === group.user_id);
+    if (refreshed) {
+      peerName.textContent = refreshed.display_name;
+      peerMeta.textContent = refreshed.is_channel
+        ? `${refreshed.subscriber_count || refreshed.group_member_ids.length} subscriber(s)`
+        : `${refreshed.group_member_ids.length} member(s)`;
+      renderGroupMembersDialog(refreshed);
+    }
+  } catch (err) {
+    groupProfileError.textContent = err.message || "Could not update group profile.";
+    groupProfileError.hidden = false;
+  }
+});
+
 groupMembersClose?.addEventListener("click", () => groupMembersDialog.close());
 groupCallInvite?.addEventListener("click", openGroupMembers);
 groupCallStart?.addEventListener("click", () => {
@@ -2418,6 +2504,12 @@ document.getElementById("toggle-call-fullscreen").addEventListener("click", asyn
       callStage.classList.toggle("native-window-fullscreen", Boolean(fullscreen));
       return;
     }
+    const tauriInvoke = globalThis.__TAURI__?.core?.invoke;
+    if (typeof tauriInvoke === "function") {
+      const fullscreen = await tauriInvoke("toggle_fullscreen");
+      callStage.classList.toggle("native-window-fullscreen", Boolean(fullscreen));
+      return;
+    }
     if (document.fullscreenElement) await document.exitFullscreen();
     else await document.getElementById("call-videos").requestFullscreen();
   } catch (err) {
@@ -2449,6 +2541,7 @@ setTimeout(() => void checkForClientUpdate({ silent: true }), 12000);
 setInterval(() => void checkForClientUpdate({ silent: true }), 6 * 60 * 60 * 1000);
 setCallPinned(localStorage.getItem("larptrix_call_window_pinned") === "1");
 void loadCustomCallRingtone();
+applyAvatarShape();
 bootstrap();
 
 async function bootstrap() {
@@ -3260,7 +3353,13 @@ function connect() {
           is_channel: Boolean(group.is_channel),
           admin_ids: Array.isArray(group.admin_ids) ? group.admin_ids : [],
           post_policy: group.post_policy || (group.is_channel ? "admins" : "members"),
-          group_member_ids: group.member_ids,
+          group_member_ids: Array.isArray(group.member_ids) ? group.member_ids : [],
+          group_description: group.description || "",
+          group_avatar_url: group.avatar_url || null,
+          group_banner_url: group.banner_url || null,
+          avatar_url: group.avatar_url || null,
+          banner_url: group.banner_url || null,
+          subscriber_count: Number(group.subscriber_count || group.member_ids?.length || 0),
         }));
         renderUsers();
         renderGroupCallBanner();
@@ -3271,6 +3370,11 @@ function connect() {
         peerName.hidden = false;
         composer.hidden = false;
         peerName.textContent = msg.peer.display_name;
+        peerMeta.textContent = msg.peer.is_channel
+          ? `${msg.peer.subscriber_count || msg.peer.group_member_ids?.length || 0} subscriber(s)`
+          : msg.peer.is_group
+            ? `${msg.peer.group_member_ids?.length || 0} member(s)`
+            : "";
         if (!msg.peer.is_group) void refreshPeerVerification(msg.peer.user_id);
         if (msg.peer.is_group && !groups.some((group) => group.user_id === msg.peer.user_id)) {
           groups.push({ ...msg.peer });
@@ -3278,15 +3382,18 @@ function connect() {
         } else if (msg.peer.is_group) {
           groups = groups.map((group) => group.user_id === msg.peer.user_id ? { ...group, ...msg.peer } : group);
         }
-        document.getElementById("start-audio-call").hidden = false;
-        document.getElementById("start-video-call").hidden = false;
-        document.getElementById("start-audio-call").textContent = msg.peer.is_group ? "Group audio" : "Call";
-        document.getElementById("start-video-call").textContent = msg.peer.is_group ? "Group video" : "Video";
-        groupCallStart.hidden = !msg.peer.is_group;
-        groupCallStart.textContent = msg.peer.is_group
+        document.getElementById("start-audio-call").hidden = msg.peer.is_group;
+        document.getElementById("start-video-call").hidden = msg.peer.is_group;
+        groupCallStart.hidden = !msg.peer.is_group || msg.peer.is_channel;
+        groupCallStart.textContent = msg.peer.is_group && !msg.peer.is_channel
           ? (activeGroupCalls.get(msg.peer.user_id)?.active ? "Join group call" : "Group call")
           : "Group call";
+        groupMembersOpen.hidden =
+          !msg.peer.is_group
+          || (msg.peer.is_channel && !msg.peer.admin_ids?.includes(me?.user_id));
         renderGroupCallBanner();
+        channelViewObserver?.disconnect();
+        viewedChannelMessages.clear();
         logEl.replaceChildren();
         messageBodyElementsById.clear();
         renderE2eResetNotice(msg.peer.user_id);
@@ -3307,6 +3414,22 @@ function connect() {
           renderUsers();
         }
         break;
+      case "message_reaction": {
+        const message = messagesById.get(msg.message_id);
+        if (message) {
+          message.reactions = Array.isArray(msg.reactions) ? msg.reactions : [];
+          const row = logEl.querySelector(`[data-message-id="${CSS.escape(msg.message_id)}"]`);
+          if (row) renderMessageReactions(message, row);
+        }
+        break;
+      }
+      case "message_view_update": {
+        const message = messagesById.get(msg.message_id);
+        if (message) message.view_count = Number(msg.view_count || 0);
+        const row = logEl.querySelector(`[data-message-id="${CSS.escape(msg.message_id)}"]`);
+        if (row) renderMessageReactions(message, row);
+        break;
+      }
       case "message_deleted":
         deletedMessageIds.add(msg.message_id);
         messagesById.delete(msg.message_id);
@@ -3315,7 +3438,9 @@ function connect() {
         recoveredBodiesByMessageId.delete(msg.message_id);
         cryptoRecoveryResponsesByMessageId.delete(msg.message_id);
         void writeLocalCryptoRecord({ id: `decrypted-message:${msg.message_id}`, deleted: true }).catch(() => {});
-        logEl.querySelector(`[data-message-id="${CSS.escape(msg.message_id)}"]`)?.remove();
+        const deletedRow = logEl.querySelector(`[data-message-id="${CSS.escape(msg.message_id)}"]`);
+        if (deletedRow) channelViewObserver?.unobserve(deletedRow);
+        deletedRow?.remove();
         break;
       case "group_call_state":
         handleGroupCallState(msg);
@@ -3371,182 +3496,160 @@ function connect() {
 
 function renderGroupMembersDialog(group) {
   if (!groupMembersList || !group) return;
+
   const memberIds = Array.isArray(group.group_member_ids) ? group.group_member_ids : [];
-  groupMembersTitle.textContent = group.display_name;
-  groupMembersHelp.textContent = group.is_channel ? memberIds.length + " member(s) · " + (group.post_policy === "admins" ? "admins can post" : "all members can post") : memberIds.length + " member(s). Members with an active connection can be invited to the current call.";
+  const isAdmin = (group.admin_ids || []).includes(me?.user_id);
+  const canViewMembers = !group.is_channel || isAdmin;
+
+  groupMembersTitle.textContent = group.is_channel ? "Channel settings" : "Group settings";
+  groupMembersHelp.textContent = group.is_channel
+    ? `${group.subscriber_count || memberIds.length} subscriber(s) · ${group.post_policy === "admins" ? "admins can post" : "all members can post"}`
+    : `${memberIds.length} member(s)`;
+
   groupMembersList.replaceChildren();
 
-  if (group.is_channel && group.admin_ids?.includes(me?.user_id)) {
+  if (isAdmin) {
+    groupProfileForm.hidden = false;
+    groupProfileName.value = group.display_name || "";
+    groupProfileDescription.value = group.group_description || "";
+    groupProfileAvatar.value = "";
+    groupProfileBanner.value = "";
+    groupProfileBannerLabel.hidden = !group.is_channel;
+    groupProfileError.hidden = true;
+
     const settingsBox = document.createElement("div");
     settingsBox.className = "channel-admin-settings";
-    const policyLabel = document.createElement("label");
-    policyLabel.textContent = "Who can post";
-    const policy = document.createElement("select");
-    policy.innerHTML = '<option value="admins">Admins only</option><option value="members">All members</option>';
-    policy.value = group.post_policy || "admins";
-    policy.addEventListener("change", async () => {
-      try {
-        await api("PATCH", "/api/channels/" + encodeURIComponent(group.user_id) + "/settings", { post_policy: policy.value });
-        group.post_policy = policy.value;
-        groups = groups.map((item) => item.user_id === group.user_id ? { ...item, post_policy: policy.value } : item);
-      } catch (err) {
-        appendSystem(err.message || "Could not update channel posting settings.");
-        policy.value = group.post_policy || "admins";
-      }
-    });
-    settingsBox.append(policyLabel, policy);
-    const adminTitle = document.createElement("strong");
-    adminTitle.textContent = "Channel admins";
-    settingsBox.append(adminTitle);
-    for (const adminId of (group.admin_ids || [])) {
-      const row = document.createElement("div");
-      row.className = "channel-admin-row";
-      const name = document.createElement("span");
-      const user = users.find((item) => item.user_id === adminId);
-      name.textContent = user?.display_name || "Unknown admin";
-      row.append(name);
-      if (adminId !== (group.admin_ids || [])[0]) {
-        const remove = document.createElement("button");
-        remove.type = "button";
-        remove.className = "ghost";
-        remove.textContent = "Remove admin";
-        remove.addEventListener("click", async () => {
-          try {
-            await api("DELETE", "/api/channels/" + encodeURIComponent(group.user_id) + "/admins", { user_id: adminId });
-            await loadGroups();
-            const updated = groups.find((item) => item.user_id === group.user_id);
-            if (updated) renderGroupMembersDialog(updated);
-          } catch (err) {
-            appendSystem(err.message || "Could not remove channel admin.");
-          }
-        });
-        row.append(remove);
-      }
-      settingsBox.append(row);
-    }
-    const candidates = memberIds.filter((id) => !(group.admin_ids || []).includes(id));
-    if (candidates.length) {
-      const make = document.createElement("select");
-      make.innerHTML = '<option value="">Make member an admin…</option>';
-      for (const id of candidates) {
-        const option = document.createElement("option");
-        option.value = id;
-        const user = users.find((item) => item.user_id === id);
-        option.textContent = user?.display_name || id;
-        make.append(option);
-      }
-      const addAdmin = document.createElement("button");
-      addAdmin.type = "button";
-      addAdmin.className = "ghost";
-      addAdmin.textContent = "Make admin";
-      addAdmin.addEventListener("click", async () => {
-        if (!make.value) return;
-        addAdmin.disabled = true;
+
+    if (group.is_channel) {
+      const policyLabel = document.createElement("label");
+      policyLabel.textContent = "Who can post";
+      const policy = document.createElement("select");
+      policy.innerHTML = '<option value="admins">Admins only</option><option value="members">All members</option>';
+      policy.value = group.post_policy || "admins";
+      policy.addEventListener("change", async () => {
         try {
-          await api("POST", "/api/channels/" + encodeURIComponent(group.user_id) + "/admins", { user_id: make.value });
-          await loadGroups();
-          const updated = groups.find((item) => item.user_id === group.user_id);
-          if (updated) renderGroupMembersDialog(updated);
+          await api("PATCH", "/api/channels/" + encodeURIComponent(group.user_id) + "/settings", {
+            post_policy: policy.value,
+            name: group.display_name,
+            description: group.group_description || "",
+          });
+          group.post_policy = policy.value;
         } catch (err) {
-          appendSystem(err.message || "Could not add channel admin.");
-        } finally {
-          addAdmin.disabled = false;
+          appendSystem(err.message || "Could not update channel posting settings.");
+          policy.value = group.post_policy || "admins";
         }
       });
-      settingsBox.append(make, addAdmin);
+      settingsBox.append(policyLabel, policy);
     }
+
     groupMembersList.append(settingsBox);
+  } else {
+    groupProfileForm.hidden = true;
   }
 
-  const addBox = document.createElement("div");
-  addBox.className = "group-add-member";
-  const addSelect = document.createElement("select");
-  addSelect.className = "group-add-member-select";
-  addSelect.innerHTML = '<option value="">Add member…</option>';
-  users
-    .filter((item) => !item.is_group && item.user_id !== me?.user_id && !memberIds.includes(item.user_id))
-    .forEach((item) => {
-      const option = document.createElement("option");
-      option.value = item.user_id;
-      option.textContent = item.display_name + (item.username ? " · @" + item.username : "");
-      option.disabled = !item.e2e_enabled;
-      addSelect.append(option);
+  if (group.is_channel && !canViewMembers) {
+    return;
+  }
+
+  const friendIds = new Set(
+    friendRequests.friends.map((friend) => friend.user_id)
+  );
+
+  if (isAdmin) {
+    const addBox = document.createElement("div");
+    addBox.className = "group-add-member";
+    const addSelect = document.createElement("select");
+    addSelect.className = "group-add-member-select";
+    addSelect.innerHTML = '<option value="">Add friend…</option>';
+    users
+      .filter(
+        (item) =>
+          friendIds.has(item.user_id)
+          && item.user_id !== me?.user_id
+          && !item.is_group
+          && !memberIds.includes(item.user_id)
+          && item.e2e_enabled
+      )
+      .forEach((item) => {
+        const option = document.createElement("option");
+        option.value = item.user_id;
+        option.textContent = item.display_name + (item.username ? " · @" + item.username : "");
+        addSelect.append(option);
+      });
+
+    const addButton = document.createElement("button");
+    addButton.type = "button";
+    addButton.className = "ghost";
+    addButton.textContent = "Add";
+    addButton.addEventListener("click", async () => {
+      if (!addSelect.value) return;
+      addButton.disabled = true;
+      try {
+        await api("POST", "/api/groups/" + encodeURIComponent(group.user_id) + "/members", {
+          user_id: addSelect.value,
+        });
+        await loadGroups();
+        const updated = groups.find((item) => item.user_id === group.user_id);
+        if (updated) renderGroupMembersDialog(updated);
+        addSelect.value = "";
+      } catch (err) {
+        appendSystem(err.message || "Could not add group member.");
+      } finally {
+        addButton.disabled = false;
+      }
     });
-  const addButton = document.createElement("button");
-  addButton.type = "button";
-  addButton.className = "ghost";
-  addButton.textContent = "Add";
-  addButton.addEventListener("click", async () => {
-    if (!addSelect.value) return;
-    addButton.disabled = true;
-    try {
-      await api("POST", "/api/groups/" + encodeURIComponent(group.user_id) + "/members", { user_id: addSelect.value });
-      await loadGroups();
-      const updated = groups.find((item) => item.user_id === group.user_id);
-      if (updated) renderGroupMembersDialog(updated);
-      addSelect.value = "";
-    } catch (err) {
-      appendSystem(err.message || "Could not add group member.");
-    } finally {
-      addButton.disabled = false;
-    }
-  });
-  addBox.append(addSelect, addButton);
-  groupMembersList.append(addBox);
+    addBox.append(addSelect, addButton);
+    groupMembersList.append(addBox);
+  }
+
+  const membersHeading = document.createElement("strong");
+  membersHeading.textContent = group.is_channel ? "Subscribers" : "Members";
+  groupMembersList.append(membersHeading);
 
   for (const memberId of memberIds) {
     const user = users.find((item) => item.user_id === memberId);
-    const joined = groupCallId && groupCallGroupId === group.user_id && groupCallJoinedMembers.has(memberId);
     const online = Boolean(user?.online);
     const row = document.createElement("div");
     row.className = "group-member-row";
 
     const avatar = document.createElement("span");
     avatar.className = "avatar";
-    paintAvatar(avatar, user || { user_id: memberId, display_name: "?" });
+    paintAvatar(avatar, user || {
+      user_id: memberId,
+      display_name: "?",
+      avatar_url: null,
+      is_group: false,
+    });
 
     const copy = document.createElement("div");
     copy.className = "group-member-copy";
     const name = document.createElement("strong");
     name.textContent = user?.display_name || "Unknown member";
     const meta = document.createElement("span");
-    meta.textContent = user?.username ? `@${user.username} · ${online ? "Online" : "Offline"}` : (online ? "Online" : "Offline");
+    meta.textContent = user?.username
+      ? `@${user.username} · ${online ? "Online" : "Offline"}`
+      : (online ? "Online" : "Offline");
     copy.append(name, meta);
 
-    const action = document.createElement("button");
-    action.type = "button";
-    action.className = "ghost group-member-action";
-    if (memberId === me?.user_id) {
-      action.textContent = "You";
-      action.disabled = true;
-    } else if (joined) {
-      action.textContent = "In call";
-      action.disabled = true;
-    } else if (groupCallId && groupCallGroupId === group.user_id && online) {
-      action.textContent = "Invite";
-      action.addEventListener("click", () => {
-        sendGroupCallSignal(memberId, "group_invite", {
-          group_id: group.user_id,
-          call_id: groupCallId,
-          media: callMediaKind,
-        });
-        action.textContent = "Invited";
-        action.disabled = true;
-      });
-    } else {
-      action.textContent = online ? "Available" : "Offline";
-      action.disabled = true;
+    if (isAdmin && group.is_channel && group.admin_ids?.includes(memberId)) {
+      const admin = document.createElement("span");
+      admin.className = "channel-admin-label";
+      admin.textContent = "Admin";
+      copy.append(admin);
     }
 
-    row.append(avatar, copy, action);
+    row.append(avatar, copy);
     groupMembersList.append(row);
   }
 }
-
 function openGroupMembers() {
   const group = groups.find((item) => item.user_id === peerId && item.is_group)
     || groups.find((item) => item.user_id === groupCallGroupId && item.is_group);
   if (!group) return;
+  if (group.is_channel && !group.admin_ids?.includes(me?.user_id)) {
+    appendSystem("Only channel admins can view subscribers.");
+    return;
+  }
   renderGroupMembersDialog(group);
   groupMembersDialog.showModal();
 }
@@ -3656,15 +3759,22 @@ function openChat(id) {
   const selected = getChatEntries().find((user) => user.user_id === id);
   peerVerified.hidden = true;
   if (!selected?.is_group) void refreshPeerVerification(id);
-  document.getElementById("start-audio-call").hidden = false;
-  document.getElementById("start-video-call").hidden = false;
-  document.getElementById("start-audio-call").textContent = selected?.is_group ? "Group audio" : "Call";
-  document.getElementById("start-video-call").textContent = selected?.is_group ? "Group video" : "Video";
-  groupMembersOpen.hidden = !selected?.is_group;
-  groupCallStart.hidden = !selected?.is_group;
-  groupCallStart.textContent = selected?.is_group
+  const isChannel = Boolean(selected?.is_channel);
+  const isGroup = Boolean(selected?.is_group);
+  document.getElementById("start-audio-call").hidden = isGroup || isChannel;
+  document.getElementById("start-video-call").hidden = isGroup || isChannel;
+  document.getElementById("start-audio-call").textContent = "Call";
+  document.getElementById("start-video-call").textContent = "Video";
+  groupMembersOpen.hidden = !isGroup || (isChannel && !selected?.admin_ids?.includes(me?.user_id));
+  groupCallStart.hidden = !isGroup || isChannel;
+  groupCallStart.textContent = isGroup && !isChannel
     ? (activeGroupCalls.get(id)?.active ? "Join group call" : "Group call")
     : "Group call";
+  peerMeta.textContent = isChannel
+    ? `${selected?.subscriber_count || selected?.group_member_ids?.length || 0} subscriber(s)`
+    : isGroup
+      ? `${selected?.group_member_ids?.length || 0} member(s)`
+      : "";
   applyChatWallpaper(id);
   chatTitlebar.hidden = false;
   renderUsers();
@@ -3679,6 +3789,10 @@ async function startGroupCall(kind) {
   if (!peerId || !socket || socket.readyState !== WebSocket.OPEN) return;
   const group = groups.find((item) => item.user_id === peerId && item.is_group);
   if (!group) return;
+  if (group.is_channel) {
+    appendSystem("Channels do not support calls.");
+    return;
+  }
   if (typeof globalThis.RTCPeerConnection !== "function") {
     appendSystem("Group calls require WebRTC support in this desktop runtime.");
     return;
@@ -4758,7 +4872,6 @@ function renderUsers() {
 
     const button = document.createElement("button");
     button.type = "button";
-    button.classList.toggle("active", user.user_id === peerId);
     const avatar = document.createElement("span");
     avatar.className = "avatar";
     paintAvatar(avatar, user);
@@ -4860,7 +4973,13 @@ async function loadGroups() {
       is_channel: Boolean(group.is_channel),
       admin_ids: Array.isArray(group.admin_ids) ? group.admin_ids : [],
       post_policy: group.post_policy || (group.is_channel ? "admins" : "members"),
-      group_member_ids: group.member_ids,
+      group_member_ids: Array.isArray(group.member_ids) ? group.member_ids : [],
+      group_description: group.description || "",
+      group_avatar_url: group.avatar_url || null,
+      group_banner_url: group.banner_url || null,
+      avatar_url: group.avatar_url || null,
+      banner_url: group.banner_url || null,
+      subscriber_count: Number(group.subscriber_count || group.member_ids?.length || 0),
     }));
     renderUsers();
   } catch (err) {
@@ -4870,7 +4989,12 @@ async function loadGroups() {
 
 function renderGroupMemberChoices() {
   groupMemberList.replaceChildren();
-  for (const user of users.filter((item) => item.user_id !== me?.user_id && !item.is_group)) {
+  const friendIds = new Set(
+    friendRequests.friends.map((friend) => friend.user_id)
+  );
+  for (const user of users.filter(
+    (item) => friendIds.has(item.user_id) && item.user_id !== me?.user_id && !item.is_group
+  )) {
     const label = document.createElement("label");
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
@@ -4904,7 +5028,13 @@ async function createGroup(event) {
       is_channel: Boolean(created.is_channel),
       admin_ids: Array.isArray(created.admin_ids) ? created.admin_ids : [me.user_id],
       post_policy: created.post_policy || "members",
-      group_member_ids: created.member_ids,
+      group_member_ids: created.member_ids || [],
+      group_description: created.description || "",
+      group_avatar_url: created.avatar_url || null,
+      group_banner_url: created.banner_url || null,
+      avatar_url: created.avatar_url || null,
+      banner_url: created.banner_url || null,
+      subscriber_count: Number(created.subscriber_count || created.member_ids?.length || 0),
     };
     groups = [...groups.filter((group) => group.user_id !== newGroup.user_id), newGroup];
     createGroupDialog.close();
@@ -4935,7 +5065,13 @@ async function createChannel(event) {
       is_channel: true,
       admin_ids: Array.isArray(created.admin_ids) ? created.admin_ids : [me.user_id],
       post_policy: created.post_policy || "admins",
-      group_member_ids: created.member_ids,
+      group_member_ids: created.member_ids || [],
+      group_description: created.description || "",
+      group_avatar_url: created.avatar_url || null,
+      group_banner_url: created.banner_url || null,
+      avatar_url: created.avatar_url || null,
+      banner_url: created.banner_url || null,
+      subscriber_count: Number(created.subscriber_count || created.member_ids?.length || 0),
     };
     groups = [...groups.filter((group) => group.user_id !== newChannel.user_id), newChannel];
     createChannelDialog.close();
@@ -4949,7 +5085,12 @@ async function createChannel(event) {
 
 function renderChannelMemberChoices() {
   channelMemberList.replaceChildren();
-  for (const user of users.filter((item) => item.user_id !== me?.user_id && !item.is_group)) {
+  const friendIds = new Set(
+    friendRequests.friends.map((friend) => friend.user_id)
+  );
+  for (const user of users.filter(
+    (item) => friendIds.has(item.user_id) && item.user_id !== me?.user_id && !item.is_group
+  )) {
     const label = document.createElement("label");
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
@@ -4967,6 +5108,15 @@ function paintAvatar(el, user) {
     el.classList.add("saved-avatar");
     el.classList.remove("emoji-avatar");
     el.textContent = "★";
+    return;
+  }
+  if (user?.avatar_url) {
+    el.classList.remove("saved-avatar", "emoji-avatar");
+    const img = document.createElement("img");
+    const cacheKey = user.avatar_id || user.avatar_version || user.updated_at || Date.now();
+    img.src = user.avatar_url + (user.avatar_url.includes("?") ? "&" : "?") + "v=" + encodeURIComponent(cacheKey);
+    img.alt = "";
+    el.append(img);
     return;
   }
   if (user?.is_channel) {
@@ -4987,6 +5137,65 @@ function paintAvatar(el, user) {
     const seed = [...(user.user_id || user.display_name || "")].reduce((v, ch) => v + ch.charCodeAt(0), 0);
     el.classList.add("emoji-avatar");
     el.textContent = faces[seed % faces.length];
+  }
+}
+
+const commonReactionEmojis = ["👍", "❤️", "😂", "😮", "😢", "🔥"];
+
+function renderMessageReactions(message, li) {
+  if (!li) return;
+  let bar = li.querySelector(".message-reactions");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.className = "message-reactions";
+    li.append(bar);
+  }
+  bar.replaceChildren();
+
+  for (const reaction of (message.reactions || [])) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "reaction-chip";
+    button.classList.toggle("reacted", Boolean(reaction.reacted));
+    button.textContent = `${reaction.emoji} ${reaction.count}`;
+    button.title = reaction.reacted ? "Remove reaction" : "React with " + reaction.emoji;
+    button.addEventListener("click", () => {
+      if (!socket || socket.readyState !== WebSocket.OPEN || !peerId) return;
+      socket.send(JSON.stringify({
+        type: "react",
+        peer_id: peerId,
+        message_id: message.id,
+        emoji: reaction.emoji,
+        add: !reaction.reacted,
+      }));
+    });
+    bar.append(button);
+  }
+
+  const addButton = document.createElement("button");
+  addButton.type = "button";
+  addButton.className = "reaction-add ghost";
+  addButton.textContent = "＋";
+  addButton.title = "Add reaction";
+  addButton.addEventListener("click", () => {
+    const next = prompt("Reaction emoji:", "👍")?.trim();
+    if (!next || next.length > 8 || !socket || socket.readyState !== WebSocket.OPEN || !peerId) return;
+    socket.send(JSON.stringify({
+      type: "react",
+      peer_id: peerId,
+      message_id: message.id,
+      emoji: next,
+      add: true,
+    }));
+  });
+  bar.append(addButton);
+
+  if (message.is_channel || groups.some((item) => item.user_id === peerId && item.is_channel)) {
+    const viewCount = document.createElement("span");
+    viewCount.className = "message-view-count";
+    viewCount.textContent = `◉ ${message.view_count || 0}`;
+    viewCount.title = "Unique subscribers who viewed this message";
+    bar.append(viewCount);
   }
 }
 
@@ -6570,16 +6779,45 @@ async function saveChatWallpaper(file, id) {
 
 async function showPeerProfile(id) {
   try {
-    const profile = await api("GET", `/api/users/${encodeURIComponent(id)}/profile`);
+    const group = groups.find((item) => item.user_id === id && item.is_group);
     const avatar = document.getElementById("peer-profile-avatar");
+    const nameEl = document.getElementById("peer-profile-name");
+    const usernameEl = document.getElementById("peer-profile-username");
+    const aboutEl = document.getElementById("peer-profile-about");
+    const activityEl = document.getElementById("peer-profile-activity");
+
+    if (group) {
+      avatar.hidden = !group.avatar_url;
+      if (group.avatar_url) {
+        avatar.src = group.avatar_url + "?v=" + Date.now();
+      } else {
+        avatar.removeAttribute("src");
+      }
+      avatar.alt = `${group.display_name} avatar`;
+      peerProfileBanner.style.backgroundImage = group.banner_url
+        ? 'url("' + group.banner_url + '?v=' + Date.now() + '")'
+        : "";
+      nameEl.textContent = group.display_name;
+      usernameEl.textContent = group.is_channel
+        ? `${group.subscriber_count || group.group_member_ids.length} subscribers`
+        : `${group.group_member_ids.length} members`;
+      aboutEl.textContent = group.group_description || "No description";
+      activityEl.textContent = group.is_channel ? "Channel" : "Group";
+      peerProfileDialog.showModal();
+      return;
+    }
+
+    const profile = await api("GET", `/api/users/${encodeURIComponent(id)}/profile`);
     avatar.hidden = !profile.avatar_url;
     if (profile.avatar_url) avatar.src = profile.avatar_url;
     avatar.alt = `${profile.display_name} profile photo`;
-    peerProfileBanner.style.backgroundImage = profile.banner_url ? 'url("' + profile.banner_url + '?v=' + Date.now() + '")' : "";
-    document.getElementById("peer-profile-name").textContent = profile.display_name;
-    document.getElementById("peer-profile-username").textContent = profile.username ? `@${profile.username}` : "";
-    document.getElementById("peer-profile-about").textContent = profile.about || "No profile description";
-    document.getElementById("peer-profile-activity").textContent = profile.activity || "No activity";
+    peerProfileBanner.style.backgroundImage = profile.banner_url
+      ? 'url("' + profile.banner_url + '?v=' + Date.now() + '")'
+      : "";
+    nameEl.textContent = profile.display_name;
+    usernameEl.textContent = profile.username ? `@${profile.username}` : "";
+    aboutEl.textContent = profile.about || "No profile description";
+    activityEl.textContent = profile.activity || "No activity";
     peerProfileDialog.showModal();
   } catch (err) {
     appendSystem(err.message || "Could not load profile.");

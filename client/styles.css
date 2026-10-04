@@ -4698,3 +4698,121 @@ html[data-theme="custom"] .music-library {
   background: var(--me);
   box-shadow: inset 2px 0 0 var(--accent);
 }
+
+
+/* Keep only the opened conversation highlighted; hover remains subtle. */
+.people li > button,
+.people li > button.active {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.people li:not(.chat-active) > button:hover {
+  background: var(--panel-3) !important;
+  box-shadow: none !important;
+}
+.people li.chat-active > button,
+.people li.chat-active > button:hover {
+  background: var(--me) !important;
+  box-shadow: inset 2px 0 0 var(--accent) !important;
+}
+
+/* Reactions */
+.message-reactions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 5px 0 0;
+}
+.reaction-chip,
+.reaction-add {
+  min-width: 0;
+  min-height: 26px;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: .72rem;
+  line-height: 1;
+}
+.reaction-chip:hover,
+.reaction-add:hover {
+  background: var(--panel-3);
+}
+.reaction-chip.reacted {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel-2));
+}
+.reaction-add {
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  cursor: pointer;
+}
+.message-view-count {
+  margin-left: 3px;
+  color: var(--muted);
+  font-size: .68rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Group/channel profile controls */
+.peer-heading-copy {
+  min-width: 0;
+  flex: 1;
+}
+.peer-meta {
+  margin: -1px 0 0;
+  color: var(--muted);
+  font-size: .68rem;
+}
+.group-profile-form {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+}
+.group-profile-form label {
+  color: var(--muted);
+  font-size: .72rem;
+}
+.group-profile-form input,
+.group-profile-form textarea {
+  width: 100%;
+}
+.group-profile-media {
+  display: grid;
+  gap: 7px;
+}
+.group-profile-media input[type="file"] {
+  margin-top: 4px;
+  font-size: .7rem;
+}
+.channel-admin-label {
+  color: var(--accent-strong) !important;
+  font-size: .68rem !important;
+}
+
+/* Avatar shape preference */
+body.avatar-shape-square .avatar,
+body.avatar-shape-square .avatar img {
+  border-radius: 7px;
+}
+body.avatar-shape-square .profile-identity img {
+  border-radius: 10px;
+}
+body.avatar-shape-square .menu-avatar,
+body.avatar-shape-square .menu-avatar img {
+  border-radius: 7px;
+}
+
+
+/* Keep long histories cheap to lay out. */
+.log > li:not(.e2e-reset-notice) {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 54px;
+}
