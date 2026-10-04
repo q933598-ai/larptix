@@ -2018,7 +2018,13 @@ impl Database {
         let attachment_ids = attachment_id
             .map(|id| vec![id.to_string()])
             .unwrap_or_default();
-        self.insert_group_dm_with_attachments(sender_id, group_id, body, &attachment_ids, created_at)
+        self.insert_group_dm_with_attachments(
+            sender_id,
+            group_id,
+            body,
+            &attachment_ids,
+            created_at,
+        )
     }
 
     pub fn insert_group_dm_with_attachments(
@@ -2176,7 +2182,7 @@ impl Database {
                         _ => None,
                     },
                     attachments: Vec::new(),
-                created_at: row.get(6)?,
+                    created_at: row.get(6)?,
                 })
             },
         )?;
