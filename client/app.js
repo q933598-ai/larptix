@@ -113,6 +113,8 @@ const localVideo = document.getElementById("local-video");
 const localScreenVideo = document.getElementById("local-screen-video");
 const directCallParticipants = document.getElementById("direct-call-participants");
 const directCallJoin = document.getElementById("direct-call-join");
+const directCallTopbarAvatar = document.getElementById("direct-call-topbar-avatar");
+const directCallTopbarLabel = document.getElementById("direct-call-topbar-label");
 const remoteVideo = document.getElementById("remote-video");
 const remoteAudio = document.getElementById("remote-audio");
 const callAudioPlaceholder = document.getElementById("call-audio-placeholder");
@@ -505,6 +507,11 @@ let callPeerId = null;
 let callMediaKind = null;
 let directCallSessionId = null;
 let directCallOutgoing = false;
+let directCallStartedAt = 0;
+let directCallAnsweredAt = 0;
+let directCallAnswered = false;
+let directCallOfferSent = false;
+const loggedDirectCallSessions = new Set();
 let callMediaNotice = "";
 let pendingIceCandidates = [];
 let outgoingCallTimeout = null;
@@ -4283,6 +4290,85 @@ function isDirectCallActive(id) {
   );
 }
 
+function formatCallDuration(totalSeconds) {
+  const seconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return minutes + ":" + String(rest).padStart(2, "0");
+}
+
+function getDirectCallUser(id) {
+  if (!id) return null;
+  return id === me?.user_id
+    ? me
+    : users.find((item) => item.user_id === id)
+      || { user_id: id, display_name: "Larptrix user" };
+}
+
+function renderDirectCallTopbar(id = peerId) {
+  if (!directCallJoin) return;
+  const callButton = document.getElementById("start-audio-call");
+  const videoButton = document.getElementById("start-video-call");
+  const selected = getChatEntries().find((item) => item.user_id === id);
+  const remoteId = callPeerId
+    || pendingIncomingCall?.sender_id
+    || lastDirectCallJoinPeerId
+    || (id && id !== me?.user_id ? id : null);
+  const active = Boolean(remoteId && isDirectCallActive(remoteId));
+  const incoming = Boolean(remoteId && pendingIncomingCall?.sender_id === remoteId && !peerConnection);
+  const joinable = Boolean(remoteId && lastDirectCallJoinPeerId === remoteId && !peerConnection && !directCallOutgoing);
+  const isDirect = Boolean(remoteId && !selected?.is_group && !groupCallId);
+
+  if (!isDirect) {
+    directCallJoin.hidden = true;
+    if (callButton) callButton.hidden = Boolean(selected?.is_group);
+    if (videoButton) videoButton.hidden = Boolean(selected?.is_group);
+    return;
+  }
+
+  if (active && directCallOutgoing) {
+    paintAvatar(directCallTopbarAvatar, getDirectCallUser(remoteId));
+    directCallTopbarLabel.textContent = "Calling…";
+    directCallJoin.disabled = true;
+    directCallJoin.hidden = false;
+  } else if (incoming || joinable) {
+    paintAvatar(directCallTopbarAvatar, getDirectCallUser(remoteId));
+    directCallTopbarLabel.textContent =
+      (callMediaKind || lastDirectCallJoinKind) === "video" ? "Join video" : "Join call";
+    directCallJoin.disabled = false;
+    directCallJoin.hidden = false;
+  } else if (active) {
+    paintAvatar(directCallTopbarAvatar, getDirectCallUser(remoteId));
+    directCallTopbarLabel.textContent = "Connected";
+    directCallJoin.disabled = true;
+    directCallJoin.hidden = false;
+  } else {
+    directCallJoin.hidden = true;
+  }
+
+  if (callButton) callButton.hidden = true;
+  if (videoButton) videoButton.hidden = true;
+}
+
+async function sendDirectCallLog(peerTargetId, kind, answered, startedAt, answeredAt = 0, endedAt = Date.now(), sessionId = null) {
+  if (!peerTargetId || !startedAt || !directCallOfferSent) return;
+  if (sessionId && loggedDirectCallSessions.has(sessionId)) return;
+  if (sessionId) loggedDirectCallSessions.add(sessionId);
+  const durationStart = answered && answeredAt ? answeredAt : startedAt;
+  const duration = Math.max(0, Math.round((endedAt - durationStart) / 1000));
+  try {
+    await sendEncryptedPayloadToPeer(peerTargetId, {
+      call_log: {
+        kind: kind === "video" ? "video" : "audio",
+        status: answered ? "completed" : "missed",
+        duration_seconds: duration,
+      },
+    });
+  } catch (err) {
+    console.warn("[Call] Could not save call history:", err?.message || err);
+  }
+}
+
 function updateDirectCallButtons(id = peerId) {
   const callButton = document.getElementById("start-audio-call");
   const videoButton = document.getElementById("start-video-call");
@@ -4291,6 +4377,9 @@ function updateDirectCallButtons(id = peerId) {
   if (selected?.is_group) {
     callButton.textContent = "Call";
     videoButton.textContent = "Video";
+    callButton.hidden = true;
+    videoButton.hidden = true;
+    renderDirectCallTopbar(id);
     return;
   }
   const joining = isDirectCallActive(id);
@@ -4300,6 +4389,7 @@ function updateDirectCallButtons(id = peerId) {
   );
   callButton.textContent = joining || joinable ? "Join" : "Call";
   videoButton.textContent = joining || joinable ? "Join video" : "Video";
+  renderDirectCallTopbar(id);
 }
 function openOrJoinDirectCall(kind) {
   if (!peerId) return;
@@ -8213,13 +8303,16 @@ videoRecordingShape?.addEventListener("click", () => {
   applyVideoMessageShape(selectedVideoMessageShape() === "circle" ? "square" : "circle");
 });
 directCallJoin?.addEventListener("click", () => {
-  const target = lastDirectCallJoinPeerId;
-  const kind = lastDirectCallJoinKind || "audio";
+  const target = callPeerId || pendingIncomingCall?.sender_id || lastDirectCallJoinPeerId;
   if (!target) return;
   peerId = target;
-  directCallJoin.hidden = true;
   clearTimeout(directCallNoticeTimeout);
   directCallNoticeTimeout = null;
+  if (pendingIncomingCall?.sender_id === target && !peerConnection) {
+    void acceptIncomingCall();
+    return;
+  }
+  const kind = callMediaKind || lastDirectCallJoinKind || "audio";
   void startCall(kind);
 });
 
