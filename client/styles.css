@@ -4461,3 +4461,12 @@ html[data-theme="custom"] .music-library {
     display: none;
   }
 }
+
+
+/* The volume slider must remain visible in the one-line Music Library player. */
+#music-library > #music-player .music-player-side .music-volume {
+  display: block;
+  flex: 0 1 64px;
+  width: 64px;
+  min-width: 46px;
+}
