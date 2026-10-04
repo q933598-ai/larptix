@@ -1599,6 +1599,13 @@ async fn create_group(
         {
             return Err(ApiError::bad("a selected group member does not exist"));
         }
+        if !state
+            .db
+            .are_friends(&user.id, member_id)
+            .map_err(ApiError::db)?
+        {
+            return Err(ApiError::bad("only friends can be added to groups"));
+        }
         if state
             .db
             .matrix_devices_for_user(member_id)
@@ -1630,14 +1637,7 @@ async fn create_group(
             .groups_for_user(member_id)
             .map_err(ApiError::db)?
             .into_iter()
-            .map(|item| GroupInfo {
-                group_id: item.id,
-                name: item.name,
-                member_ids: item.member_ids,
-                is_channel: item.is_channel,
-                admin_ids: item.admin_ids,
-                post_policy: item.post_policy,
-            })
+            .map(group_info)
             .collect();
         if let Ok(recipient) = member_id.parse() {
             state
@@ -1701,6 +1701,13 @@ async fn create_channel(
         {
             return Err(ApiError::bad("a selected channel member does not exist"));
         }
+        if !state
+            .db
+            .are_friends(&user.id, member_id)
+            .map_err(ApiError::db)?
+        {
+            return Err(ApiError::bad("only friends can be added to channels"));
+        }
         if state
             .db
             .matrix_devices_for_user(member_id)
@@ -1722,14 +1729,7 @@ async fn create_channel(
             .groups_for_user(member_id)
             .map_err(ApiError::db)?
             .into_iter()
-            .map(|item| GroupInfo {
-                group_id: item.id,
-                name: item.name,
-                member_ids: item.member_ids,
-                is_channel: item.is_channel,
-                admin_ids: item.admin_ids,
-                post_policy: item.post_policy,
-            })
+            .map(group_info)
             .collect();
         if let Ok(recipient) = member_id.parse() {
             state
@@ -1874,6 +1874,13 @@ async fn add_group_member(
     {
         return Err(ApiError::bad("user not found"));
     }
+    if !state
+        .db
+        .are_friends(&user.id, &body.user_id)
+        .map_err(ApiError::db)?
+    {
+        return Err(ApiError::bad("only friends can be added to groups or channels"));
+    }
     if state
         .db
         .matrix_devices_for_user(&body.user_id)
@@ -1926,7 +1933,29 @@ async fn add_group_member(
     ))
 }
 
+fn group_info(group: crate::db::GroupRow) -> GroupInfo {
+    let subscriber_count = group.member_ids.len();
+    GroupInfo {
+        group_id: group.id.clone(),
+        name: group.name,
+        member_ids: group.member_ids,
+        is_channel: group.is_channel,
+        admin_ids: group.admin_ids,
+        post_policy: group.post_policy,
+        description: group.description,
+        avatar_url: group.avatar_id.map(|_| format!("/api/groups/{}/avatar", group.id)),
+        banner_url: group.banner_id.map(|_| format!("/api/groups/{}/banner", group.id)),
+        subscriber_count,
+    }
+}
+
 fn group_json(group: crate::db::GroupRow) -> serde_json::Value {
+    let avatar_url = group.avatar_id
+        .as_ref()
+        .map(|_| format!("/api/groups/{}/avatar", group.id));
+    let banner_url = group.banner_id
+        .as_ref()
+        .map(|_| format!("/api/groups/{}/banner", group.id));
     serde_json::json!({
         "group_id": group.id,
         "name": group.name,
@@ -1934,6 +1963,10 @@ fn group_json(group: crate::db::GroupRow) -> serde_json::Value {
         "is_channel": group.is_channel,
         "admin_ids": group.admin_ids,
         "post_policy": group.post_policy,
+        "description": group.description,
+        "avatar_url": avatar_url,
+        "banner_url": banner_url,
+        "subscriber_count": group.member_ids.len(),
     })
 }
 
