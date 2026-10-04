@@ -855,7 +855,6 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
                     .as_ref()
                     .map(|_| format!("/api/groups/{}/banner", group.id)),
                 subscriber_count: group.member_ids.len(),
-        tags: Vec::new(),
             },
             history,
         });
@@ -887,7 +886,7 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
         .map_err(db_err)?;
     let online = state.hub.online_ids();
     let _ = tx.send(ServerMessage::Chat {
-        peer: user_info(&peer, online.iter().any(|id| id == &peer.id)),
+        peer: user_info(state, &peer, online.iter().any(|id| id == &peer.id)),
         history,
     });
     Ok(())
@@ -1600,7 +1599,7 @@ fn group_info(group: crate::db::GroupRow) -> GroupInfo {
 }
 
 fn me_info(state: &AppState, user: &UserRow) -> UserInfo {
-    let mut info = user_info(user, true);
+    let mut info = user_info(state, user, true);
     if let Ok(Some((_, username, _, _))) = state.db.profile_fields(&user.id) {
         info.username = username;
     }
@@ -1611,7 +1610,7 @@ fn me_info(state: &AppState, user: &UserRow) -> UserInfo {
     info
 }
 
-fn user_info(user: &UserRow, online: bool) -> UserInfo {
+fn user_info(state: &AppState, user: &UserRow, online: bool) -> UserInfo {
     UserInfo {
         user_id: user.id.clone(),
         display_name: user.display_name.clone(),
