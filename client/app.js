@@ -4321,6 +4321,7 @@ function renderDirectCallTopbar(id = peerId) {
     || (id && id !== me?.user_id ? id : null);
   const active = Boolean(
     remoteId
+      && !callStage?.hidden
       && isDirectCallActive(remoteId)
       && id === remoteId
   );
@@ -4369,6 +4370,8 @@ function renderDirectCallTopbar(id = peerId) {
     directCallJoin.hidden = false;
   } else {
     directCallJoin.hidden = true;
+    directCallJoin.disabled = false;
+    if (directCallTopbarLabel) directCallTopbarLabel.textContent = "Join call";
   }
 
   const headerCallState = active || incoming || joinable;
