@@ -10,7 +10,8 @@ use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use larptrix_protocol::{
     attachment_url, avatar_url, sanitize_display_name, sanitize_email, sanitize_password,
-    AttachmentInfo, GroupInfo, ServerMessage, UserInfo, MAX_ATTACHMENT_BYTES, MAX_IMAGE_BYTES,
+    AttachmentInfo, GroupInfo, ServerMessage, UserActivity, UserInfo, MAX_ATTACHMENT_BYTES,
+    MAX_IMAGE_BYTES,
 };
 use serde::Deserialize;
 
@@ -34,6 +35,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/me", get(me))
         .route("/api/me", patch(update_profile))
         .route("/api/me/activity", post(update_activity))
+        .route("/api/me/activities", post(update_activities))
+        .route("/api/integrations/spotify/config", get(spotify_config))
         .route("/api/me/settings", patch(update_message_policy))
         .route("/api/friends", get(list_friends))
         .route(
@@ -199,6 +202,12 @@ pub struct UpdateProfileBody {
 #[derive(Deserialize)]
 pub struct UpdateActivityBody {
     pub activity: String,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateActivitiesBody {
+    #[serde(default)]
+    pub activities: Vec<UserActivity>,
 }
 
 #[derive(Deserialize)]
@@ -1454,11 +1463,86 @@ async fn update_profile(
     let online = state.hub.online_ids();
     let users = state.db.list_users(&online).map_err(ApiError::db)?;
     state.hub.broadcast(ServerMessage::Directory { users });
+    let activities = state
+        .db
+        .profile_activities(&user.id)
+        .map_err(ApiError::db)?;
     let mut info = public_me(&user);
     info.display_name = display_name;
     info.username = username;
     info.tags = tags;
+    info.activity = activities.first().map(|item| item.name.clone());
+    info.activities = activities;
     Ok(Json(info))
+}
+
+async fn update_activities(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<UpdateActivitiesBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let mut activities = Vec::new();
+
+    for raw in body.activities {
+        let kind = raw.kind.trim().to_ascii_lowercase();
+        if !matches!(kind.as_str(), "custom" | "spotify" | "music") {
+            return Err(ApiError::bad("unsupported activity type"));
+        }
+        let name = raw.name.trim();
+        if name.is_empty() || name.chars().count() > 120 {
+            return Err(ApiError::bad("activity name must be between 1 and 120 characters"));
+        }
+        if raw.details.chars().count() > 160 {
+            return Err(ApiError::bad("activity details must be 160 characters or fewer"));
+        }
+        for url in [raw.url.as_ref(), raw.image_url.as_ref()].into_iter().flatten() {
+            if !url.starts_with("https://") || url.chars().count() > 1000 {
+                return Err(ApiError::bad(
+                    "activity links must use HTTPS and be 1000 characters or fewer",
+                ));
+            }
+        }
+
+        let candidate = UserActivity {
+            kind,
+            name: name.to_string(),
+            details: raw.details.trim().to_string(),
+            url: raw
+                .url
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+            image_url: raw
+                .image_url
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+        };
+
+        if !activities.iter().any(|item: &UserActivity| {
+            item.kind == candidate.kind && item.name == candidate.name
+        }) {
+            activities.push(candidate);
+        }
+
+        if activities.len() >= 5 {
+            break;
+        }
+    }
+
+    state
+        .db
+        .set_activities(&user.id, &activities)
+        .map_err(ApiError::db)?;
+    let users = state
+        .db
+        .list_users(&state.hub.online_ids())
+        .map_err(ApiError::db)?;
+    state.hub.broadcast(ServerMessage::Directory { users });
+
+    Ok(Json(serde_json::json!({
+        "activity": activities.first().map(|item| item.name.clone()).unwrap_or_default(),
+        "activities": activities,
+    })))
 }
 
 async fn update_activity(
@@ -1534,17 +1618,22 @@ async fn get_user_profile(
         .online_ids()
         .iter()
         .any(|online_id| online_id == &id);
-    let activity = if online {
-        state.db.activity(&id).map_err(ApiError::db)?
+    let activities = if online {
+        state.db.profile_activities(&id).map_err(ApiError::db)?
     } else {
-        String::new()
+        Vec::new()
     };
+    let activity = activities
+        .first()
+        .map(|item| item.name.clone())
+        .unwrap_or_default();
     Ok(Json(serde_json::json!({
         "user_id": id,
         "display_name": display_name,
         "username": username,
         "about": about,
         "activity": activity,
+        "activities": activities,
         "tags": profile_tags,
         "server": server,
         "avatar_url": avatar_id.map(|_| avatar_url(&id)),
@@ -2529,7 +2618,21 @@ fn public_me(user: &UserRow) -> UserInfo {
         group_banner_url: None,
         subscriber_count: 0,
         tags: Vec::new(),
+        activities: Vec::new(),
     }
+}
+
+async fn spotify_config(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_user(&state, &headers)?;
+    let client_id = std::env::var("SPOTIFY_CLIENT_ID").unwrap_or_default();
+    let client_id = client_id.trim();
+    Ok(Json(serde_json::json!({
+        "enabled": !client_id.is_empty(),
+        "client_id": client_id,
+    })))
 }
 
 #[derive(Debug)]
