@@ -192,6 +192,8 @@ pub struct UpdateProfileBody {
     pub username: String,
     #[serde(default)]
     pub about: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -1422,9 +1424,27 @@ async fn update_profile(
     if about.chars().count() > 160 {
         return Err(ApiError::bad("about must be 160 characters or fewer"));
     }
+
+    let mut tags = Vec::new();
+    for raw in body.tags {
+        let tag = raw.trim();
+        if tag.is_empty() { continue; }
+        if tag.chars().count() > 24 {
+            return Err(ApiError::bad("profile tags must be 24 characters or fewer"));
+        }
+        if !tags.iter().any(|existing: &String| existing.eq_ignore_ascii_case(tag)) {
+            tags.push(tag.to_string());
+        }
+        if tags.len() >= 8 {
+            break;
+        }
+    }
+    let tags_json = serde_json::to_string(&tags)
+        .map_err(|_| ApiError::internal("could not encode profile tags"))?;
+
     state
         .db
-        .update_profile(&user.id, &display_name, &username, about)
+        .update_profile(&user.id, &display_name, &username, about, &tags_json)
         .map_err(ApiError::from_db)?;
     let online = state.hub.online_ids();
     let users = state.db.list_users(&online).map_err(ApiError::db)?;
@@ -1491,6 +1511,8 @@ async fn get_user_profile(
         .profile_fields(&id)
         .map_err(ApiError::db)?
         .ok_or_else(|| ApiError::not_found("user not found"))?;
+    let profile_tags = state.db.profile_tags(&id).map_err(ApiError::db)?;
+    let server = matrix_server_name(&headers)?;
     let music = state
         .db
         .music_track(&id)
@@ -1517,6 +1539,8 @@ async fn get_user_profile(
         "username": username,
         "about": about,
         "activity": activity,
+        "tags": profile_tags,
+        "server": server,
         "avatar_url": avatar_id.map(|_| avatar_url(&id)),
         "banner_url": state.db.profile_banner(&id).map_err(ApiError::db)?.map(|_| format!("/api/users/{}/banner", id)),
         "music": music,
