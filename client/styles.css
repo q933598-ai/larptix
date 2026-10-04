@@ -5155,16 +5155,33 @@ body.avatar-shape-square .menu-avatar img {
 
 /* Voice activity */
 .avatar.speaking {
-  box-shadow: 0 0 0 3px var(--accent), 0 0 0 6px color-mix(in srgb, var(--accent) 22%, transparent);
+  position: relative;
+  z-index: 1;
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 0 5px color-mix(in srgb, var(--accent) 30%, transparent),
+    0 0 0 9px color-mix(in srgb, var(--accent) 13%, transparent);
   transform: scale(1.035);
   transition: box-shadow .12s ease, transform .12s ease;
 }
 .call-placeholder-user .avatar.speaking {
-  animation: speaking-pulse .85s ease-in-out infinite alternate;
+  animation: speaking-pulse .7s ease-in-out infinite alternate;
 }
 @keyframes speaking-pulse {
-  from { box-shadow: 0 0 0 2px var(--accent), 0 0 0 5px color-mix(in srgb, var(--accent) 14%, transparent); }
-  to { box-shadow: 0 0 0 4px var(--accent), 0 0 0 9px color-mix(in srgb, var(--accent) 24%, transparent); }
+  from {
+    box-shadow:
+      0 0 0 2px var(--accent),
+      0 0 0 5px color-mix(in srgb, var(--accent) 25%, transparent),
+      0 0 0 8px color-mix(in srgb, var(--accent) 10%, transparent);
+    transform: scale(1.02);
+  }
+  to {
+    box-shadow:
+      0 0 0 3px var(--accent),
+      0 0 0 7px color-mix(in srgb, var(--accent) 42%, transparent),
+      0 0 0 12px color-mix(in srgb, var(--accent) 16%, transparent);
+    transform: scale(1.055);
+  }
 }
 
 /* Call participant avatars */
@@ -6015,5 +6032,274 @@ html[data-theme="catppuccin-mocha"] .call-stage .call-dock-heading > .ghost {
   .message-media-stack .video-message-square {
     width: min(260px, 74vw);
     height: min(260px, 74vw);
+  }
+}
+
+
+/* Mobile-first call and composer polish. */
+@media (max-width: 760px) {
+  .chat-titlebar {
+    padding: 8px 10px;
+    gap: 8px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .chat-titlebar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .chat-titlebar > .peer-heading-copy {
+    flex: 1 1 auto;
+    min-width: 120px;
+  }
+
+  .chat-titlebar > .call-actions {
+    flex: 0 0 auto;
+    width: auto;
+    max-width: none;
+    overflow: visible;
+    justify-content: flex-end;
+  }
+
+  .chat-titlebar > .call-actions > * {
+    min-height: 38px;
+  }
+
+  .chat-titlebar > .call-actions .photo-btn,
+  .chat-titlebar > .call-actions #chat-background-clear,
+  .chat-titlebar > .call-actions #peer-profile-open {
+    padding: 7px 9px;
+  }
+
+  .direct-call-topbar {
+    min-width: 0;
+    height: 38px;
+    padding: 3px 10px 3px 4px;
+    gap: 6px;
+  }
+
+  .direct-call-topbar .avatar {
+    width: 30px;
+    height: 30px;
+    flex-basis: 30px;
+  }
+
+  .call-stage {
+    left: 8px;
+    right: 8px;
+    bottom: calc(64px + env(safe-area-inset-bottom));
+    width: auto;
+    max-width: none;
+    max-height: min(72dvh, 680px);
+    padding: 8px;
+    gap: 8px;
+    border-radius: 12px;
+  }
+
+  .call-stage .call-dock-heading {
+    min-height: 38px;
+  }
+
+  .call-stage .call-videos {
+    width: 100%;
+    min-height: 220px;
+    max-height: 52dvh;
+    aspect-ratio: 16 / 10;
+    border-radius: 10px;
+  }
+
+  .call-stage .call-controls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .call-stage .call-controls > button,
+  .call-stage .call-controls > label {
+    min-height: 40px;
+  }
+
+  .call-stage .call-controls #end-call {
+    grid-column: 1 / -1;
+  }
+
+  .call-heading-actions {
+    gap: 5px;
+  }
+
+  .call-stage.call-ending-notice {
+    width: auto;
+  }
+
+  #composer {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+    gap: 7px;
+    padding: 7px 8px calc(7px + env(safe-area-inset-bottom));
+  }
+
+  .composer-tools {
+    grid-column: 1;
+    grid-row: 1;
+    width: 100%;
+    max-height: none;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    scrollbar-width: none;
+  }
+
+  .composer-tools::-webkit-scrollbar {
+    display: none;
+  }
+
+  #body {
+    grid-column: 1;
+    grid-row: 2;
+    width: 100%;
+    min-height: 44px;
+  }
+
+  .composer-send-cluster {
+    grid-column: 1;
+    grid-row: 3;
+    width: 100%;
+    min-width: 0;
+    justify-content: flex-end;
+    gap: 7px;
+  }
+
+  .composer-send-cluster .voice-record-button,
+  .composer-send-cluster .send-button {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+  }
+
+  .voice-record-button {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .voice-record-button.is-recording {
+    transform: scale(1.05);
+    box-shadow:
+      0 0 0 2px var(--danger),
+      0 0 0 6px color-mix(in srgb, var(--danger) 22%, transparent);
+  }
+
+  .video-recording {
+    grid-column: 1;
+    grid-row: 4;
+    width: 100%;
+    margin-top: 0;
+    padding: 8px;
+    gap: 9px;
+    border-radius: 14px;
+  }
+
+  .video-recording-preview-wrap {
+    flex: 0 0 96px;
+    width: 96px;
+    height: 96px;
+  }
+
+  .video-recording-tools {
+    align-self: stretch;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: 1fr auto;
+    gap: 6px;
+  }
+
+  .video-recording-tools > span {
+    grid-column: 1 / -1;
+    flex: none;
+    min-width: 0;
+    align-self: center;
+  }
+
+  .video-recording-shape {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .video-recording-cancel {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .video-message-preview.video-message-circle,
+  .message-media-stack .video-message-circle {
+    width: min(240px, 68vw);
+    height: min(240px, 68vw);
+    min-width: 0;
+    min-height: 0;
+    border-radius: 50%;
+  }
+
+  .message-media-stack .video-message-square {
+    width: min(260px, 74vw);
+    height: min(260px, 74vw);
+    min-width: 0;
+    min-height: 0;
+  }
+}
+
+@media (max-width: 420px) {
+  .chat-titlebar > .call-actions .photo-btn,
+  .chat-titlebar > .call-actions #chat-background-clear {
+    max-width: 44px;
+    width: 44px;
+    overflow: hidden;
+    font-size: 0;
+    padding: 0;
+  }
+
+  .chat-titlebar > .call-actions #chat-background-clear::before {
+    content: "✦";
+    font-size: 1rem;
+  }
+
+  .chat-titlebar > .call-actions .photo-btn::before {
+    content: "▧";
+    font-size: 1rem;
+  }
+
+  .direct-call-topbar {
+    padding-right: 8px;
+  }
+
+  .direct-call-topbar #direct-call-topbar-label {
+    font-size: .76rem;
+  }
+
+  .call-stage {
+    left: 6px;
+    right: 6px;
+    bottom: calc(62px + env(safe-area-inset-bottom));
+  }
+
+  .call-stage .call-videos {
+    min-height: 190px;
+    max-height: 46dvh;
+  }
+
+  .composer-send-cluster {
+    justify-content: space-between;
+  }
+
+  .composer-send-cluster .voice-record-button,
+  .composer-send-cluster .send-button {
+    width: 42px;
+    min-width: 42px;
+    height: 42px;
+  }
+
+  .video-recording-preview-wrap {
+    flex-basis: 88px;
+    width: 88px;
+    height: 88px;
   }
 }
