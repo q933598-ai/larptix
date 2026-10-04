@@ -2527,6 +2527,7 @@ fn public_me(user: &UserRow) -> UserInfo {
         group_avatar_url: None,
         group_banner_url: None,
         subscriber_count: 0,
+        tags: Vec::new(),
     }
 }
 
