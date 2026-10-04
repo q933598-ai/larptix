@@ -6524,22 +6524,76 @@ async function blobSha256(blob) {
     .join("");
 }
 
+async function optimizeAttachmentImage(file) {
+  if (!file?.type || !file.type.startsWith("image/") || file.type === "image/gif") return file;
+  // Keep small images untouched. Large photos/screenshots are downscaled and
+  // re-encoded as WebP only when the result is meaningfully smaller.
+  if (file.size < 1_500_000) return file;
+  let image;
+  try {
+    image = await createImageBitmap(file);
+    const maxDimension = 2560;
+    const scale = Math.min(1, maxDimension / image.width, maxDimension / image.height);
+    if (scale === 1 && file.type === "image/webp") return file;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.width * scale));
+    canvas.height = Math.max(1, Math.round(image.height * scale));
+    const context = canvas.getContext("2d", { alpha: true });
+    if (!context) return file;
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.86));
+    if (!blob || blob.size >= file.size * 0.93) return file;
+
+    const name = file.name.replace(/.[^.]+$/, "") + ".webp";
+    return new File([blob], name, { type: "image/webp", lastModified: file.lastModified });
+  } catch {
+    return file;
+  } finally {
+    image?.close?.();
+  }
+}
+
+async function maybeCompressAttachmentBytes(bytes) {
+  if (typeof CompressionStream !== "function" || !bytes?.length) {
+    return { bytes, compression: null };
+  }
+  try {
+    const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"));
+    const compressed = new Uint8Array(await new Response(stream).arrayBuffer());
+    // Never spend CPU/storage on a compressed representation that barely helps.
+    if (compressed.length + 512 >= bytes.length || compressed.length > bytes.length * 0.97) {
+      return { bytes, compression: null };
+    }
+    return { bytes: compressed, compression: "gzip" };
+  } catch {
+    return { bytes, compression: null };
+  }
+}
+
 async function encryptAttachment(file) {
+  const sourceFile = await optimizeAttachmentImage(file);
+  const sourceBytes = new Uint8Array(await sourceFile.arrayBuffer());
+  const prepared = await maybeCompressAttachmentBytes(sourceBytes);
   const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt"]);
   const rawKey = await crypto.subtle.exportKey("raw", key);
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, await file.arrayBuffer());
-  const gifId = file.type === "image/gif"
-    ? await blobSha256(file)
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, prepared.bytes);
+  const gifId = sourceFile.type === "image/gif"
+    ? await blobSha256(sourceFile)
     : null;
   return {
-    file: new File([ciphertext], `${file.name}.encrypted`, { type: "application/octet-stream" }),
+    file: new File([ciphertext], sourceFile.name + ".encrypted", { type: "application/octet-stream" }),
     metadata: {
       key: bytesToBase64(new Uint8Array(rawKey)),
       iv: bytesToBase64(iv),
-      name: file.name,
-      mime: file.type || "application/octet-stream",
-      size: file.size,
+      name: sourceFile.name,
+      mime: sourceFile.type || "application/octet-stream",
+      size: sourceFile.size,
+      stored_size: ciphertext.byteLength,
+      ...(prepared.compression ? { compression: prepared.compression } : {}),
       ...(gifId ? { gif_id: gifId } : {}),
     },
   };
@@ -6713,11 +6767,21 @@ async function renderEncryptedAttachment(attachment, metadata, container) {
   if (!response.ok) throw new Error("Encrypted attachment could not be loaded.");
   const ciphertext = await response.arrayBuffer();
   const key = await crypto.subtle.importKey("raw", base64ToBytes(metadata.key), "AES-GCM", false, ["decrypt"]);
-  const plaintext = await crypto.subtle.decrypt(
+  let plaintext = new Uint8Array(await crypto.subtle.decrypt(
     { name: "AES-GCM", iv: base64ToBytes(metadata.iv) },
     key,
     ciphertext,
-  );
+  ));
+
+  if (metadata.compression === "gzip" && typeof DecompressionStream === "function") {
+    try {
+      const stream = new Blob([plaintext]).stream().pipeThrough(new DecompressionStream("gzip"));
+      plaintext = new Uint8Array(await new Response(stream).arrayBuffer());
+    } catch {
+      throw new Error("Compressed attachment could not be decompressed.");
+    }
+  }
+
   const blob = new Blob([plaintext], { type: metadata.mime });
   const url = URL.createObjectURL(blob);
 
