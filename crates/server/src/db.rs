@@ -1264,7 +1264,7 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT id, display_name, avatar_id, username,
                     EXISTS(SELECT 1 FROM crypto_devices WHERE crypto_devices.user_id = users.id),
-                    activity, message_policy
+                    activity, message_policy, profile_tags
                  FROM users ORDER BY display_name COLLATE NOCASE",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -1275,6 +1275,8 @@ impl Database {
             let e2e_enabled: bool = row.get(4)?;
             let activity: String = row.get(5)?;
             let message_policy: String = row.get(6)?;
+            let profile_tags: String = row.get(7)?;
+            let tags = serde_json::from_str::<Vec<String>>(&profile_tags).unwrap_or_default();
             let online = online_ids.iter().any(|online| online == &id);
             Ok(UserInfo {
                 user_id: id.clone(),
@@ -1296,6 +1298,7 @@ impl Database {
                 subscriber_count: 0,
                 friend_status: "none".to_string(),
                 message_policy,
+                tags,
             })
         })?;
         rows.collect()
