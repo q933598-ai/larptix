@@ -345,7 +345,7 @@
   }
 
   function wireDragging() {
-    const handle = $("music-library-drag-area");
+    const handle = els.library?.querySelector(".music-library-drag-area");
     if (!handle) return;
 
     let dragging = false;
