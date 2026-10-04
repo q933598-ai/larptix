@@ -1,7 +1,9 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use larptrix_protocol::{attachment_url, avatar_url, AttachmentInfo, ChatMessage, UserInfo};
+use larptrix_protocol::{
+    attachment_url, avatar_url, AttachmentInfo, ChatMessage, ReactionSummary, UserInfo,
+};
 use rusqlite::{params, Connection, ErrorCode, OptionalExtension, TransactionBehavior};
 use uuid::Uuid;
 
@@ -2160,6 +2162,143 @@ impl Database {
             attachments: attachment_infos,
             created_at,
         })
+    }
+
+    pub fn message_accessible_to_user(
+        &self,
+        message_id: &str,
+        user_id: &str,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM messages m
+                WHERE m.id = ?1
+                  AND (
+                    EXISTS (
+                        SELECT 1
+                        FROM conversations c
+                        WHERE c.id = m.conversation_id
+                          AND (c.user_a = ?2 OR c.user_b = ?2)
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM group_members gm
+                        WHERE m.conversation_id = 'group_' || gm.group_id
+                          AND gm.user_id = ?2
+                    )
+                  )
+            )",
+            params![message_id, user_id],
+            |row| row.get(0),
+        )
+    }
+
+    pub fn message_is_channel(
+        &self,
+        message_id: &str,
+        user_id: &str,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM messages m
+                JOIN groups g ON m.conversation_id = 'group_' || g.id
+                JOIN group_members gm ON gm.group_id = g.id
+                WHERE m.id = ?1
+                  AND g.is_channel = 1
+                  AND gm.user_id = ?2
+            )",
+            params![message_id, user_id],
+            |row| row.get(0),
+        )
+    }
+
+    pub fn reaction_summaries(
+        &self,
+        message_id: &str,
+        viewer_id: &str,
+    ) -> rusqlite::Result<Vec<ReactionSummary>> {
+        let conn = self.conn.lock().expect("db lock");
+        let mut stmt = conn.prepare(
+            "SELECT emoji, COUNT(*) AS count,
+                    MAX(CASE WHEN user_id = ?2 THEN 1 ELSE 0 END) AS reacted
+             FROM message_reactions
+             WHERE message_id = ?1
+             GROUP BY emoji
+             ORDER BY count DESC, emoji ASC",
+        )?;
+        let rows = stmt.query_map(params![message_id, viewer_id], |row| {
+            Ok(ReactionSummary {
+                emoji: row.get(0)?,
+                count: row.get::<_, i64>(1)? as usize,
+                reacted: row.get::<_, i64>(2)? != 0,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+    }
+
+    pub fn toggle_message_reaction(
+        &self,
+        message_id: &str,
+        user_id: &str,
+        emoji: &str,
+        add: bool,
+    ) -> Result<Vec<ReactionSummary>, DbError> {
+        let emoji = emoji.trim();
+        if emoji.is_empty() || emoji.chars().count() > 16 {
+            return Err(DbError::BadRequest("invalid reaction"));
+        }
+        if !self
+            .message_accessible_to_user(message_id, user_id)
+            .map_err(DbError::Sqlite)?
+        {
+            return Err(DbError::BadRequest("message not found"));
+        }
+        let conn = self.conn.lock().expect("db lock");
+        if add {
+            conn.execute(
+                "INSERT OR IGNORE INTO message_reactions (message_id, user_id, emoji, created_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![message_id, user_id, emoji, crate::now_ms()],
+            )?;
+        } else {
+            conn.execute(
+                "DELETE FROM message_reactions
+                 WHERE message_id = ?1 AND user_id = ?2 AND emoji = ?3",
+                params![message_id, user_id, emoji],
+            )?;
+        }
+        drop(conn);
+        self.reaction_summaries(message_id, user_id)
+            .map_err(DbError::Sqlite)
+    }
+
+    pub fn mark_channel_message_viewed(
+        &self,
+        message_id: &str,
+        user_id: &str,
+    ) -> Result<usize, DbError> {
+        if !self
+            .message_is_channel(message_id, user_id)
+            .map_err(DbError::Sqlite)?
+        {
+            return Err(DbError::BadRequest("channel message not found"));
+        }
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "INSERT OR IGNORE INTO message_views (message_id, user_id, viewed_at)
+             VALUES (?1, ?2, ?3)",
+            params![message_id, user_id, crate::now_ms()],
+        )?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM message_views WHERE message_id = ?1",
+            [message_id],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
     }
 
     pub fn delete_message(
