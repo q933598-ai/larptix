@@ -395,6 +395,81 @@
     handle.addEventListener("lostpointercapture", () => stopDragging());
   }
 
+  function clampPlayerPosition(x, y) {
+    const rect = els.player.getBoundingClientRect();
+    return {
+      x: Math.min(Math.max(8, x), Math.max(8, window.innerWidth - rect.width - 8)),
+      y: Math.min(Math.max(8, y), Math.max(8, window.innerHeight - rect.height - 8)),
+    };
+  }
+
+  function savePlayerPosition(x, y) {
+    try {
+      localStorage.setItem("larptrix_music_player_position", JSON.stringify({ x, y }));
+    } catch {}
+  }
+
+  function applySavedPlayerPosition() {
+    let saved = null;
+    try {
+      saved = JSON.parse(localStorage.getItem("larptrix_music_player_position") || "null");
+    } catch {}
+    if (!saved || !Number.isFinite(saved.x) || !Number.isFinite(saved.y)) return;
+    const position = clampPlayerPosition(saved.x, saved.y);
+    els.player.style.left = position.x + "px";
+    els.player.style.top = position.y + "px";
+    els.player.style.right = "auto";
+    els.player.style.bottom = "auto";
+  }
+
+  function wirePlayerDragging() {
+    const handle = document.querySelector(".music-player-drag-area");
+    if (!handle || !els.player) return;
+
+    let dragging = false;
+    let pointerId = null;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    const stopDragging = (event) => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove("dragging");
+      if (pointerId !== null && handle.hasPointerCapture?.(pointerId)) {
+        handle.releasePointerCapture(pointerId);
+      }
+      pointerId = null;
+      const rect = els.player.getBoundingClientRect();
+      savePlayerPosition(rect.left, rect.top);
+      event?.preventDefault?.();
+    };
+
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || event.target.closest("button,input,select,textarea,a,label")) return;
+      const rect = els.player.getBoundingClientRect();
+      dragging = true;
+      pointerId = event.pointerId;
+      offsetX = event.clientX - rect.left;
+      offsetY = event.clientY - rect.top;
+      handle.setPointerCapture?.(event.pointerId);
+      handle.classList.add("dragging");
+      event.preventDefault();
+    });
+
+    handle.addEventListener("pointermove", (event) => {
+      if (!dragging) return;
+      const position = clampPlayerPosition(event.clientX - offsetX, event.clientY - offsetY);
+      els.player.style.left = position.x + "px";
+      els.player.style.top = position.y + "px";
+      els.player.style.right = "auto";
+      els.player.style.bottom = "auto";
+    });
+
+    handle.addEventListener("pointerup", stopDragging);
+    handle.addEventListener("pointercancel", stopDragging);
+    handle.addEventListener("lostpointercapture", () => stopDragging());
+  }
+
   function wire() {
     els.library = $("music-library");
     els.close = $("music-library-close");
@@ -511,6 +586,8 @@
 
     wireDragging();
     applySavedPosition();
+    wirePlayerDragging();
+    applySavedPlayerPosition();
     setMode(false);
     window.addEventListener("resize", () => {
       if (!els.library.hidden) {
@@ -521,6 +598,15 @@
         els.library.style.right = "auto";
         els.library.style.bottom = "auto";
         savePosition(position.x, position.y);
+      }
+      if (!els.player.hidden) {
+        const rect = els.player.getBoundingClientRect();
+        const position = clampPlayerPosition(rect.left, rect.top);
+        els.player.style.left = position.x + "px";
+        els.player.style.top = position.y + "px";
+        els.player.style.right = "auto";
+        els.player.style.bottom = "auto";
+        savePlayerPosition(position.x, position.y);
       }
     });
     void refresh();
