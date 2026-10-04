@@ -139,6 +139,10 @@ const settingsPresence = document.getElementById("settings-presence");
 const settingsCallSounds = document.getElementById("settings-call-sounds");
 const settingsOutgoingCallSounds = document.getElementById("settings-outgoing-call-sounds");
 const settingsMessageSounds = document.getElementById("settings-message-sounds");
+const settingsMessagePolicy = document.getElementById("settings-message-policy");
+const settingsCallRingtone = document.getElementById("settings-call-ringtone");
+const settingsCallRingtoneReset = document.getElementById("settings-call-ringtone-reset");
+const settingsCallRingtoneStatus = document.getElementById("settings-call-ringtone-status");
 const mobileChats = document.getElementById("mobile-chats");
 const mobileSaved = document.getElementById("mobile-saved");
 const mobileMusic = document.getElementById("mobile-music");
@@ -212,6 +216,7 @@ let cryptoEnabled = false;
 let cryptoReady = Promise.resolve();
 let cryptoLoadResolve = null;
 let customActivity = "";
+let customCallRingtoneUrl = null;
 let musicActivityEnabled = localStorage.getItem("larptrix_show_music_activity") !== "0";
 let matrixCrypto = null;
 let matrixServerName = null;
@@ -509,8 +514,13 @@ function playIncomingMessageSound() {
   } catch {}
 }
 
+function getTauriNotificationApi() {
+  return globalThis.__TAURI__?.notification || null;
+}
+
 function canUseBrowserNotifications() {
-  return typeof Notification === "function";
+  const native = getTauriNotificationApi();
+  return Boolean(native?.sendNotification || typeof Notification === "function");
 }
 
 function browserNotificationsEnabled() {
@@ -518,8 +528,18 @@ function browserNotificationsEnabled() {
 }
 
 async function requestBrowserNotifications() {
-  if (!canUseBrowserNotifications()) {
-    throw new Error("This browser does not support notifications.");
+  const native = getTauriNotificationApi();
+  if (native?.isPermissionGranted && native?.requestPermission) {
+    let granted = await native.isPermissionGranted();
+    if (!granted) {
+      granted = (await native.requestPermission()) === "granted";
+    }
+    localStorage.setItem("larptrix_browser_notifications", granted ? "1" : "0");
+    renderNotificationSettings();
+    return granted;
+  }
+  if (typeof Notification !== "function") {
+    throw new Error("This app does not support notifications on this platform.");
   }
   const permission = await Notification.requestPermission();
   const enabled = permission === "granted";
@@ -530,22 +550,35 @@ async function requestBrowserNotifications() {
 
 function renderNotificationSettings() {
   if (!settingsBrowserNotifications || !settingsNotificationsStatus) return;
-  const supported = canUseBrowserNotifications();
+  const native = getTauriNotificationApi();
+  const supported = Boolean(native?.sendNotification || typeof Notification === "function");
   settingsBrowserNotifications.disabled = !supported;
   settingsBrowserNotifications.checked = supported && browserNotificationsEnabled();
   if (!supported) {
-    settingsNotificationsStatus.textContent = "Browser notifications are not supported here.";
+    settingsNotificationsStatus.textContent = "Notifications are not supported by this app build.";
+    return;
+  }
+  if (native?.sendNotification) {
+    settingsNotificationsStatus.textContent = browserNotificationsEnabled()
+      ? "Native app notifications are enabled."
+      : "Native app notifications are available. Allow them to receive messages and calls.";
     return;
   }
   settingsNotificationsStatus.textContent =
     Notification.permission === "granted" ? "Notifications are allowed." :
-    Notification.permission === "denied" ? "Notifications are blocked by the browser." :
+    Notification.permission === "denied" ? "Notifications are blocked by the browser or app." :
     "Permission has not been requested yet.";
 }
 
-function showBrowserNotification(title, body, tag) {
-  if (!canUseBrowserNotifications() || Notification.permission !== "granted" || !browserNotificationsEnabled()) return;
+async function showBrowserNotification(title, body, tag) {
+  if (!browserNotificationsEnabled()) return;
   if (document.visibilityState === "visible" && document.hasFocus()) return;
+  const native = getTauriNotificationApi();
+  if (native?.sendNotification) {
+    try { native.sendNotification({ title, body }); } catch {}
+    return;
+  }
+  if (typeof Notification !== "function" || Notification.permission !== "granted") return;
   try {
     const notification = new Notification(title, { body, tag });
     notification.onclick = () => {
@@ -554,15 +587,65 @@ function showBrowserNotification(title, body, tag) {
         const peerFromTag = typeof tag === "string" && tag.startsWith("message-")
           ? tag.slice("message-".length)
           : null;
-        if (peerFromTag && getChatEntries().some((item) => item.user_id === peerFromTag)) {
-          openChat(peerFromTag);
-        }
+        if (peerFromTag) openChat(peerFromTag);
       } catch {}
       notification.close?.();
     };
   } catch {}
 }
 
+async function loadCustomCallRingtone() {
+  if (!callRingtone) return;
+  try {
+    const record = await readLocalCryptoRecord("call-ringtone");
+    if (!record?.blob) {
+      if (settingsCallRingtoneStatus) settingsCallRingtoneStatus.textContent = "Default ringtone";
+      return;
+    }
+    if (customCallRingtoneUrl) URL.revokeObjectURL(customCallRingtoneUrl);
+    customCallRingtoneUrl = URL.createObjectURL(record.blob);
+    callRingtone.src = customCallRingtoneUrl;
+    callRingtone.load();
+    if (settingsCallRingtoneStatus) {
+      settingsCallRingtoneStatus.textContent = record.name
+        ? "Custom: " + record.name
+        : "Custom ringtone";
+    }
+  } catch {
+    if (settingsCallRingtoneStatus) settingsCallRingtoneStatus.textContent = "Default ringtone";
+  }
+}
+
+async function setCustomCallRingtone(file) {
+  if (!file || !file.type.startsWith("audio/")) throw new Error("Choose an audio file.");
+  if (file.size > 15 * 1024 * 1024) throw new Error("Ringtone is too large (maximum 15 MB).");
+  await writeLocalCryptoRecord({ id: "call-ringtone", blob: file, name: file.name, type: file.type });
+  await loadCustomCallRingtone();
+}
+
+async function resetCustomCallRingtone() {
+  const db = await openLocalCryptoDb();
+  try {
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction("items", "readwrite");
+      tx.objectStore("items").delete("call-ringtone");
+      tx.addEventListener("complete", resolve, { once: true });
+      tx.addEventListener("error", () => reject(tx.error), { once: true });
+      tx.addEventListener("abort", () => reject(tx.error), { once: true });
+    });
+  } finally {
+    db.close();
+  }
+  if (customCallRingtoneUrl) URL.revokeObjectURL(customCallRingtoneUrl);
+  customCallRingtoneUrl = null;
+  const source = callRingtone?.querySelector("source");
+  if (callRingtone && source) {
+    callRingtone.removeAttribute("src");
+    source.setAttribute("src", "/assets/02439.mp3");
+    callRingtone.load();
+  }
+  if (settingsCallRingtoneStatus) settingsCallRingtoneStatus.textContent = "Default ringtone";
+}
 function startCallRingtone() {
   if (!readStoredBool(CALL_SOUND_KEY, true) || localStorage.getItem(PRESENCE_KEY) === "dnd") return;
   if (!callRingtone) return;
@@ -1339,6 +1422,7 @@ function openSettings() {
   settingsCallSounds.checked = readStoredBool(CALL_SOUND_KEY, true);
   settingsOutgoingCallSounds.checked = readStoredBool(OUTGOING_CALL_SOUND_KEY, true);
   settingsMessageSounds.checked = readStoredBool(MESSAGE_SOUND_KEY, true);
+  if (settingsMessagePolicy) settingsMessagePolicy.value = me.message_policy === "friends" ? "friends" : "everyone";
   renderNotificationSettings();
   settingsInstallUpdate.hidden = true;
   void checkForClientUpdate({ silent: true });
@@ -1502,6 +1586,26 @@ settingsPresence.addEventListener("change", () => setPresence(settingsPresence.v
 settingsCallSounds.addEventListener("change", () => localStorage.setItem(CALL_SOUND_KEY, settingsCallSounds.checked ? "1" : "0"));
 settingsOutgoingCallSounds.addEventListener("change", () => localStorage.setItem(OUTGOING_CALL_SOUND_KEY, settingsOutgoingCallSounds.checked ? "1" : "0"));
 settingsMessageSounds.addEventListener("change", () => localStorage.setItem(MESSAGE_SOUND_KEY, settingsMessageSounds.checked ? "1" : "0"));
+settingsMessagePolicy?.addEventListener("change", async () => {
+  try {
+    const updated = await api("PATCH", "/api/me/settings", { message_policy: settingsMessagePolicy.value });
+    me = { ...me, message_policy: updated.message_policy || settingsMessagePolicy.value };
+  } catch (err) {
+    settingsMessagePolicy.value = me?.message_policy === "friends" ? "friends" : "everyone";
+    appendSystem(err.message || "Could not update message privacy.");
+  }
+});
+settingsCallRingtone?.addEventListener("change", async () => {
+  const file = settingsCallRingtone.files?.[0];
+  settingsCallRingtone.value = "";
+  if (!file) return;
+  try { await setCustomCallRingtone(file); }
+  catch (err) { settingsCallRingtoneStatus.textContent = err.message || "Could not set ringtone."; }
+});
+settingsCallRingtoneReset?.addEventListener("click", async () => {
+  try { await resetCustomCallRingtone(); }
+  catch (err) { settingsCallRingtoneStatus.textContent = err.message || "Could not reset ringtone."; }
+});
 
 menuSaved?.addEventListener("click", openSavedMessagesChat);
 savedMessagesClose?.addEventListener("click", () => savedMessagesDialog.close());
@@ -1969,10 +2073,15 @@ document.getElementById("toggle-camera").addEventListener("click", toggleCamera)
 document.getElementById("toggle-screen-share").addEventListener("click", toggleScreenShare);
 document.getElementById("toggle-call-fullscreen").addEventListener("click", async () => {
   try {
+    if (globalThis.larptrixDesktop?.toggleFullscreen) {
+      const fullscreen = await globalThis.larptrixDesktop.toggleFullscreen();
+      callStage.classList.toggle("native-window-fullscreen", Boolean(fullscreen));
+      return;
+    }
     if (document.fullscreenElement) await document.exitFullscreen();
     else await document.getElementById("call-videos").requestFullscreen();
   } catch (err) {
-    appendSystem(err.message || "Fullscreen is not available in this browser context.");
+    appendSystem(err.message || "Fullscreen is not available in this app.");
   }
 });
 
@@ -2000,6 +2109,7 @@ setTimeout(() => void checkForClientUpdate({ silent: true }), 12000);
 setInterval(() => void checkForClientUpdate({ silent: true }), 6 * 60 * 60 * 1000);
 setCallPinned(localStorage.getItem("larptrix_call_window_pinned") === "1");
 setMusicWindowPinned(localStorage.getItem("larptrix_music_window_pinned") === "1");
+void loadCustomCallRingtone();
 bootstrap();
 
 async function bootstrap() {
@@ -3924,6 +4034,7 @@ async function toggleScreenShare() {
     callMediaNotice = audioTracks.length
       ? ` · sharing ${actualWidth}×${actualHeight} @ ${actualFps} fps + audio`
       : ` · sharing ${actualWidth}×${actualHeight} @ ${actualFps} fps`;
+    callStage.classList.add("screen-sharing");
     localScreenVideo.srcObject = screenMediaStream;
     localScreenVideo.muted = true;
     localScreenVideo.defaultMuted = true;
@@ -3996,6 +4107,7 @@ async function toggleScreenShare() {
 
 async function stopScreenShare() {
   if (!screenMediaStream) return;
+  callStage.classList.remove("screen-sharing");
   const screenTrack = screenMediaStream.getVideoTracks()[0];
   const cameraTrack = localMediaStream?.getVideoTracks()[0];
   const connections = groupCallId
