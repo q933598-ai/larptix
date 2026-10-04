@@ -78,7 +78,10 @@
       <main class="chat">
         <div id="empty" class="empty">Pick someone to start a private chat.</div>
         <div class="chat-titlebar" id="chat-titlebar" hidden>
-          <h2 id="peer-name" class="peer-name"></h2>
+          <div class="peer-heading-copy">
+            <h2 id="peer-name" class="peer-name"></h2>
+            <p id="peer-meta" class="peer-meta"></p>
+          </div>
           <span id="peer-verified" class="verified-badge" title="Device verified" aria-label="Device verified" hidden>Verified ✓</span>
           <div class="call-actions">
             <button id="peer-profile-open" type="button" class="ghost">Profile</button>
@@ -417,6 +420,11 @@
           <label>Bubble <input id="theme-me" type="color" /></label>
           <button id="theme-save-custom" type="button" class="ghost">Save custom theme</button>
         </div>
+        <label for="settings-avatar-shape">Avatar shape</label>
+        <select id="settings-avatar-shape">
+          <option value="circle">Circle</option>
+          <option value="square">Square</option>
+        </select>
         <label for="settings-presence">Presence</label>
         <select id="settings-presence">
           <option value="online">Online</option>
@@ -515,6 +523,18 @@
         <button id="group-members-close" type="button" class="ghost" aria-label="Close group members">×</button>
       </header>
       <p id="group-members-help" class="settings-help"></p>
+      <form id="group-profile-form" class="group-profile-form" hidden>
+        <label for="group-profile-name">Name</label>
+        <input id="group-profile-name" type="text" maxlength="32" required />
+        <label for="group-profile-description">Description</label>
+        <textarea id="group-profile-description" rows="3" maxlength="512"></textarea>
+        <div class="group-profile-media">
+          <label>Avatar <input id="group-profile-avatar" type="file" accept="image/jpeg,image/png,image/webp" /></label>
+          <label id="group-profile-banner-label">Banner <input id="group-profile-banner" type="file" accept="image/jpeg,image/png,image/webp" /></label>
+        </div>
+        <p id="group-profile-error" class="error" hidden></p>
+        <button type="submit">Save profile</button>
+      </form>
       <div id="group-members-list" class="group-members-list"></div>
     </dialog>
 
