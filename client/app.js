@@ -45,6 +45,9 @@ const profileName = document.getElementById("profile-name");
 const profileUsername = document.getElementById("profile-username");
 const profileAbout = document.getElementById("profile-about");
 const profileTags = document.getElementById("profile-tags");
+const profileTagSelect = document.getElementById("profile-tag-select");
+const profileTagNew = document.getElementById("profile-tag-new");
+const profileTagAdd = document.getElementById("profile-tag-add");
 const profileMicrophone = document.getElementById("profile-microphone");
 const profileSpeakers = document.getElementById("profile-speakers");
 const profileCamera = document.getElementById("profile-camera");
@@ -101,6 +104,7 @@ const callStage = document.getElementById("call-stage");
 const callStatus = document.getElementById("call-status");
 const localVideo = document.getElementById("local-video");
 const localScreenVideo = document.getElementById("local-screen-video");
+const directCallParticipants = document.getElementById("direct-call-participants");
 const remoteVideo = document.getElementById("remote-video");
 const remoteAudio = document.getElementById("remote-audio");
 const callAudioPlaceholder = document.getElementById("call-audio-placeholder");
@@ -216,6 +220,9 @@ const callDeafenButton = document.getElementById("toggle-call-deafen");
 const callSettingsOpen = document.getElementById("call-settings-open");
 const callSettingsPanel = document.getElementById("call-settings-panel");
 const callNoiseSuppression = document.getElementById("call-noise-suppression");
+const callSettingsMicrophone = document.getElementById("call-settings-microphone");
+const callSettingsSpeakers = document.getElementById("call-settings-speakers");
+const callSettingsCamera = document.getElementById("call-settings-camera");
 const callParticipantSettings = document.getElementById("call-participant-settings");
 const callWindowPin = document.getElementById("call-window-pin");
 const menuNewChannel = document.getElementById("menu-new-channel");
@@ -486,6 +493,9 @@ let incomingCallTimeout = null;
 let noAnswerCleanupTimeout = null;
 let lastDirectCallAvatarTimeout = null;
 let lastDirectCallPeerId = null;
+let lastDirectCallJoinPeerId = null;
+let lastDirectCallJoinKind = "audio";
+let directCallNoticeTimeout = null;
 let callNoAnswer = false;
 let voiceRecordingTimer = null;
 let voiceRecordingStartedAt = 0;
@@ -519,6 +529,95 @@ const SAVED_MESSAGES_KEY = "larptrix_saved_messages_v1";
 const SAVED_MESSAGES_LOCAL_KEY_ID = "saved-messages-local-key";
 function savedMessagesKey() {
   return me ? SAVED_MESSAGES_KEY + "_" + me.user_id : SAVED_MESSAGES_KEY;
+}
+
+const TAG_LIBRARY_KEY = "larptrix_tag_library_v1";
+
+function tagLibraryKey() {
+  return me?.user_id ? TAG_LIBRARY_KEY + "_" + me.user_id : TAG_LIBRARY_KEY;
+}
+
+function normalizeProfileTag(raw) {
+  return String(raw || "").trim().replace(/\s+/g, " ");
+}
+
+function readProfileTagLibrary(seed = []) {
+  const merged = [];
+  let stored = [];
+  try {
+    const parsed = JSON.parse(localStorage.getItem(tagLibraryKey()) || "[]");
+    stored = Array.isArray(parsed) ? parsed : [];
+  } catch {}
+
+  for (const raw of [...stored, ...(Array.isArray(seed) ? seed : [])]) {
+    const tag = normalizeProfileTag(raw);
+    if (!tag || tag.length > 24) continue;
+    if (!merged.some((item) => item.localeCompare(tag, undefined, { sensitivity: "accent" }) === 0)) {
+      merged.push(tag);
+    }
+  }
+
+  const trimmed = merged.slice(0, 20);
+  try {
+    localStorage.setItem(tagLibraryKey(), JSON.stringify(trimmed));
+  } catch {}
+  return trimmed;
+}
+
+function writeProfileTagLibrary(tags) {
+  const normalized = [];
+  for (const raw of Array.isArray(tags) ? tags : []) {
+    const tag = normalizeProfileTag(raw);
+    if (!tag || tag.length > 24) continue;
+    if (!normalized.some((item) => item.localeCompare(tag, undefined, { sensitivity: "accent" }) === 0)) {
+      normalized.push(tag);
+    }
+  }
+  try {
+    localStorage.setItem(tagLibraryKey(), JSON.stringify(normalized.slice(0, 20)));
+  } catch {}
+}
+
+function renderProfileTagLibrary(seed = []) {
+  if (!profileTagSelect) return;
+  const library = readProfileTagLibrary(seed);
+  const active = normalizeProfileTag(profileTags?.value || "");
+  profileTagSelect.replaceChildren();
+
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "No active tag";
+  profileTagSelect.append(none);
+
+  for (const tag of library) {
+    const option = document.createElement("option");
+    option.value = tag;
+    option.textContent = "🏷️ " + tag;
+    profileTagSelect.append(option);
+  }
+
+  profileTagSelect.value = library.includes(active) ? active : "";
+  if (profileTags) profileTags.value = profileTagSelect.value;
+}
+
+function addProfileTag() {
+  const tag = normalizeProfileTag(profileTagNew?.value || "");
+  if (!tag) return;
+  if (tag.length > 24) {
+    profileError.textContent = "Tags must be 24 characters or fewer.";
+    profileError.hidden = false;
+    return;
+  }
+  const library = readProfileTagLibrary();
+  if (!library.some((item) => item.localeCompare(tag, undefined, { sensitivity: "accent" }) === 0)) {
+    library.unshift(tag);
+    writeProfileTagLibrary(library);
+  }
+  renderProfileTagLibrary();
+  profileTagSelect.value = library.find((item) => item.localeCompare(tag, undefined, { sensitivity: "accent" }) === 0) || tag;
+  if (profileTags) profileTags.value = profileTagSelect.value;
+  if (profileTagNew) profileTagNew.value = "";
+  profileError.hidden = true;
 }
 
 async function savedMessagesLocalKey() {
@@ -920,6 +1019,7 @@ function updateCallPlaceholder({ force = false } = {}) {
   paintAvatar(callPlaceholderLocalAvatar, me || { user_id: "local", display_name: "You" });
   paintAvatar(callPlaceholderRemoteAvatar, remoteUser);
   callPlaceholderRemoteName.classList.remove("call-no-answer");
+  renderDirectCallParticipants();
 
   const hasRemoteVideo = Boolean(
     remoteVideo?.srcObject instanceof MediaStream
@@ -933,8 +1033,11 @@ function updateCallPlaceholder({ force = false } = {}) {
 
 function showCallStage() {
   callStage.hidden = false;
+  callStage.classList.remove("call-ending-notice");
   applySavedCallPosition();
+  void populateCallDeviceSelects();
   updateCallPlaceholder({ force: !localMediaStream?.getVideoTracks().length });
+  renderDirectCallParticipants();
   renderCallParticipantSettings();
 }
 
@@ -1788,7 +1891,8 @@ profileOpen.addEventListener("click", async () => {
     profileName.value = profile.display_name;
     profileUsername.value = profile.username;
     profileAbout.value = profile.about;
-    if (profileTags) profileTags.value = Array.isArray(profile.tags) ? profile.tags.join(", ") : "";
+    if (profileTags) profileTags.value = Array.isArray(profile.tags) ? (profile.tags[0] || "") : "";
+    renderProfileTagLibrary(profile.tags);
     customActivities = getUserActivities(profile)
       .filter((item) => item.kind === "custom")
       .slice(0, 3);
@@ -1921,6 +2025,17 @@ themeDeleteSaved?.addEventListener("click", () => {
   localStorage.setItem(SAVED_THEMES_KEY, JSON.stringify(next));
   renderSavedThemeOptions();
 });
+profileTagSelect?.addEventListener("change", () => {
+  if (profileTags) profileTags.value = normalizeProfileTag(profileTagSelect.value);
+});
+profileTagAdd?.addEventListener("click", addProfileTag);
+profileTagNew?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    addProfileTag();
+  }
+});
+
 for (const [select, key, kind, replacer] of [
   [profileMicrophone, CALL_MIC_KEY, "audioinput", null],
   [profileSpeakers, CALL_SPEAKERS_KEY, "audiooutput", null],
@@ -1958,6 +2073,31 @@ settingsOutgoingCallVolume?.addEventListener("input", (event) => {
   localStorage.setItem(OUTGOING_RING_VOLUME_KEY, String(value));
   if (callRingtone && !callRingtone.paused) callRingtone.volume = value;
 });
+for (const [select, key, kind] of [
+  [callSettingsMicrophone, CALL_MIC_KEY, "audioinput"],
+  [callSettingsSpeakers, CALL_SPEAKERS_KEY, "audiooutput"],
+  [callSettingsCamera, CALL_CAMERA_KEY, "videoinput"],
+]) {
+  select?.addEventListener("change", async () => {
+    const value = select.value || "";
+    if (value) localStorage.setItem(key, value);
+    else localStorage.removeItem(key);
+    try {
+      if (kind === "audiooutput") {
+        await applyCallSpeakerDevice(value);
+      } else if (kind === "audioinput" && localMediaStream?.getAudioTracks().length) {
+        await replaceCallMicrophoneTrack();
+      } else if (kind === "videoinput" && localMediaStream?.getVideoTracks().length) {
+        await replaceCallVideoTrack();
+      }
+      await populateCallDeviceSelects();
+    } catch (err) {
+      callStatus.textContent = err.message || "Could not change call device.";
+      await populateCallDeviceSelects();
+    }
+  });
+}
+
 settingsMessageSounds.addEventListener("change", () => localStorage.setItem(MESSAGE_SOUND_KEY, settingsMessageSounds.checked ? "1" : "0"));
 settingsMessagePolicy?.addEventListener("change", async () => {
   try {
@@ -2447,7 +2587,7 @@ profileForm.addEventListener("submit", async (event) => {
       display_name: profileName.value.trim(),
       username: profileUsername.value.trim(),
       about: profileAbout.value.trim(),
-      tags: profileTags ? profileTags.value.split(",").map((tag) => tag.trim()).filter(Boolean) : [],
+      tags: profileTags?.value ? [normalizeProfileTag(profileTags.value)] : [],
     });
     customActivities = customActivities
       .map((item) => ({ ...item, kind: "custom" }))
@@ -2699,6 +2839,7 @@ callDeafenButton?.addEventListener("click", toggleCallDeafen);
 callSettingsOpen?.addEventListener("click", () => {
   if (!callSettingsPanel) return;
   callSettingsPanel.hidden = !callSettingsPanel.hidden;
+  void populateCallDeviceSelects();
   if (callNoiseSuppression) callNoiseSuppression.checked = readStoredBool(NOISE_SUPPRESSION_KEY, true);
   renderCallParticipantSettings();
 });
@@ -3953,6 +4094,7 @@ function handleGroupCallState(message) {
   if (message.active) {
     activeGroupCalls.set(message.group_id, message);
     if (groupCallId === message.call_id && groupCallGroupId === message.group_id) {
+      groupCallInitiatorId = message.initiator_id || groupCallInitiatorId;
       groupCallJoinedMembers.clear();
       for (const id of message.participant_ids || []) groupCallJoinedMembers.add(id);
       for (const remoteId of [...groupPeerConnections.keys()]) {
@@ -4043,14 +4185,21 @@ function updateDirectCallButtons(id = peerId) {
     return;
   }
   const joining = isDirectCallActive(id);
-  const missedIncoming = Boolean(pendingIncomingCall?.sender_id === id);
-  callButton.textContent = joining || missedIncoming ? "Join" : "Call";
-  videoButton.textContent = joining || missedIncoming ? "Join video" : "Video";
+  const joinable = Boolean(
+    pendingIncomingCall?.sender_id === id
+      || lastDirectCallJoinPeerId === id
+  );
+  callButton.textContent = joining || joinable ? "Join" : "Call";
+  videoButton.textContent = joining || joinable ? "Join video" : "Video";
 }
 function openOrJoinDirectCall(kind) {
   if (!peerId) return;
   if (pendingIncomingCall?.sender_id === peerId && !peerConnection) {
     void acceptIncomingCall();
+    return;
+  }
+  if (lastDirectCallJoinPeerId === peerId && !pendingIncomingCall && !peerConnection) {
+    void startCall(lastDirectCallJoinKind || kind);
     return;
   }
   if (isDirectCallActive(peerId)) {
@@ -4534,7 +4683,11 @@ async function startCall(kind) {
   if (peerConnection) endCall(true);
   clearTimeout(lastDirectCallAvatarTimeout);
   lastDirectCallAvatarTimeout = null;
+  clearTimeout(directCallNoticeTimeout);
+  directCallNoticeTimeout = null;
   lastDirectCallPeerId = null;
+  lastDirectCallJoinPeerId = null;
+  lastDirectCallJoinKind = kind;
   callPeerId = peerId;
   callMediaKind = kind;
   callNoAnswer = false;
@@ -4576,8 +4729,16 @@ async function startCall(kind) {
       clearTimeout(noAnswerCleanupTimeout);
       noAnswerCleanupTimeout = setTimeout(() => {
         if (!callNoAnswer || callPeerId !== peerId) return;
+        const unansweredPeerId = callPeerId;
+        const unansweredKind = callMediaKind || "audio";
+        sendCallSignal("hangup", {});
         endCall(false);
-      }, 4500);
+        showDirectCallNotice(unansweredPeerId, "No answer", {
+          join: true,
+          kind: unansweredKind,
+          duration: 3000,
+        });
+      }, 3000);
     }, 20000);
   } catch (err) {
     appendSystem(`Call setup failed: ${err.message || "Check camera and microphone permissions."}`);
@@ -4639,8 +4800,19 @@ async function createPeerConnection() {
         enableCallAudio.hidden = false;
         callStatus.textContent = "Connected. Use Enable sound to hear the call.";
       });
-    } else if (event.streams[0]) {
-      remoteVideo.srcObject = event.streams[0];
+    } else if (event.track.kind === "video") {
+      const existing = remoteVideo.srcObject instanceof MediaStream ? remoteVideo.srcObject : null;
+      let stream = event.streams[0] || null;
+      if (!stream) {
+        stream = new MediaStream();
+        for (const track of existing?.getAudioTracks() || []) stream.addTrack(track);
+        stream.addTrack(event.track);
+      } else if (existing?.getVideoTracks().length && !existing.getVideoTracks().includes(event.track)) {
+        stream = new MediaStream();
+        stream.addTrack(event.track);
+        for (const track of existing.getAudioTracks()) stream.addTrack(track);
+      }
+      remoteVideo.srcObject = stream;
       remoteVideo.hidden = false;
       callAudioPlaceholder.hidden = true;
       remoteVideo.play().catch(() => {});
@@ -4716,11 +4888,17 @@ async function handleCallSignal(signal) {
     clearTimeout(incomingCallTimeout);
     incomingCallTimeout = setTimeout(() => {
       if (!pendingIncomingCall || pendingIncomingCall.sender_id !== signal.sender_id) return;
+      const missedPeerId = signal.sender_id;
+      const missedKind = callMediaKind || "audio";
       stopCallRingtone();
       incomingCallDialog.open && incomingCallDialog.close();
-      callStatus.textContent = "Missed call — Join from the chat when you're ready.";
-      renderDirectCallAvatarStack();
-      updateDirectCallButtons(peerId);
+      pendingIncomingCall = null;
+      callPeerId = null;
+      showDirectCallNotice(missedPeerId, "No answer", {
+        join: true,
+        kind: missedKind,
+        duration: 3000,
+      });
     }, 20000);
     incomingCallDialog.showModal();
     return;
@@ -4774,8 +4952,15 @@ async function handleCallSignal(signal) {
   } else if (signal.kind === "reject" || signal.kind === "hangup") {
     clearTimeout(outgoingCallTimeout);
     outgoingCallTimeout = null;
-    callStatus.textContent = signal.kind === "reject" ? "Call declined" : "Call ended";
+    const endedPeerId = callPeerId;
+    const endedKind = callMediaKind || "audio";
+    const notice = signal.kind === "reject" ? "Call declined" : "Call ended";
     endCall(false);
+    showDirectCallNotice(endedPeerId, notice, {
+      join: false,
+      kind: endedKind,
+      duration: 3000,
+    });
   }
 }
 
@@ -4804,6 +4989,8 @@ async function acceptIncomingCall() {
   incomingCallDialog.close();
   peerId = incoming.sender_id;
   callNoAnswer = false;
+  lastDirectCallJoinPeerId = null;
+  lastDirectCallJoinKind = callMediaKind || "audio";
   updateCallPlaceholder({ force: true });
   renderDirectCallAvatarStack();
   renderUsers();
@@ -4919,6 +5106,9 @@ async function populateCallDeviceSelects() {
     fill(profileMicrophone, "audioinput", "Default microphone");
     fill(profileSpeakers, "audiooutput", "Default speakers");
     fill(profileCamera, "videoinput", "Default camera");
+    fill(callSettingsMicrophone, "audioinput", "Default microphone");
+    fill(callSettingsSpeakers, "audiooutput", "Default speakers");
+    fill(callSettingsCamera, "videoinput", "Default camera");
     if (profileDevicesStatus) {
       profileDevicesStatus.textContent = devices.some((device) => device.label)
         ? "Choose the devices Larptrix should use for calls."
@@ -5227,6 +5417,8 @@ function endCall(notifyPeer) {
   incomingCallTimeout = null;
   clearTimeout(noAnswerCleanupTimeout);
   noAnswerCleanupTimeout = null;
+  clearTimeout(directCallNoticeTimeout);
+  directCallNoticeTimeout = null;
   stopCallRingtone();
   stopSpeakingMonitor("local");
   stopSpeakingMonitor("remote");
@@ -5237,15 +5429,7 @@ function endCall(notifyPeer) {
   if (groupCallGroupId && groupCallId) {
     const groupId = groupCallGroupId;
     const callId = groupCallId;
-    const remoteIds = [...groupPeerConnections.keys()];
-
     if (notifyPeer) {
-      for (const remoteId of remoteIds) {
-        sendGroupCallSignal(remoteId, "hangup", {
-          group_id: groupId,
-          call_id: callId,
-        });
-      }
       sendGroupCallControl("group_leave");
       const state = activeGroupCalls.get(groupId);
       if (state) {
@@ -5296,6 +5480,8 @@ function endCall(notifyPeer) {
   callNoAnswer = false;
 
   if (preserveNoAnswerAvatar && endedDirectPeerId) {
+    lastDirectCallJoinPeerId = endedDirectPeerId;
+    lastDirectCallJoinKind = "audio";
     lastDirectCallPeerId = endedDirectPeerId;
     clearTimeout(lastDirectCallAvatarTimeout);
     lastDirectCallAvatarTimeout = setTimeout(() => {
@@ -5309,6 +5495,8 @@ function endCall(notifyPeer) {
     clearTimeout(lastDirectCallAvatarTimeout);
     lastDirectCallAvatarTimeout = null;
     lastDirectCallPeerId = null;
+    lastDirectCallJoinPeerId = null;
+    lastDirectCallJoinKind = "audio";
   }
 
   updateDirectCallButtons(peerId);
@@ -5329,6 +5517,8 @@ function endCall(notifyPeer) {
   enableCallAudio.hidden = true;
   callStage.hidden = true;
   callStage.classList.remove("call-collapsed");
+  callStage.classList.remove("call-ending-notice");
+  renderDirectCallParticipants();
   const collapseButton = document.getElementById("call-collapse");
   collapseButton.textContent = "−";
   collapseButton.title = "Minimize call";
@@ -6042,6 +6232,90 @@ function startSpeakingMonitor(stream, key, element) {
   } catch {}
 }
 
+function renderDirectCallParticipants() {
+  if (!directCallParticipants) return;
+  directCallParticipants.replaceChildren();
+
+  const direct = !groupCallId && (
+    callPeerId
+      || pendingIncomingCall?.sender_id
+      || lastDirectCallPeerId
+      || lastDirectCallJoinPeerId
+  );
+  if (!direct) {
+    directCallParticipants.hidden = true;
+    return;
+  }
+
+  const remoteId = callPeerId
+    || pendingIncomingCall?.sender_id
+    || lastDirectCallPeerId
+    || lastDirectCallJoinPeerId;
+  const remoteUser = users.find((item) => item.user_id === remoteId)
+    || (pendingIncomingCall?.sender_id === remoteId
+      ? users.find((item) => item.user_id === pendingIncomingCall.sender_id)
+      : null)
+    || { user_id: remoteId, display_name: "Larptrix user" };
+
+  const onlyRemote = callNoAnswer || (!peerConnection && lastDirectCallJoinPeerId === remoteId);
+  const ids = onlyRemote ? [remoteId] : [me?.user_id, remoteId];
+
+  for (const id of ids.filter(Boolean).filter((item, index, array) => array.indexOf(item) === index)) {
+    const user = id === me?.user_id ? me : users.find((item) => item.user_id === id) || remoteUser;
+    const chip = document.createElement("div");
+    chip.className = "call-participant-chip";
+
+    const avatar = document.createElement("span");
+    avatar.className = "avatar";
+    paintAvatar(avatar, user || { user_id: id, display_name: "?" });
+
+    const name = document.createElement("span");
+    name.textContent = user?.display_name || "Participant";
+    chip.append(avatar, name);
+    directCallParticipants.append(chip);
+  }
+
+  directCallParticipants.hidden = directCallParticipants.childElementCount === 0;
+}
+
+function showDirectCallNotice(targetPeerId, message, { join = false, kind = "audio", duration = 3000 } = {}) {
+  if (!targetPeerId || !callStage) return;
+  clearTimeout(directCallNoticeTimeout);
+  directCallNoticeTimeout = null;
+
+  lastDirectCallPeerId = targetPeerId;
+  lastDirectCallJoinPeerId = join ? targetPeerId : null;
+  lastDirectCallJoinKind = kind;
+  callNoAnswer = join;
+  callStage.hidden = false;
+  callStage.classList.add("call-ending-notice");
+  callStatus.textContent = message;
+  callAudioPlaceholder.hidden = true;
+  localVideo.srcObject = null;
+  localVideo.hidden = true;
+  localScreenVideo.srcObject = null;
+  localScreenVideo.hidden = true;
+  remoteVideo.srcObject = null;
+  remoteVideo.hidden = true;
+  remoteAudio.srcObject = null;
+  document.getElementById("group-remotes").replaceChildren();
+  document.getElementById("group-remotes").hidden = true;
+  renderDirectCallParticipants();
+  renderDirectCallAvatarStack();
+  updateDirectCallButtons(peerId);
+  directCallNoticeTimeout = setTimeout(() => {
+    if (lastDirectCallPeerId !== targetPeerId) return;
+    callStage.classList.remove("call-ending-notice");
+    callStage.hidden = true;
+    lastDirectCallJoinPeerId = null;
+    callNoAnswer = false;
+    directCallNoticeTimeout = null;
+    renderDirectCallParticipants();
+    renderDirectCallAvatarStack();
+    updateDirectCallButtons(peerId);
+  }, duration);
+}
+
 function renderDirectCallAvatarStack() {
   if (!directCallAvatarStack) return;
   directCallAvatarStack.replaceChildren();
@@ -6062,6 +6336,7 @@ function renderDirectCallAvatarStack() {
     directCallAvatarStack.append(avatar);
   }
   directCallAvatarStack.hidden = ids.length === 0;
+  renderDirectCallParticipants();
 }
 
 function attachLocalMediaPreview() {
