@@ -1866,7 +1866,7 @@ impl Database {
         )
         .map_err(DbError::Sqlite)?;
 
-        for attachment in &attachment_rows {
+        for (index, attachment) in attachment_rows.iter().enumerate() {
             conn.execute(
                 "INSERT INTO message_attachments (message_id, attachment_id, position)
                  VALUES (?1, ?2, ?3)",
