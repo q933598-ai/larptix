@@ -1428,11 +1428,16 @@ async fn update_profile(
     let mut tags = Vec::new();
     for raw in body.tags {
         let tag = raw.trim();
-        if tag.is_empty() { continue; }
+        if tag.is_empty() {
+            continue;
+        }
         if tag.chars().count() > 24 {
             return Err(ApiError::bad("profile tags must be 24 characters or fewer"));
         }
-        if !tags.iter().any(|existing: &String| existing.eq_ignore_ascii_case(tag)) {
+        if !tags
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(tag))
+        {
             tags.push(tag.to_string());
         }
         if tags.len() >= 8 {
