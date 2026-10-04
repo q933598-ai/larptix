@@ -1236,19 +1236,33 @@ async function openForwardDialog(message) {
   dialog.showModal();
 }
 
-async function sendEncryptedPayloadToPeer(targetId, payloadObject, file = null) {
+async function sendEncryptedPayloadToPeer(targetId, payloadObject, files = []) {
   if (!cryptoEnabled || !cryptoDevice) throw new Error("Unlock E2E before sending messages.");
   const peer = getChatEntries().find((item) => item.user_id === targetId);
   if (!peer || peer.is_saved_chat) throw new Error("Invalid message target.");
-  let attachment_id = null;
-  let encryptedFile = null;
-  if (file) {
+
+  const fileList = Array.isArray(files) ? files.filter(Boolean) : (files ? [files] : []);
+  const uploadedAttachments = [];
+  for (const file of fileList) {
     const encrypted = await encryptAttachment(file);
     const uploaded = await uploadFile("/api/upload", encrypted.file);
-    attachment_id = uploaded.id;
-    encryptedFile = encrypted.metadata;
+    uploadedAttachments.push({
+      ...encrypted.metadata,
+      id: uploaded.id,
+      url: uploaded.url || `/api/attachments/${encodeURIComponent(uploaded.id)}`,
+    });
   }
-  const rawPayload = JSON.stringify({ file: encryptedFile, ...payloadObject });
+
+  const rawPayload = JSON.stringify({
+    ...payloadObject,
+    ...(uploadedAttachments.length
+      ? {
+          files: uploadedAttachments,
+          ...(uploadedAttachments.length === 1 ? { file: uploadedAttachments[0] } : {}),
+        }
+      : {}),
+  });
+
   let encryptedBody;
   await withCryptoStateLock(async () => {
     await matrixCryptoReady;
@@ -1294,12 +1308,20 @@ async function sendEncryptedPayloadToPeer(targetId, payloadObject, file = null) 
     }
     await persistCryptoState();
   });
+
   sentPlaintextByCiphertext.set(encryptedBody, rawPayload);
   void cacheSentPlaintext(encryptedBody, rawPayload);
   if (!socket || socket.readyState !== WebSocket.OPEN) throw new Error("Not connected to server.");
-  socket.send(JSON.stringify({ type: "send", peer_id: targetId, body: encryptedBody, attachment_id }));
+  socket.send(JSON.stringify({
+    type: "send",
+    peer_id: targetId,
+    body: encryptedBody,
+    ...(uploadedAttachments.length ? {
+      attachment_id: uploadedAttachments[0].id,
+      attachment_ids: uploadedAttachments.map((attachment) => attachment.id),
+    } : {}),
+  }));
 }
-
 function closeAppMenu() {
   appMenu.hidden = true;
   menuBackdrop.hidden = true;
