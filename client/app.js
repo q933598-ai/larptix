@@ -47,6 +47,8 @@ const profileEmailLabel = document.getElementById("profile-email-label");
 const profileActivity = document.getElementById("profile-activity");
 const showMusicActivity = document.getElementById("show-music-activity");
 const forgetE2eDeviceButton = document.getElementById("forget-e2e-device");
+const resetE2eKeysButton = document.getElementById("reset-e2e-keys");
+const resetE2eHelp = document.getElementById("reset-e2e-help");
 const profileCardName = document.getElementById("profile-card-name");
 const profileCardHandle = document.getElementById("profile-card-handle");
 const profileCardActivity = document.getElementById("profile-card-activity");
@@ -104,6 +106,10 @@ const createChannelDialog = document.getElementById("create-channel-dialog");
 const groupMemberList = document.getElementById("group-member-list");
 const channelMemberList = document.getElementById("channel-member-list");
 const userSearchInput = document.getElementById("user-search");
+const chatViewOpen = document.getElementById("chat-view-open");
+const friendRequestsOpen = document.getElementById("friend-requests-open");
+const friendRequestsBadge = document.getElementById("friend-requests-badge");
+const peopleSearchHint = document.querySelector(".friends-search-hint");
 const emojiPicker = document.getElementById("emoji-picker");
 const menuOpenButton = document.getElementById("menu-open");
 const menuCloseButton = document.getElementById("menu-close");
@@ -196,6 +202,10 @@ let users = [];
 let searchResults = [];
 let groups = [];
 let searchRequestId = 0;
+let friendRequests = { incoming: [], outgoing: [] };
+let peopleView = "chats";
+let friendRequestsRequestId = 0;
+let friendSearchLoading = false;
 let reconnect = false;
 let mode = "login";
 let legacyLogin = false;
@@ -247,6 +257,36 @@ const decryptedPayloadByMessageId = new Map();
 const mutedRemoteUserIds = new Set();
 let callDeafened = false;
 
+function e2eResetStorageKey(peerUserId) {
+  return me && peerUserId ? `larptrix_e2e_reset_${me.user_id}_${peerUserId}` : null;
+}
+function getE2eResetAt(peerUserId) {
+  const key = e2eResetStorageKey(peerUserId);
+  if (!key) return 0;
+  const value = Number(localStorage.getItem(key));
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+function setE2eResetAt(peerUserId, timestamp) {
+  const key = e2eResetStorageKey(peerUserId);
+  if (!key) return;
+  localStorage.setItem(key, String(timestamp));
+}
+function isMessageVisibleAfterE2eReset(message) {
+  if (!message || !peerId || !me) return true;
+  const resetAt = getE2eResetAt(peerId);
+  return !resetAt || Number(message.created_at) > resetAt;
+}
+function renderE2eResetNotice(peerUserId) {
+  if (!getE2eResetAt(peerUserId)) return;
+  const li = document.createElement("li");
+  li.className = "e2e-reset-notice";
+  const title = document.createElement("strong");
+  title.textContent = "You reset your encryption key";
+  const detail = document.createElement("span");
+  detail.textContent = "Older messages remain stored for the other participant, but this device starts a fresh encrypted history.";
+  li.append(title, detail);
+  logEl.append(li);
+}
 function pinnedChatsKey() {
   return me ? `larptrix_pinned_chats_${me.user_id}` : null;
 }
@@ -1451,7 +1491,7 @@ document.addEventListener("keydown", (event) => {
   }
 });
 menuChats.addEventListener("click", () => {
-  document.getElementById("chat-view-open").click();
+  setPeopleView("chats");
   closeAppMenu();
 });
 menuMusic.addEventListener("click", () => {
@@ -1492,6 +1532,8 @@ profileOpen.addEventListener("click", async () => {
     showMusicActivity.checked = musicActivityEnabled;
     profileBanner.style.backgroundImage = profile.banner_url ? 'url("' + profile.banner_url + '?v=' + Date.now() + '")' : "";
     renderNotificationSettings();
+    resetE2eKeysButton.hidden = !cryptoEnabled;
+    resetE2eHelp.hidden = true;
     profileDialog.showModal();
   } catch (err) {
     profileError.textContent = err.message;
@@ -1705,6 +1747,7 @@ forgetE2eDeviceButton.addEventListener("click", async () => {
   cryptoProfileStatus.textContent = "This device will ask for the recovery key at the next sign-in.";
   forgetE2eDeviceButton.hidden = true;
 });
+resetE2eKeysButton?.addEventListener("click", () => void resetE2eKeys());
 
 document.getElementById("create-group-cancel").addEventListener("click", () => createGroupDialog.close());
 document.getElementById("create-group-form").addEventListener("submit", createGroup);
@@ -1712,33 +1755,196 @@ document.getElementById("create-channel-cancel")?.addEventListener("click", () =
 document.getElementById("create-channel-form")?.addEventListener("submit", createChannel);
 let friendSearchTimer = null;
 
+function normalizePeopleSearch(raw) {
+  return raw.trim().replace(/^@+/, "").replace(/\s+/g, " ").toLocaleLowerCase();
+}
+function searchScore(user, query) {
+  const name = (user?.display_name || "").toLocaleLowerCase();
+  const username = (user?.username || "").toLocaleLowerCase();
+  if (!query) return 99;
+  if (username === query) return 0;
+  if (username.startsWith(query)) return 1;
+  if (name === query) return 2;
+  if (name.startsWith(query)) return 3;
+  if (username.includes(query)) return 4;
+  if (name.includes(query)) return 5;
+  return 9;
+}
+function updateFriendRequestsBadge() {
+  if (!friendRequestsBadge) return;
+  const count = friendRequests.incoming.length;
+  friendRequestsBadge.hidden = count === 0;
+  friendRequestsBadge.textContent = count > 99 ? "99+" : String(count);
+}
+async function loadFriendRequests() {
+  if (!me) return;
+  const requestId = ++friendRequestsRequestId;
+  try {
+    const result = await api("GET", "/api/friends");
+    if (requestId !== friendRequestsRequestId) return;
+    friendRequests = {
+      incoming: Array.isArray(result?.incoming) ? result.incoming : [],
+      outgoing: Array.isArray(result?.outgoing) ? result.outgoing : [],
+    };
+    updateFriendRequestsBadge();
+    if (peopleView === "requests") renderUsers();
+  } catch (err) {
+    if (requestId === friendRequestsRequestId) {
+      appendSystem("Friend requests failed: " + (err.message || err));
+    }
+  }
+}
+function requestUserButton(user) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "request-user-button";
+  const avatar = document.createElement("span");
+  avatar.className = "avatar";
+  paintAvatar(avatar, user);
+  const name = document.createElement("span");
+  name.className = "person-name";
+  const label = document.createElement("span");
+  label.textContent = user.display_name || "Larptrix user";
+  name.append(label);
+  if (user.username) {
+    const handle = document.createElement("small");
+    handle.textContent = "@" + user.username;
+    name.append(handle);
+  }
+  button.append(avatar, name);
+  button.addEventListener("click", () => openChat(user.user_id));
+  return button;
+}
+function renderFriendRequests() {
+  usersEl.replaceChildren();
+  const addSection = (title, entries, kind) => {
+    if (!entries.length) return;
+    const heading = document.createElement("li");
+    heading.className = "friend-requests-heading";
+    heading.textContent = title;
+    usersEl.append(heading);
+    for (const user of entries) {
+      const li = document.createElement("li");
+      li.className = "friend-request-row";
+      li.append(requestUserButton(user));
+      const actions = document.createElement("div");
+      actions.className = "friend-request-actions";
+      if (kind === "incoming") {
+        const accept = document.createElement("button");
+        accept.type = "button";
+        accept.className = "ghost request-accept";
+        accept.textContent = "Accept";
+        accept.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          accept.disabled = true;
+          try {
+            await api("POST", "/api/friends/" + encodeURIComponent(user.user_id) + "/accept", {});
+            await loadFriendRequests();
+          } catch (err) {
+            accept.disabled = false;
+            appendSystem(err.message || "Could not accept friend request.");
+          }
+        });
+        const decline = document.createElement("button");
+        decline.type = "button";
+        decline.className = "ghost";
+        decline.textContent = "Decline";
+        decline.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          decline.disabled = true;
+          try {
+            await api("DELETE", "/api/friends/" + encodeURIComponent(user.user_id));
+            await loadFriendRequests();
+          } catch (err) {
+            decline.disabled = false;
+            appendSystem(err.message || "Could not decline friend request.");
+          }
+        });
+        actions.append(accept, decline);
+      } else {
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "ghost";
+        cancel.textContent = "Cancel";
+        cancel.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          cancel.disabled = true;
+          try {
+            await api("DELETE", "/api/friends/" + encodeURIComponent(user.user_id));
+            await loadFriendRequests();
+          } catch (err) {
+            cancel.disabled = false;
+            appendSystem(err.message || "Could not cancel friend request.");
+          }
+        });
+        actions.append(cancel);
+      }
+      li.append(actions);
+      usersEl.append(li);
+    }
+  };
+  addSection("Incoming", friendRequests.incoming, "incoming");
+  addSection("Sent", friendRequests.outgoing, "outgoing");
+  if (!friendRequests.incoming.length && !friendRequests.outgoing.length) {
+    const empty = document.createElement("li");
+    empty.className = "search-empty";
+    empty.textContent = "No pending friend requests.";
+    usersEl.append(empty);
+  }
+}
+function setPeopleView(view) {
+  peopleView = view === "requests" ? "requests" : "chats";
+  const showingRequests = peopleView === "requests";
+  friendRequestsOpen?.classList.toggle("active", showingRequests);
+  chatViewOpen?.classList.toggle("active", !showingRequests);
+  if (userSearchInput) {
+    userSearchInput.hidden = showingRequests;
+    if (showingRequests) userSearchInput.value = "";
+  }
+  if (peopleSearchHint) peopleSearchHint.hidden = showingRequests;
+  if (showingRequests) {
+    searchResults = [];
+    void loadFriendRequests();
+  }
+  renderUsers();
+}
 async function refreshFriendSearch() {
-  const query = userSearchInput.value.trim();
+  const query = normalizePeopleSearch(userSearchInput.value);
   const requestId = ++searchRequestId;
   if (!query) {
+    friendSearchLoading = false;
     searchResults = [];
     renderUsers();
     return;
   }
+  friendSearchLoading = true;
+  renderUsers();
   try {
     const result = await api("GET", "/api/users/search?q=" + encodeURIComponent(query));
     if (requestId !== searchRequestId) return;
     searchResults = Array.isArray(result?.users) ? result.users : [];
-    renderUsers();
   } catch (err) {
     if (requestId !== searchRequestId) return;
     searchResults = [];
     appendSystem("User search failed: " + (err.message || err));
-    renderUsers();
+  } finally {
+    if (requestId === searchRequestId) {
+      friendSearchLoading = false;
+      renderUsers();
+    }
   }
 }
-
 function scheduleFriendSearch() {
   clearTimeout(friendSearchTimer);
-  friendSearchTimer = setTimeout(() => void refreshFriendSearch(), 180);
+  friendSearchTimer = setTimeout(() => void refreshFriendSearch(), 160);
 }
-
 userSearchInput.addEventListener("input", scheduleFriendSearch);
+friendRequestsOpen?.addEventListener("click", () => setPeopleView("requests"));
+chatViewOpen?.addEventListener("click", () => setPeopleView("chats"));
+
 document.getElementById("emoji-picker-toggle").addEventListener("click", () => {
   emojiPicker.hidden = !emojiPicker.hidden;
 });
@@ -2179,6 +2385,7 @@ async function completeCryptoDialog() {
       cryptoEnabled = true;
       cryptoProfileStatus.textContent = "E2E is required for every chat. Verify each peer fingerprint before messaging.";
       enableE2eButton.textContent = "E2E enabled";
+      resetE2eKeysButton.hidden = false;
       cryptoOwnFingerprint.textContent = cryptoDeviceBundle.fingerprint;
       cryptoOwnFingerprint.hidden = false;
       cryptoDialog.close();
@@ -2215,6 +2422,7 @@ async function completeCryptoDialog() {
       cryptoOwnFingerprint.textContent = restoredBundle.fingerprint;
       cryptoOwnFingerprint.hidden = false;
       cryptoProfileStatus.textContent = "E2E enabled and unlocked on this device.";
+      resetE2eKeysButton.hidden = false;
       cryptoDialog.close();
       cryptoDialogMode = null;
       await persistCryptoState();
@@ -2301,7 +2509,7 @@ async function loadCryptoStatus({ forceSetup = false } = {}) {
   });
 }
 
-async function loadMatrixCryptoStatus() {
+async function loadMatrixCryptoStatus({ freshStart = false } = {}) {
   if (!me || !cryptoRecoveryKey) return false;
 
   const config = await api("GET", "/api/matrix/config");
@@ -2317,6 +2525,7 @@ async function loadMatrixCryptoStatus() {
     serverName: matrixServerName,
     deviceId,
     storePassphrase: cryptoRecoveryKey,
+    freshStart,
   });
 
   try {
@@ -2595,6 +2804,122 @@ async function refreshPeerVerification(userId) {
   }
 }
 
+async function clearLocalE2eCaches() {
+  if (typeof indexedDB === "undefined") return;
+  let db;
+  try {
+    db = await openLocalCryptoDb();
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction("items", "readwrite");
+      const store = transaction.objectStore("items");
+      const cursorRequest = store.openCursor();
+      cursorRequest.onsuccess = () => {
+        const cursor = cursorRequest.result;
+        if (!cursor) return;
+        const id = String(cursor.key || "");
+        if (id.startsWith("decrypted-message:") || id.startsWith("sent-plaintext:")) {
+          cursor.delete();
+        }
+        cursor.continue();
+      };
+      transaction.addEventListener("complete", resolve, { once: true });
+      transaction.addEventListener("error", () => reject(transaction.error), { once: true });
+      transaction.addEventListener("abort", () => reject(transaction.error), { once: true });
+    });
+  } catch {
+    // Best-effort cleanup; the new recovery key cannot decrypt old cache records anyway.
+  } finally {
+    db?.close();
+  }
+}
+
+async function resetE2eKeys() {
+  if (!me || !cryptoDevice || !cryptoRecoveryKey) {
+    appendSystem("Unlock E2E before resetting your keys.");
+    return;
+  }
+  const currentPeerId = peerId && peerId !== SAVED_MESSAGES_ID
+    && !groups.some((group) => group.user_id === peerId)
+    ? peerId
+    : null;
+
+  const confirmed = window.confirm(
+    "Reset your E2E keys? This device will start a new encryption identity. The server will keep the encrypted history, and the other participant will keep their readable copy. This device will show a fresh chat from the reset point."
+  );
+  if (!confirmed) return;
+
+  const oldCryptoDeviceId = cryptoDevice.device_id();
+  const oldMatrixDeviceId = matrixCrypto?.deviceId || null;
+  const resetAt = Date.now();
+
+  resetE2eKeysButton.disabled = true;
+  resetE2eKeysButton.textContent = "Resetting…";
+
+  try {
+    await withCryptoStateLock(async () => {
+      if (matrixCrypto) {
+        await matrixCrypto.close().catch(() => {});
+        matrixCrypto = null;
+      }
+
+      if (oldMatrixDeviceId) {
+        await api("DELETE", "/api/me/matrix-devices/" + encodeURIComponent(oldMatrixDeviceId));
+      }
+      await api("DELETE", "/api/me/crypto-devices/" + encodeURIComponent(oldCryptoDeviceId));
+
+      await clearLocalE2eCaches();
+      sentPlaintextByCiphertext.clear();
+      decryptedPayloadByMessageId.clear();
+      recoveredBodiesByMessageId.clear();
+      cryptoRecoveryPending.clear();
+      cryptoRecoveryResponsesByMessageId.clear();
+      messageBodyElementsById.clear();
+
+      if (currentPeerId) {
+        setE2eResetAt(currentPeerId, resetAt);
+      }
+
+      localStorage.removeItem(savedMessagesKey());
+
+      cryptoDevice?.free();
+      cryptoRecoveryKey = createRecoveryKey();
+      cryptoDevice = new CryptoDevice(cryptoRecoveryKey);
+      cryptoDeviceBundle = JSON.parse(cryptoDevice.public_bundle_json());
+      cryptoStoredState = null;
+      cryptoEnabled = true;
+      await persistCryptoState();
+      await rememberRecoveryKey(me.user_id, cryptoRecoveryKey);
+      forgetE2eDeviceButton.hidden = false;
+      resetE2eKeysButton.hidden = false;
+    });
+
+    matrixCryptoReady = (async () => {
+      try {
+        return Boolean(await loadMatrixCryptoStatus({ freshStart: true }));
+      } catch (err) {
+        console.error("[E2E] Matrix crypto reset initialization failed", err);
+        return false;
+      }
+    })();
+    await matrixCryptoReady;
+
+    if (currentPeerId === peerId) {
+      logEl.replaceChildren();
+      messageBodyElementsById.clear();
+      renderE2eResetNotice(currentPeerId);
+    }
+    resetE2eHelp.hidden = false;
+    cryptoProfileStatus.textContent = "New E2E identity created. Save the new recovery key below.";
+    openCryptoDialog("enable", { required: true });
+  } catch (err) {
+    cryptoProfileStatus.textContent = "E2E reset failed: " + (err.message || String(err));
+    appendSystem("Could not reset E2E keys: " + (err.message || String(err)));
+  } finally {
+    resetE2eKeysButton.disabled = false;
+    resetE2eKeysButton.textContent = "Reset E2E keys";
+  }
+}
+
 function registrationE2eKey(userId) {
   return `larptrix_registration_e2e_required_${userId}`;
 }
@@ -2767,6 +3092,7 @@ function connect() {
         renderMe();
         renderUsers();
         void loadGroups();
+        void loadFriendRequests();
         const deepLink = new URLSearchParams(location.search);
         const deepLinkPeer = deepLink.get("peer");
         const deepLinkCall = deepLink.get("call");
@@ -2830,6 +3156,7 @@ function connect() {
         renderGroupCallBanner();
         logEl.replaceChildren();
         messageBodyElementsById.clear();
+        renderE2eResetNotice(msg.peer.user_id);
         msg.history.forEach(appendMessage);
         void retryVisibleMatrixMessages({ attempts: 10, delayMs: 300 });
         break;
@@ -4249,8 +4576,12 @@ function renderMe() {
 }
 
 function renderUsers() {
+  if (peopleView === "requests") {
+    renderFriendRequests();
+    return;
+  }
   usersEl.replaceChildren();
-  const query = userSearchInput.value.trim().replace(/^@/, "").toLocaleLowerCase();
+  const query = normalizePeopleSearch(userSearchInput.value);
   const base = query
     ? [...users.filter((user) => user.display_name.toLocaleLowerCase().includes(query)
         || (user.username || "").toLocaleLowerCase().includes(query)),
@@ -4264,11 +4595,20 @@ function renderUsers() {
   const matches = [...dedupe.values()];
   const pinned = getPinnedChats();
   matches.sort((a, b) =>
-    (a.is_saved_chat ? -2 : 0) - (b.is_saved_chat ? -2 : 0)
+    (query ? searchScore(a, query) - searchScore(b, query) : 0)
+    || (a.is_saved_chat ? -2 : 0) - (b.is_saved_chat ? -2 : 0)
     || (a.friend_status === "accepted" ? -1 : 0) - (b.friend_status === "accepted" ? -1 : 0)
     || (pinned.has(b.user_id) ? 1 : 0) - (pinned.has(a.user_id) ? 1 : 0)
     || a.display_name.localeCompare(b.display_name)
   );
+
+  if (query && friendSearchLoading) {
+    const loading = document.createElement("li");
+    loading.className = "search-empty";
+    loading.textContent = "Searching…";
+    usersEl.append(loading);
+    return;
+  }
 
   if (query && !matches.length) {
     const empty = document.createElement("li");
@@ -4281,6 +4621,7 @@ function renderUsers() {
   for (const user of matches) {
     const li = document.createElement("li");
     li.className = user.friend_status && user.friend_status !== "accepted" ? "search-person" : "";
+    li.classList.toggle("chat-active", user.user_id === peerId);
 
     const button = document.createElement("button");
     button.type = "button";
@@ -4330,7 +4671,7 @@ function renderUsers() {
           event.stopPropagation();
           try {
             await api("POST", "/api/friends/" + encodeURIComponent(user.user_id) + "/accept", {});
-            await refreshFriendSearch();
+            await Promise.all([refreshFriendSearch(), loadFriendRequests()]);
           } catch (err) {
             appendSystem(err.message || "Could not accept friend request.");
           }
@@ -4348,7 +4689,7 @@ function renderUsers() {
           relation.disabled = true;
           try {
             await api("POST", "/api/friends/" + encodeURIComponent(user.user_id), {});
-            await refreshFriendSearch();
+            await Promise.all([refreshFriendSearch(), loadFriendRequests()]);
           } catch (err) {
             relation.disabled = false;
             appendSystem(err.message || "Could not add friend.");
@@ -4519,6 +4860,7 @@ function paintAvatar(el, user) {
 function appendMessage(message) {
   messagesById.set(message.id, message);
   if (deletedMessageIds.has(message.id)) return;
+  if (!isMessageVisibleAfterE2eReset(message)) return;
   const li = document.createElement("li");
   li.dataset.messageId = message.id;
   if (me && message.sender_id === me.user_id) li.classList.add("me");

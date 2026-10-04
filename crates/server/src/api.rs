@@ -6,7 +6,7 @@ use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use larptrix_protocol::{
     attachment_url, avatar_url, sanitize_display_name, sanitize_email, sanitize_password,
@@ -79,6 +79,10 @@ pub fn router() -> Router<Arc<AppState>> {
             get(get_my_crypto_device)
                 .put(update_crypto_device)
                 .delete(delete_crypto_device),
+        )
+        .route(
+            "/api/me/matrix-devices/{device_id}",
+            delete(delete_my_matrix_device),
         )
         .route(
             "/api/users/{id}/crypto-devices",
@@ -408,7 +412,14 @@ async fn search_users(
     Query(query): Query<UserSearchQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let user = require_user(&state, &headers)?;
-    let query = query.q.trim().trim_start_matches('@').to_lowercase();
+    let query = query
+        .q
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .trim_start_matches('@')
+        .to_lowercase();
     if query.is_empty() {
         return Ok(Json(serde_json::json!({ "users": [] })));
     }
@@ -416,7 +427,7 @@ async fn search_users(
         return Err(ApiError::bad("search query is too long"));
     }
     let online = state.hub.online_ids();
-    let users = state
+    let mut users = state
         .db
         .list_users(&online)
         .map_err(ApiError::db)?
@@ -426,9 +437,46 @@ async fn search_users(
             candidate.display_name.to_lowercase().contains(&query)
                 || candidate.username.to_lowercase().contains(&query)
         })
+        .map(|candidate| {
+            let name = candidate.display_name.to_lowercase();
+            let username = candidate.username.to_lowercase();
+            let score = if username == query {
+                0u8
+            } else if username.starts_with(&query) {
+                1
+            } else if name == query {
+                2
+            } else if name.starts_with(&query) {
+                3
+            } else if username.contains(&query) {
+                4
+            } else {
+                5
+            };
+            (score, candidate)
+        })
+        .collect::<Vec<_>>();
+
+    users.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| {
+                a.1.display_name
+                    .to_lowercase()
+                    .cmp(&b.1.display_name.to_lowercase())
+            })
+            .then_with(|| {
+                a.1.username
+                    .to_lowercase()
+                    .cmp(&b.1.username.to_lowercase())
+            })
+    });
+
+    let users = users
+        .into_iter()
         .take(50)
-        .map(|candidate| user_info_with_relationship(&state, candidate, &user.id))
+        .map(|(_, candidate)| user_info_with_relationship(&state, candidate, &user.id))
         .collect::<Result<Vec<_>, _>>()?;
+
     Ok(Json(serde_json::json!({ "users": users })))
 }
 
@@ -1191,6 +1239,25 @@ async fn delete_crypto_device(
         return Err(ApiError::not_found("crypto device not found"));
     }
 
+    Ok(Json(serde_json::json!({
+        "deleted": true,
+        "device_id": device_id
+    })))
+}
+
+async fn delete_my_matrix_device(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(device_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let deleted = state
+        .db
+        .delete_matrix_crypto_device(&user.id, &device_id)
+        .map_err(ApiError::db)?;
+    if !deleted {
+        return Err(ApiError::not_found("Matrix device not found"));
+    }
     Ok(Json(serde_json::json!({
         "deleted": true,
         "device_id": device_id

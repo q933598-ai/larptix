@@ -51,13 +51,14 @@ function requestTypeName(type) {
 }
 
 export class LarptrixMatrixCrypto {
-  constructor({ api, userId, serverName, deviceId, storePassphrase }) {
+  constructor({ api, userId, serverName, deviceId, storePassphrase, freshStart = false }) {
     this.api = api;
     this.internalUserId = userId;
     this.serverName = serverName;
     this.matrixUserId = "@" + userId + ":" + serverName;
     this.deviceIdValue = deviceId;
     this.storePassphrase = storePassphrase;
+    this.freshStart = freshStart === true;
     this.machine = null;
     this.processingRequests = null;
     this.processingToDevice = Promise.resolve();
@@ -103,9 +104,11 @@ export class LarptrixMatrixCrypto {
     );
     await this.processOutgoingRequests();
     await this.processPendingToDevice();
-    const backupRestored = await this.restoreRoomKeyBackup();
+    const backupRestored = this.freshStart
+      ? false
+      : await this.restoreRoomKeyBackup();
     await this.processOutgoingRequests();
-    if (backupRestored) await this.syncRoomKeyBackup();
+    if (this.freshStart || backupRestored) await this.syncRoomKeyBackup();
     return this;
   }
 

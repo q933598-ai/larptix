@@ -3833,3 +3833,112 @@ html[data-theme="custom"] .music-library {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+
+/* Friend request navigation */
+.nav-badge {
+  min-width: 1.35rem;
+  height: 1.25rem;
+  display: inline-grid;
+  place-items: center;
+  margin-left: auto;
+  padding: 0 .35rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #041009;
+  font-size: .68rem;
+  font-weight: 700;
+}
+.friend-requests-heading {
+  padding: 12px 8px 5px;
+  color: var(--muted);
+  font-size: .7rem;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.friend-request-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+}
+.friend-request-row .request-user-button {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+.friend-request-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.friend-request-actions button {
+  width: auto;
+  padding: 6px 7px;
+  font-size: .7rem;
+}
+.friend-request-actions .request-accept {
+  color: var(--accent-strong);
+}
+
+/* Only the currently opened conversation gets a persistent background. */
+.people li.chat-active > button,
+.people li.chat-active > .request-user-button {
+  background: var(--me);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.people li:not(.chat-active) > button:hover {
+  background: var(--panel-3);
+}
+.people li.chat-active > button:hover {
+  background: var(--me);
+}
+
+/* E2E reset separator shown only on the device that performed the reset. */
+.e2e-reset-notice {
+  display: grid;
+  gap: 3px;
+  margin: 10px 4px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--panel-2) 88%, transparent);
+  color: var(--muted);
+  font-size: .75rem;
+  text-align: center;
+}
+.e2e-reset-notice strong {
+  color: var(--text);
+  font-size: .78rem;
+}
+.danger-action {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line)) !important;
+}
+.danger-action:hover {
+  border-color: var(--danger) !important;
+  color: var(--danger) !important;
+}
+
+/* The floating player is one draggable surface; only its actual controls consume clicks. */
+.music-player {
+  touch-action: none;
+  cursor: grab;
+}
+.music-player.dragging {
+  cursor: grabbing;
+}
+.music-player .music-player-track {
+  pointer-events: none;
+}
+.music-player button,
+.music-player input,
+.music-player a {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.music-player .music-progress,
+.music-player .music-volume {
+  cursor: ew-resize;
+}
