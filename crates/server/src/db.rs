@@ -2447,7 +2447,10 @@ impl Database {
         let mut reactions_by_message: HashMap<String, Vec<ReactionSummary>> = HashMap::new();
         for row in reaction_rows {
             let (message_id, reaction) = row?;
-            reactions_by_message.entry(message_id).or_default().push(reaction);
+            reactions_by_message
+                .entry(message_id)
+                .or_default()
+                .push(reaction);
         }
         let is_channel: bool = conn.query_row(
             "SELECT is_channel FROM groups WHERE id = ?1",
@@ -2483,9 +2486,7 @@ impl Database {
                 }
             }
             message.attachments = attachments;
-            message.reactions = reactions_by_message
-                .remove(&message.id)
-                .unwrap_or_default();
+            message.reactions = reactions_by_message.remove(&message.id).unwrap_or_default();
             if is_channel {
                 message.view_count = conn.query_row(
                     "SELECT COUNT(*) FROM message_views WHERE message_id = ?1",
