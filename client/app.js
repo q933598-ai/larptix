@@ -519,6 +519,7 @@ let voiceRecordingTimer = null;
 let voiceRecordingStartedAt = 0;
 const speakingMonitors = new Map();
 const iceCandidatesBeforeOffer = new Map();
+const staleDirectCallSessions = new Map();
 
 let groupCallId = null;
 let groupCallGroupId = null;
@@ -4828,6 +4829,7 @@ async function startCall(kind) {
       if (!peerConnection || callPeerId !== peerId) return;
       stopCallRingtone();
       callNoAnswer = true;
+      lastDirectCallAvatarPeerId = me?.user_id || null;
       callStatus.textContent = "No answer";
       callAudioPlaceholder.hidden = true;
       callPlaceholderRemoteAvatar.replaceChildren();
@@ -4978,7 +4980,19 @@ async function handleCallSignal(signal) {
   }
   if (!me || signal.sender_id === me.user_id) return;
   const incomingCallId = signal.payload?.call_id || null;
+  const now = Date.now();
+  for (const [sessionId, expiresAt] of staleDirectCallSessions) {
+    if (expiresAt <= now) staleDirectCallSessions.delete(sessionId);
+  }
+  if (incomingCallId && staleDirectCallSessions.has(incomingCallId)) return;
   if (signal.kind === "offer" && !peerConnection) {
+    if (
+      pendingIncomingCall
+      && pendingIncomingCall.sender_id === signal.sender_id
+      && pendingIncomingCall.payload?.call_id
+      && incomingCallId
+      && pendingIncomingCall.payload.call_id !== incomingCallId
+    ) return;
     pendingIncomingCall = signal;
     directCallSessionId = incomingCallId;
     callPeerId = signal.sender_id;
@@ -5602,6 +5616,9 @@ function endCall(notifyPeer) {
   pendingIncomingCall = null;
   pendingIceCandidates = [];
   if (endedDirectPeerId) iceCandidatesBeforeOffer.delete(endedDirectPeerId);
+  if (directCallSessionId) {
+    staleDirectCallSessions.set(directCallSessionId, Date.now() + 30000);
+  }
   callPeerId = null;
   callMediaKind = null;
   directCallSessionId = null;
@@ -6367,10 +6384,31 @@ function renderDirectCallParticipants() {
   if (!directCallParticipants) return;
   directCallParticipants.replaceChildren();
 
-  // The mini avatar is the no-answer demo. Do not render a second
-  // participant row underneath it.
-  if (callNoAnswer || callStage?.classList.contains("call-ending-notice")) {
-    directCallParticipants.hidden = true;
+  const demo = callNoAnswer || callStage?.classList.contains("call-ending-notice");
+  if (demo) {
+    const demoId =
+      lastDirectCallAvatarPeerId
+      || lastDirectCallPeerId
+      || pendingIncomingCall?.sender_id
+      || null;
+    if (!demoId) {
+      directCallParticipants.hidden = true;
+      return;
+    }
+    const user = demoId === me?.user_id
+      ? me
+      : users.find((item) => item.user_id === demoId)
+        || { user_id: demoId, display_name: "Larptrix user" };
+    const chip = document.createElement("div");
+    chip.className = "call-participant-chip";
+    const avatar = document.createElement("span");
+    avatar.className = "avatar";
+    paintAvatar(avatar, user);
+    const name = document.createElement("span");
+    name.textContent = user?.display_name || "Participant";
+    chip.append(avatar, name);
+    directCallParticipants.append(chip);
+    directCallParticipants.hidden = false;
     return;
   }
 
@@ -6459,22 +6497,12 @@ function showDirectCallNotice(targetPeerId, message, { join = false, kind = "aud
 }
 
 function renderDirectCallAvatarStack() {
-  if (!directCallAvatarStack) return;
-  directCallAvatarStack.replaceChildren();
-  const ids = [];
-  // The compact avatar stack is only the no-answer/missed-call preview.
-  // Normal calls use the full participant row inside the call stage.
-  if (callNoAnswer && lastDirectCallAvatarPeerId) {
-    ids.push(lastDirectCallAvatarPeerId);
+  // The old compact stack duplicated the full call participant UI.
+  // Keep the element hidden; the no-answer demo uses the large centered avatar.
+  if (directCallAvatarStack) {
+    directCallAvatarStack.replaceChildren();
+    directCallAvatarStack.hidden = true;
   }
-  for (const id of ids.filter(Boolean).slice(0, 1)) {
-    const avatar = document.createElement("span");
-    avatar.className = "avatar call-mini-avatar";
-    const user = id === me?.user_id ? me : users.find((item) => item.user_id === id);
-    paintAvatar(avatar, user || { user_id: id, display_name: "?" });
-    directCallAvatarStack.append(avatar);
-  }
-  directCallAvatarStack.hidden = ids.length === 0;
   renderDirectCallParticipants();
 }
 
