@@ -1795,8 +1795,6 @@ profileOpen.addEventListener("click", async () => {
     renderCustomActivityEditor();
     updateOwnProfileCard(profile);
     showMusicActivity.checked = musicActivityEnabled;
-    showSpotifyActivity.checked = spotifyActivityEnabled;
-    updateSpotifyUi();
     await populateCallDeviceSelects();
     if (profileMicrophone) profileMicrophone.value = selectedCallDeviceId("audioinput");
     if (profileSpeakers) profileSpeakers.value = selectedCallDeviceId("audiooutput");
@@ -2456,9 +2454,7 @@ profileForm.addEventListener("submit", async (event) => {
       .filter((item) => item.name.trim())
       .slice(0, 3);
     musicActivityEnabled = showMusicActivity.checked;
-    spotifyActivityEnabled = showSpotifyActivity.checked;
     localStorage.setItem("larptrix_show_music_activity", musicActivityEnabled ? "1" : "0");
-    localStorage.setItem("larptrix_show_spotify_activity", spotifyActivityEnabled ? "1" : "0");
     await syncActivities();
     window.larptixMusicStatus?.refresh?.();
     renderMe();
@@ -2509,7 +2505,6 @@ logoutBtn.addEventListener("click", async () => {
   if (socket) socket.close();
   const signedOutUserId = me?.user_id;
   if (signedOutUserId) await api("POST", "/api/me/activities", { activities: [] }).catch(() => {});
-  stopSpotifyPolling();
   await api("POST", "/api/logout", {});
   me = null;
   peerId = null;
@@ -7623,7 +7618,6 @@ async function syncActivities(next = null) {
   const source = next || [
     ...customActivities,
     ...(musicActivityEnabled && localMusicActivity ? [localMusicActivity] : []),
-    ...(spotifyActivityEnabled && spotifyActivity ? [spotifyActivity] : []),
   ];
   const activities = source
     .filter((item) => item?.name?.trim())
@@ -7640,9 +7634,7 @@ async function syncActivities(next = null) {
     me = { ...me, activity: result.activity || null, activities: result.activities || activities };
     if (next) {
       customActivities = [];
-      localMusicActivity = null;
-      spotifyActivity = null;
-    }
+      localMusicActivity = null;    }
     updateOwnProfileCard(me);
     renderUsers();
   } catch {
