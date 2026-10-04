@@ -64,11 +64,12 @@
           <h2>Friends</h2>
           
         </div>
-        <input id="user-search" class="user-search" type="search" placeholder="Find by name or @username" autocomplete="off" />
-        <nav class="side-nav" aria-label="Larptix sections">
+        <nav class="side-nav" aria-label="Larptrix sections">
           <button id="chat-view-open" type="button" class="side-nav-button active">▣ <span>Chats</span></button>
+          <button id="friend-requests-open" type="button" class="side-nav-button">↔ <span>Requests</span><span id="friend-requests-badge" class="nav-badge" hidden>0</span></button>
         </nav>
-        <p class="friends-search-hint">Search for people to add them to your friends.</p>
+        <input id="user-search" class="user-search" type="search" placeholder="Search people by name or @username…" autocomplete="off" />
+        <p class="friends-search-hint">Search by exact username, @username, name, or part of either.</p>
         <ul id="users"></ul>
       </aside>
 
@@ -253,6 +254,12 @@
             </div>
           </div>
 
+
+
+          <audio id="music-audio" preload="metadata"></audio>
+        </section>
+      </main>
+
           <footer id="music-player" class="music-player" hidden>
             <div class="music-player-track music-player-drag-area" title="Drag music player">
               <div id="music-player-cover" class="music-player-cover">♫</div>
@@ -276,10 +283,6 @@
               <input id="music-volume" class="music-volume" type="range" min="0" max="1" value="0.8" step="0.01" aria-label="Volume" />
             </div>
           </footer>
-
-          <audio id="music-audio" preload="metadata"></audio>
-        </section>
-      </main>
     </div>
 
     <nav class="mobile-nav" aria-label="Mobile navigation">
@@ -339,6 +342,8 @@
           <code id="crypto-own-fingerprint" class="crypto-fingerprint" hidden></code>
           <button id="enable-e2e" type="button" class="ghost">Set up / unlock E2E</button>
           <button id="forget-e2e-device" type="button" class="ghost" hidden>Forget this device</button>
+          <button id="reset-e2e-keys" type="button" class="ghost danger-action" hidden>Reset E2E keys</button>
+          <p id="reset-e2e-help" class="settings-help" hidden>This starts a new encryption identity on this device. Older messages stay available to the other participant, but this device starts a fresh chat history.</p>
         </section>
         <p id="profile-error" class="error" hidden></p>
         <div class="profile-actions profile-footer">
