@@ -154,6 +154,33 @@ pub async fn handle_socket(
                         send_error(&tx, "bad_send", err);
                     }
                 }
+                Ok(ClientMessage::React {
+                    peer_id,
+                    message_id,
+                    emoji,
+                    add,
+                }) => {
+                    if let Err(err) = react_to_message(
+                        &state,
+                        &user,
+                        &peer_id,
+                        &message_id,
+                        &emoji,
+                        add,
+                    ) {
+                        send_error(&tx, "bad_reaction", err);
+                    }
+                }
+                Ok(ClientMessage::ViewMessage {
+                    peer_id,
+                    message_id,
+                }) => {
+                    if let Err(err) =
+                        view_channel_message(&state, &user, &peer_id, &message_id)
+                    {
+                        send_error(&tx, "bad_message_view", err);
+                    }
+                }
                 Ok(ClientMessage::Delete {
                     peer_id,
                     message_id,
@@ -584,6 +611,11 @@ fn relay_call_signal(
     kind: &str,
     payload: serde_json::Value,
 ) -> Result<(), String> {
+    if let Some(group) = state.db.group(peer_id).map_err(|err| err.to_string())? {
+        if group.is_channel {
+            return Err("channels do not support calls".into());
+        }
+    }
     if !matches!(
         kind,
         "offer"
@@ -1392,6 +1424,91 @@ fn validate_e2e_message(
         return Err("invalid encrypted message envelope".into());
     }
 
+    Ok(())
+}
+
+fn fanout_message_metadata(state: &AppState, peer_id: &str, payload: ServerMessage) {
+    if let Ok(Some(group)) = state.db.group(peer_id) {
+        for member_id in group.member_ids {
+            if let Ok(member) = Uuid::parse_str(&member_id) {
+                state.hub.send_to(member, payload.clone());
+            }
+        }
+    } else if let Ok(peer) = Uuid::parse_str(peer_id) {
+        state.hub.send_to(peer, payload);
+    }
+}
+
+fn react_to_message(
+    state: &AppState,
+    user: &UserRow,
+    peer_id: &str,
+    message_id: &str,
+    emoji: &str,
+    add: bool,
+) -> Result<(), String> {
+    let group = state.db.group(peer_id).map_err(|err| err.to_string())?;
+    if let Some(group) = group {
+        if !group.member_ids.iter().any(|id| id == &user.id) {
+            return Err("not a member of this group".into());
+        }
+    } else if peer_id == user.id {
+        return Err("cannot react in a self chat".into());
+    } else if state
+        .db
+        .user_by_id(peer_id)
+        .map_err(|err| err.to_string())?
+        .is_none()
+    {
+        return Err("unknown chat".into());
+    }
+
+    let reactions = state
+        .db
+        .toggle_message_reaction(message_id, &user.id, emoji, add)
+        .map_err(db_err)?;
+    fanout_message_metadata(
+        state,
+        peer_id,
+        ServerMessage::MessageReaction {
+            peer_id: peer_id.to_string(),
+            message_id: message_id.to_string(),
+            reactions,
+        },
+    );
+    Ok(())
+}
+
+fn view_channel_message(
+    state: &AppState,
+    user: &UserRow,
+    peer_id: &str,
+    message_id: &str,
+) -> Result<(), String> {
+    let group = state
+        .db
+        .group(peer_id)
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| "channel not found".to_string())?;
+    if !group.is_channel {
+        return Err("message views are only available in channels".into());
+    }
+    if !group.member_ids.iter().any(|id| id == &user.id) {
+        return Err("not a channel member".into());
+    }
+    let view_count = state
+        .db
+        .mark_channel_message_viewed(message_id, &user.id)
+        .map_err(db_err)?;
+    fanout_message_metadata(
+        state,
+        peer_id,
+        ServerMessage::MessageViewUpdate {
+            peer_id: peer_id.to_string(),
+            message_id: message_id.to_string(),
+            view_count,
+        },
+    );
     Ok(())
 }
 
