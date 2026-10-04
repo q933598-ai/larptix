@@ -1109,7 +1109,11 @@ impl Database {
         rows.collect()
     }
 
-    pub fn pending_friend_ids(&self, user_id: &str, incoming: bool) -> rusqlite::Result<Vec<String>> {
+    pub fn pending_friend_ids(
+        &self,
+        user_id: &str,
+        incoming: bool,
+    ) -> rusqlite::Result<Vec<String>> {
         let conn = self.conn.lock().expect("db lock");
         let (column, other) = if incoming {
             ("addressee_id", "requester_id")
