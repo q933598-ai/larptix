@@ -5579,6 +5579,10 @@ html[data-theme="catppuccin-mocha"] .call-stage .call-dock-heading > .ghost {
   flex: 0 0 auto;
 }
 
+.direct-call-topbar[hidden] {
+  display: none !important;
+}
+
 .direct-call-topbar {
   display: inline-flex;
   align-items: center;
