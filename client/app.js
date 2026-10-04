@@ -4317,7 +4317,7 @@ function renderDirectCallTopbar(id = peerId) {
   const active = Boolean(remoteId && isDirectCallActive(remoteId));
   const incoming = Boolean(remoteId && pendingIncomingCall?.sender_id === remoteId && !peerConnection);
   const joinable = Boolean(remoteId && lastDirectCallJoinPeerId === remoteId && !peerConnection && !directCallOutgoing);
-  const isDirect = Boolean(remoteId && !selected?.is_group && !groupCallId);
+  const isDirect = Boolean(remoteId && id === remoteId && !selected?.is_group && !groupCallId);
 
   if (!isDirect) {
     directCallJoin.hidden = true;
