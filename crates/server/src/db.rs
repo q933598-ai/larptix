@@ -1868,9 +1868,9 @@ impl Database {
 
         for attachment in &attachment_rows {
             conn.execute(
-                "INSERT INTO message_attachments (message_id, attachment_id)
-                 VALUES (?1, ?2)",
-                params![message_id, attachment.id],
+                "INSERT INTO message_attachments (message_id, attachment_id, position)
+                 VALUES (?1, ?2, ?3)",
+                params![message_id, attachment.id, index as i64],
             )
             .map_err(DbError::Sqlite)?;
         }
@@ -1980,7 +1980,7 @@ impl Database {
                  FROM message_attachments ma
                  JOIN attachments a ON a.id = ma.attachment_id
                  WHERE ma.message_id = ?1
-                 ORDER BY ma.attachment_id",
+                 ORDER BY ma.position",
             )?;
             let rows = stmt.query_map([&message.id], |row| {
                 let id: String = row.get(0)?;
@@ -2076,11 +2076,11 @@ impl Database {
         )
         .map_err(DbError::Sqlite)?;
 
-        for attachment in &attachment_rows {
+        for (index, attachment) in attachment_rows.iter().enumerate() {
             conn.execute(
-                "INSERT INTO message_attachments (message_id, attachment_id)
-                 VALUES (?1, ?2)",
-                params![message_id, attachment.id],
+                "INSERT INTO message_attachments (message_id, attachment_id, position)
+                 VALUES (?1, ?2, ?3)",
+                params![message_id, attachment.id, index as i64],
             )
             .map_err(DbError::Sqlite)?;
         }
@@ -2502,7 +2502,9 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         CREATE TABLE IF NOT EXISTS message_attachments (
             message_id TEXT NOT NULL,
             attachment_id TEXT NOT NULL,
-            PRIMARY KEY (message_id, attachment_id),
+            position INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (message_id, position),
+            UNIQUE (message_id, attachment_id),
             FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
             FOREIGN KEY (attachment_id) REFERENCES attachments(id) ON DELETE CASCADE
         );
