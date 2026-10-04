@@ -189,7 +189,9 @@ let socketHeartbeatTimer = null;
 let me = null;
 let peerId = null;
 let users = [];
+let searchResults = [];
 let groups = [];
+let searchRequestId = 0;
 let reconnect = false;
 let mode = "login";
 let legacyLogin = false;
@@ -883,7 +885,12 @@ function savedChatEntry() {
 }
 
 function getChatEntries() {
-  return [savedChatEntry(), ...users, ...groups];
+  const entries = [savedChatEntry(), ...users, ...groups, ...searchResults];
+  const unique = new Map();
+  for (const entry of entries) {
+    if (entry?.user_id && !unique.has(entry.user_id)) unique.set(entry.user_id, entry);
+  }
+  return [...unique.values()];
 }
 
 function clearReplyComposer() {
@@ -1599,7 +1606,35 @@ document.getElementById("create-group-cancel").addEventListener("click", () => c
 document.getElementById("create-group-form").addEventListener("submit", createGroup);
 document.getElementById("create-channel-cancel")?.addEventListener("click", () => createChannelDialog.close());
 document.getElementById("create-channel-form")?.addEventListener("submit", createChannel);
-userSearchInput.addEventListener("input", renderUsers);
+let friendSearchTimer = null;
+
+async function refreshFriendSearch() {
+  const query = userSearchInput.value.trim();
+  const requestId = ++searchRequestId;
+  if (!query) {
+    searchResults = [];
+    renderUsers();
+    return;
+  }
+  try {
+    const result = await api("GET", "/api/users/search?q=" + encodeURIComponent(query));
+    if (requestId !== searchRequestId) return;
+    searchResults = Array.isArray(result?.users) ? result.users : [];
+    renderUsers();
+  } catch (err) {
+    if (requestId !== searchRequestId) return;
+    searchResults = [];
+    appendSystem("User search failed: " + (err.message || err));
+    renderUsers();
+  }
+}
+
+function scheduleFriendSearch() {
+  clearTimeout(friendSearchTimer);
+  friendSearchTimer = setTimeout(() => void refreshFriendSearch(), 180);
+}
+
+userSearchInput.addEventListener("input", scheduleFriendSearch);
 document.getElementById("emoji-picker-toggle").addEventListener("click", () => {
   emojiPicker.hidden = !emojiPicker.hidden;
 });
@@ -2617,7 +2652,8 @@ function connect() {
         me = msg.user;
         presenceByUserId.set(me.user_id, localStorage.getItem(PRESENCE_KEY) || "online");
         renderPresenceStatus(presenceByUserId.get(me.user_id));
-        users = msg.users;
+        users = Array.isArray(msg.users) ? msg.users : [];
+        me.message_policy = msg.user?.message_policy || me.message_policy || "everyone";
         renderMe();
         renderUsers();
         void loadGroups();
@@ -2635,9 +2671,16 @@ function connect() {
         }
         break;
       case "directory":
-        users = msg.users;
+        users = Array.isArray(msg.users) ? msg.users : [];
+        if (!users.some((user) => user.user_id === peerId) && peerId && !groups.some((group) => group.user_id === peerId)) {
+          peerId = null;
+          chatTitlebar.hidden = true;
+          composer.hidden = true;
+          emptyEl.hidden = false;
+        }
         renderUsers();
         renderGroupCallBanner();
+        if (userSearchInput.value.trim()) void refreshFriendSearch();
         break;
       case "groups":
         groups = msg.groups.map((group) => ({
@@ -3040,7 +3083,7 @@ function openChat(id) {
   // Switching chats must not terminate an active call.
   // Calls live independently from the currently opened chat.
   peerId = id;
-  const selected = [...users, ...groups].find((user) => user.user_id === id);
+  const selected = getChatEntries().find((user) => user.user_id === id);
   peerVerified.hidden = true;
   if (!selected?.is_group) void refreshPeerVerification(id);
   document.getElementById("start-audio-call").hidden = false;
@@ -4096,17 +4139,37 @@ function renderMe() {
 function renderUsers() {
   usersEl.replaceChildren();
   const query = userSearchInput.value.trim().replace(/^@/, "").toLocaleLowerCase();
-  const matches = getChatEntries().filter((user) =>
-    !query || user.display_name.toLocaleLowerCase().includes(query) ||
-    (user.username || "").toLocaleLowerCase().includes(query)
-  );
+  const base = query
+    ? [...users.filter((user) => user.display_name.toLocaleLowerCase().includes(query)
+        || (user.username || "").toLocaleLowerCase().includes(query)),
+      ...searchResults]
+    : [savedChatEntry(), ...users, ...groups];
+  const dedupe = new Map();
+  for (const user of base) {
+    if (!user || user.user_id === me?.user_id || dedupe.has(user.user_id)) continue;
+    dedupe.set(user.user_id, user);
+  }
+  const matches = [...dedupe.values()];
   const pinned = getPinnedChats();
-  matches.sort((a, b) => (a.is_saved_chat ? -2 : 0) - (b.is_saved_chat ? -2 : 0)
+  matches.sort((a, b) =>
+    (a.is_saved_chat ? -2 : 0) - (b.is_saved_chat ? -2 : 0)
+    || (a.friend_status === "accepted" ? -1 : 0) - (b.friend_status === "accepted" ? -1 : 0)
     || (pinned.has(b.user_id) ? 1 : 0) - (pinned.has(a.user_id) ? 1 : 0)
-    || a.display_name.localeCompare(b.display_name));
+    || a.display_name.localeCompare(b.display_name)
+  );
+
+  if (query && !matches.length) {
+    const empty = document.createElement("li");
+    empty.className = "search-empty";
+    empty.textContent = "No users found.";
+    usersEl.append(empty);
+    return;
+  }
+
   for (const user of matches) {
-    if (user.user_id === me?.user_id) continue;
     const li = document.createElement("li");
+    li.className = user.friend_status && user.friend_status !== "accepted" ? "search-person" : "";
+
     const button = document.createElement("button");
     button.type = "button";
     button.classList.toggle("active", user.user_id === peerId);
@@ -4117,24 +4180,74 @@ function renderUsers() {
     const presence = user.is_saved_chat ? "saved" : getPresence(user);
     dot.className = user.is_saved_chat ? "dot saved-dot" : presence === "online" ? "dot on" : presence === "dnd" ? "dot dnd" : "dot";
     dot.title = user.is_saved_chat ? "Saved Messages" : presence;
+
     const name = document.createElement("span");
     name.className = "person-name";
     const label = document.createElement("span");
     label.textContent = user.is_saved_chat ? "Saved Messages" : user.is_group ? "👥 " + user.display_name : user.display_name;
     name.append(label);
+    if (!user.is_saved_chat && user.username && !user.is_group) {
+      const handle = document.createElement("small");
+      handle.textContent = "@" + user.username;
+      name.append(handle);
+    }
     if (!user.is_saved_chat && user.activity && !user.is_group) {
       const activity = document.createElement("small");
       activity.className = "person-activity";
       activity.textContent = user.activity;
       name.append(activity);
     }
-    if (!user.is_saved_chat && user.username && !user.is_group) {
-      const handle = document.createElement("small");
-      handle.textContent = "@" + user.username;
-      name.append(handle);
-    }
     button.append(avatar, name, dot);
-    button.addEventListener("click", () => openChat(user.user_id));
+
+    if (!query || user.is_saved_chat || user.is_group || user.friend_status === "accepted") {
+      button.addEventListener("click", () => openChat(user.user_id));
+    } else {
+      button.classList.add("search-result-button");
+      button.addEventListener("click", () => openChat(user.user_id));
+    }
+
+    if (query && !user.is_saved_chat && !user.is_group && user.friend_status !== "accepted") {
+      const relation = document.createElement("button");
+      relation.type = "button";
+      relation.className = "chat-friend-action ghost";
+      if (user.friend_status === "pending_incoming") {
+        relation.textContent = "Accept";
+        relation.title = "Accept friend request";
+        relation.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          try {
+            await api("POST", "/api/friends/" + encodeURIComponent(user.user_id) + "/accept", {});
+            await refreshFriendSearch();
+          } catch (err) {
+            appendSystem(err.message || "Could not accept friend request.");
+          }
+        });
+      } else if (user.friend_status === "pending_outgoing") {
+        relation.textContent = "Requested";
+        relation.disabled = true;
+        relation.title = "Friend request already sent";
+      } else {
+        relation.textContent = "Add";
+        relation.title = "Add to friends";
+        relation.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          relation.disabled = true;
+          try {
+            await api("POST", "/api/friends/" + encodeURIComponent(user.user_id), {});
+            await refreshFriendSearch();
+          } catch (err) {
+            relation.disabled = false;
+            appendSystem(err.message || "Could not add friend.");
+          }
+        });
+      }
+      li.append(button, relation);
+      usersEl.append(li);
+      continue;
+    }
+
     const pin = document.createElement("button");
     pin.type = "button";
     pin.className = "chat-pin ghost";
