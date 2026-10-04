@@ -688,7 +688,13 @@ async function showBrowserNotification(title, body, tag, iconUrl = null) {
   if (document.visibilityState === "visible" && document.hasFocus()) return;
   const native = getTauriNotificationApi();
   if (native?.sendNotification) {
-    try { native.sendNotification({ title, body }); } catch {}
+    try {
+      native.sendNotification({
+        title,
+        body,
+        ...(iconUrl ? { icon: iconUrl } : {}),
+      });
+    } catch {}
     return;
   }
   if (typeof Notification !== "function" || Notification.permission !== "granted") return;
