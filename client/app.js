@@ -3328,7 +3328,13 @@ function connect() {
           is_channel: Boolean(group.is_channel),
           admin_ids: Array.isArray(group.admin_ids) ? group.admin_ids : [],
           post_policy: group.post_policy || (group.is_channel ? "admins" : "members"),
-          group_member_ids: group.member_ids,
+          group_member_ids: Array.isArray(group.member_ids) ? group.member_ids : [],
+          group_description: group.description || "",
+          group_avatar_url: group.avatar_url || null,
+          group_banner_url: group.banner_url || null,
+          avatar_url: group.avatar_url || null,
+          banner_url: group.banner_url || null,
+          subscriber_count: Number(group.subscriber_count || group.member_ids?.length || 0),
         }));
         renderUsers();
         renderGroupCallBanner();
@@ -3339,6 +3345,11 @@ function connect() {
         peerName.hidden = false;
         composer.hidden = false;
         peerName.textContent = msg.peer.display_name;
+        peerMeta.textContent = msg.peer.is_channel
+          ? `${msg.peer.subscriber_count || msg.peer.group_member_ids?.length || 0} subscriber(s)`
+          : msg.peer.is_group
+            ? `${msg.peer.group_member_ids?.length || 0} member(s)`
+            : "";
         if (!msg.peer.is_group) void refreshPeerVerification(msg.peer.user_id);
         if (msg.peer.is_group && !groups.some((group) => group.user_id === msg.peer.user_id)) {
           groups.push({ ...msg.peer });
@@ -3346,14 +3357,15 @@ function connect() {
         } else if (msg.peer.is_group) {
           groups = groups.map((group) => group.user_id === msg.peer.user_id ? { ...group, ...msg.peer } : group);
         }
-        document.getElementById("start-audio-call").hidden = false;
-        document.getElementById("start-video-call").hidden = false;
-        document.getElementById("start-audio-call").textContent = msg.peer.is_group ? "Group audio" : "Call";
-        document.getElementById("start-video-call").textContent = msg.peer.is_group ? "Group video" : "Video";
-        groupCallStart.hidden = !msg.peer.is_group;
-        groupCallStart.textContent = msg.peer.is_group
+        document.getElementById("start-audio-call").hidden = msg.peer.is_group;
+        document.getElementById("start-video-call").hidden = msg.peer.is_group;
+        groupCallStart.hidden = !msg.peer.is_group || msg.peer.is_channel;
+        groupCallStart.textContent = msg.peer.is_group && !msg.peer.is_channel
           ? (activeGroupCalls.get(msg.peer.user_id)?.active ? "Join group call" : "Group call")
           : "Group call";
+        groupMembersOpen.hidden =
+          !msg.peer.is_group
+          || (msg.peer.is_channel && !msg.peer.admin_ids?.includes(me?.user_id));
         renderGroupCallBanner();
         logEl.replaceChildren();
         messageBodyElementsById.clear();
