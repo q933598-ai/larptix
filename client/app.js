@@ -95,6 +95,13 @@ const fileInput = document.getElementById("file");
 const audioFileInput = document.getElementById("audio-file");
 const attachmentPreview = document.getElementById("attachment-preview");
 const recordAudioButton = document.getElementById("record-audio");
+const recordVideoButton = document.getElementById("record-video");
+const videoRecording = document.getElementById("video-recording");
+const videoRecordingPreview = document.getElementById("video-recording-preview");
+const videoRecordingTime = document.getElementById("video-recording-time");
+const videoRecordingShape = document.getElementById("video-recording-shape");
+const videoRecordingCancel = document.getElementById("video-recording-cancel");
+const videoRecordingStatus = document.getElementById("video-recording-status");
 const emptyEl = document.getElementById("empty");
 const peerName = document.getElementById("peer-name");
 const peerMeta = document.getElementById("peer-meta");
@@ -263,6 +270,15 @@ let previewUrls = [];
 let recorder = null;
 let recordingStream = null;
 let recordedChunks = [];
+let videoRecorder = null;
+let videoRecordingStream = null;
+let videoRecordedChunks = [];
+let videoRecordingStartedAt = 0;
+let videoRecordingTimer = null;
+let videoRecordingCancelled = false;
+let videoMessageShape = localStorage.getItem("larptrix_video_message_shape") === "square" ? "square" : "circle";
+let videoMessageFile = null;
+const videoMessageShapeByFile = new WeakMap();
 let cryptoDevice = null;
 let cryptoDeviceBundle = null;
 let cryptoStoredState = null;
@@ -2776,6 +2792,14 @@ composer.addEventListener("submit", async (event) => {
     await sendEncryptedPayloadToPeer(peerId, {
       text: body,
       ...(replyingToMessage ? { reply_to: replyingToMessage } : {}),
+      ...(videoMessageFile && files.includes(videoMessageFile)
+        ? {
+            video_message: {
+              shape: videoMessageShapeByFile.get(videoMessageFile) || videoMessageShape,
+              name: videoMessageFile.name,
+            },
+          }
+        : {}),
     }, files);
     bodyInput.value = "";
     clearAttachment();
@@ -2797,6 +2821,8 @@ audioFileInput.addEventListener("change", () => {
   queueAttachments(audioFileInput.files);
   audioFileInput.value = "";
 });
+
+recordVideoButton?.addEventListener("click", () => void toggleVideoRecording());
 
 let fileDropDepth = 0;
 
@@ -7514,7 +7540,7 @@ async function renderGifFavorites() {
   }
 }
 
-async function renderEncryptedAttachment(attachment, metadata, container) {
+async function renderEncryptedAttachment(attachment, metadata, container, { videoMessageShape: videoShape = null } = {}) {
   const urlForAttachment = attachment?.url
     || metadata?.url
     || (metadata?.id ? `/api/attachments/${encodeURIComponent(metadata.id)}` : null);
@@ -7564,7 +7590,15 @@ async function renderEncryptedAttachment(attachment, metadata, container) {
     container.append(image);
   } else if (metadata.mime.startsWith("video/")) {
     const video = document.createElement("video");
-    video.className = "chat-video";
+    const resolvedShape =
+      videoShape === "square"
+        ? "square"
+        : videoShape === "circle"
+          ? "circle"
+          : null;
+    video.className = "chat-video" + (resolvedShape
+      ? " video-message-media video-message-" + resolvedShape
+      : "");
     video.controls = true;
     video.playsInline = true;
     video.preload = "metadata";
@@ -7612,7 +7646,17 @@ async function renderEncryptedAttachments(message, payload, container) {
     const fallbackAttachment = index === 0
       ? message?.attachment
       : Array.isArray(message?.attachments) ? message.attachments[index] : null;
-    await renderEncryptedAttachment(fallbackAttachment, metadata, media);
+    await renderEncryptedAttachment(
+      fallbackAttachment,
+      metadata,
+      media,
+      {
+        videoMessageShape:
+          payload?.video_message?.name === metadata?.name
+            ? payload.video_message.shape
+            : null,
+      },
+    );
   }
 }
 
@@ -7652,10 +7696,16 @@ function renderAttachmentPreview() {
       item.append(image);
     } else if (file.type.startsWith("video/")) {
       const video = document.createElement("video");
+      const shape = videoMessageShapeByFile.get(file);
+      video.className = shape
+        ? "video-message-preview video-message-" + shape
+        : "video-message-preview";
       video.src = url;
       video.muted = true;
       video.playsInline = true;
       video.preload = "metadata";
+      video.autoplay = true;
+      video.loop = true;
       item.append(video);
     } else if (file.type.startsWith("audio/")) {
       const audio = document.createElement("audio");
@@ -7758,6 +7808,7 @@ function renderSelectedGif(gif, container) {
 function clearAttachment() {
   pendingAttachments = [];
   pendingGif = null;
+  videoMessageFile = null;
   for (const url of previewUrls) URL.revokeObjectURL(url);
   previewUrls = [];
   attachmentPreview.replaceChildren();
@@ -7786,7 +7837,185 @@ function cancelVoiceRecording() {
   if (recordAudioButton) recordAudioButton.textContent = "🎙";
 }
 
-async function toggleRecording() {
+async function selectedVideoMessageShape() {
+  return videoMessageShape === "square" ? "square" : "circle";
+}
+
+function updateVideoRecordingUi() {
+  if (!videoRecordingTime) return;
+  const elapsed = Math.max(0, Date.now() - videoRecordingStartedAt);
+  const seconds = Math.floor(elapsed / 1000);
+  videoRecordingTime.textContent =
+    Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0");
+}
+
+function applyVideoMessageShape(shape) {
+  videoMessageShape = shape === "square" ? "square" : "circle";
+  localStorage.setItem("larptrix_video_message_shape", videoMessageShape);
+  const wrap = videoRecording?.querySelector(".video-recording-preview-wrap");
+  if (wrap) wrap.dataset.shape = videoMessageShape;
+  if (videoRecordingShape) {
+    videoRecordingShape.textContent = videoMessageShape === "circle" ? "Circle" : "Square";
+    videoRecordingShape.setAttribute("aria-pressed", String(videoMessageShape === "circle"));
+  }
+}
+
+function finishVideoRecordingCleanup() {
+  videoRecording?.setAttribute("hidden", "");
+  if (videoRecordingTimer) clearInterval(videoRecordingTimer);
+  videoRecordingTimer = null;
+  if (videoRecordingPreview) videoRecordingPreview.srcObject = null;
+}
+
+function cancelVideoRecording() {
+  videoRecordingCancelled = true;
+  if (videoRecorder && videoRecorder.state !== "inactive") {
+    videoRecorder.stop();
+  } else {
+    videoRecordingStream?.getTracks().forEach((track) => track.stop());
+    videoRecordingStream = null;
+    videoRecordedChunks = [];
+    videoRecorder = null;
+    finishVideoRecordingCleanup();
+  }
+}
+
+async function toggleVideoRecording() {
+  if (videoRecorder && videoRecorder.state === "recording") {
+    videoRecorder.stop();
+    return;
+  }
+  if (recorder && recorder.state === "recording") {
+    appendSystem("Stop the voice recording before starting a video message.");
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    appendSystem("Video recording is not supported by this browser.");
+    return;
+  }
+
+  try {
+    const cameraId = selectedCallDeviceId("videoinput");
+    const audioId = selectedCallDeviceId("audioinput");
+    const videoConstraint = cameraId
+      ? { deviceId: { exact: cameraId }, width: { ideal: 720 }, height: { ideal: 720 } }
+      : { width: { ideal: 720 }, height: { ideal: 720 } };
+    const attempts = [
+      {
+        video: videoConstraint,
+        audio: audioId
+          ? { deviceId: { exact: audioId }, echoCancellation: true }
+          : true,
+      },
+      { video: videoConstraint, audio: false },
+      { video: true, audio: false },
+    ];
+
+    let lastError = null;
+    for (const constraints of attempts) {
+      try {
+        videoRecordingStream = await navigator.mediaDevices.getUserMedia(constraints);
+        break;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    if (!videoRecordingStream) throw lastError || new Error("Could not access the camera.");
+
+    const mimeType = [
+      "video/webm;codecs=vp9,opus",
+      "video/webm;codecs=vp8,opus",
+      "video/webm",
+    ].find((type) => MediaRecorder.isTypeSupported(type));
+
+    videoRecorder = new MediaRecorder(
+      videoRecordingStream,
+      mimeType
+        ? { mimeType, videoBitsPerSecond: 2_500_000, audioBitsPerSecond: 96_000 }
+        : undefined,
+    );
+    videoRecordedChunks = [];
+    videoRecordingCancelled = false;
+    videoRecordingStartedAt = Date.now();
+
+    if (videoRecordingPreview) {
+      videoRecordingPreview.srcObject = videoRecordingStream;
+      videoRecordingPreview.muted = true;
+      videoRecordingPreview.playsInline = true;
+      videoRecordingPreview.play().catch(() => {});
+    }
+
+    applyVideoMessageShape(selectedVideoMessageShape());
+    videoRecording?.removeAttribute("hidden");
+    if (videoRecordingStatus) videoRecordingStatus.textContent =
+      "Recording " + (selectedVideoMessageShape() === "circle" ? "circle" : "square") + " video message…";
+    if (recordVideoButton) {
+      recordVideoButton.textContent = "⏹";
+      recordVideoButton.title = "Stop video message recording";
+      recordVideoButton.classList.add("is-recording");
+    }
+
+    videoRecordingTimer = setInterval(updateVideoRecordingUi, 250);
+    updateVideoRecordingUi();
+
+    const stopAfterLimit = setTimeout(() => {
+      if (videoRecorder?.state === "recording") videoRecorder.stop();
+    }, 60_000);
+
+    videoRecorder.addEventListener("dataavailable", (event) => {
+      if (event.data.size) videoRecordedChunks.push(event.data);
+    });
+
+    videoRecorder.addEventListener("stop", () => {
+      clearTimeout(stopAfterLimit);
+      const instance = videoRecorder;
+      const stream = videoRecordingStream;
+      const wasCancelled = videoRecordingCancelled;
+      const blob = new Blob(videoRecordedChunks, {
+        type: instance?.mimeType || "video/webm",
+      });
+
+      stream?.getTracks().forEach((track) => track.stop());
+      videoRecordingStream = null;
+      videoRecorder = null;
+      videoRecordedChunks = [];
+
+      if (recordVideoButton) {
+        recordVideoButton.textContent = "📹";
+        recordVideoButton.title = "Record a video message";
+        recordVideoButton.classList.remove("is-recording");
+      }
+
+      finishVideoRecordingCleanup();
+
+      if (!wasCancelled && blob.size) {
+        const file = new File([blob], "video-message.webm", {
+          type: blob.type || "video/webm",
+        });
+        videoMessageFile = file;
+        videoMessageShapeByFile.set(file, selectedVideoMessageShape());
+        queueAttachment(file);
+        if (videoRecordingStatus) videoRecordingStatus.textContent = "Video message ready to send.";
+      }
+      videoRecordingCancelled = false;
+    }, { once: true });
+
+    videoRecorder.start(250);
+  } catch (err) {
+    videoRecordingStream?.getTracks().forEach((track) => track.stop());
+    videoRecordingStream = null;
+    videoRecorder = null;
+    finishVideoRecordingCleanup();
+    if (recordVideoButton) {
+      recordVideoButton.textContent = "📹";
+      recordVideoButton.title = "Record a video message";
+      recordVideoButton.classList.remove("is-recording");
+    }
+    appendSystem(err.message || "Could not access the camera.");
+  }
+}
+
+function toggleRecording() {
   if (recorder && recorder.state === "recording") {
     recorder.stop();
     return;
@@ -7835,6 +8064,11 @@ async function toggleRecording() {
     voiceRecording?.setAttribute("hidden", "");
   }
 }
+
+videoRecordingShape?.addEventListener("click", () => {
+  applyVideoMessageShape(selectedVideoMessageShape() === "circle" ? "square" : "circle");
+});
+videoRecordingCancel?.addEventListener("click", cancelVideoRecording);
 
 voiceRecordingCancel?.addEventListener("click", () => {
   if (!recorder || recorder.state === "inactive") return;
