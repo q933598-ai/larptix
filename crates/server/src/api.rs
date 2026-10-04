@@ -1906,8 +1906,13 @@ async fn set_group_media(
         .group(id)
         .map_err(ApiError::db)?
         .ok_or_else(|| ApiError::not_found("group not found"))?;
-    if group.admin_ids.first().map(String::as_str) != Some(user.id.as_str()) {
-        return Err(ApiError::bad("only the group creator can change group media"));
+    let can_edit = if group.is_channel {
+        group.admin_ids.iter().any(|admin| admin == &user.id)
+    } else {
+        group.admin_ids.first().map(String::as_str) == Some(user.id.as_str())
+    };
+    if !can_edit {
+        return Err(ApiError::bad("you do not have permission to change this group media"));
     }
     let saved = save_image(state, &user.id, multipart).await?;
     let old = state
@@ -1923,10 +1928,15 @@ async fn set_group_media(
             ));
         }
     }
-    let key = if column == "avatar_id" { "avatar_url" } else { "banner_url" };
-    Ok(Json(serde_json::json!({
-        key: format!("/api/groups/{id}/{}/", if column == "avatar_id" { "avatar" } else { "banner" }).trim_end_matches('/'),
-    })))
+    let url = format!(
+        "/api/groups/{id}/{}",
+        if column == "avatar_id" { "avatar" } else { "banner" }
+    );
+    if column == "avatar_id" {
+        Ok(Json(serde_json::json!({ "avatar_url": url })))
+    } else {
+        Ok(Json(serde_json::json!({ "banner_url": url })))
+    }
 }
 
 async fn get_group_avatar(
@@ -2477,6 +2487,10 @@ fn public_me(user: &UserRow) -> UserInfo {
         friend_status: "self".to_string(),
         message_policy: "everyone".to_string(),
         group_member_ids: Vec::new(),
+        group_description: String::new(),
+        group_avatar_url: None,
+        group_banner_url: None,
+        subscriber_count: 0,
     }
 }
 
