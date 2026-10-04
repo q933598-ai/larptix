@@ -642,7 +642,7 @@ function saveCustomTheme() {
   if (savedThemeSelect) savedThemeSelect.value = themes[0]?.id || "";
 }
 
-function mixThemeColorfunction mixThemeColor(a, b, amount) {
+function mixThemeColor(a, b, amount) {
   const parse = (value) => [1, 3, 5].map((i) => parseInt(value.slice(i, i + 2), 16));
   const ca = parse(a);
   const cb = parse(b);
@@ -1276,7 +1276,6 @@ function appendSavedMessage(item) {
   li.append(savedAvatar, meta, body);
   const actions = document.createElement("div");
   actions.className = "message-actions";
-  actions.append(createReactionPicker(message));
 
   const reply = document.createElement("button");
   reply.type = "button";
@@ -5536,6 +5535,7 @@ function appendMessage(message) {
 
   const actions = document.createElement("div");
   actions.className = "message-actions";
+  actions.append(createReactionPicker(message));
 
   const reply = document.createElement("button");
   reply.type = "button";
