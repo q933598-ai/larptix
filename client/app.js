@@ -272,6 +272,7 @@ let replyingToMessage = null;
 const decryptedPayloadByMessageId = new Map();
 const mutedRemoteUserIds = new Set();
 const viewedChannelMessages = new Set();
+const matrixDeviceCheckCache = new Map();
 const channelViewObserver = typeof IntersectionObserver === "function"
   ? new IntersectionObserver((entries) => {
       for (const entry of entries) {
@@ -3025,6 +3026,9 @@ function setPeerVerified(userId, verified) {
 async function waitForMatrixDevices(userIds, { attempts = 8, delayMs = 350 } = {}) {
   const ids = [...new Set(userIds.filter((id) => id && id !== me?.user_id))];
   if (!ids.length) return;
+  const cacheKey = ids.slice().sort().join(",");
+  const cachedAt = matrixDeviceCheckCache.get(cacheKey) || 0;
+  if (Date.now() - cachedAt < 15000) return;
 
   let lastMissing = [];
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -3042,7 +3046,10 @@ async function waitForMatrixDevices(userIds, { attempts = 8, delayMs = 350 } = {
       }
     }));
 
-    if (!lastMissing.length) return;
+    if (!lastMissing.length) {
+      matrixDeviceCheckCache.set(cacheKey, Date.now());
+      return;
+    }
     if (attempt + 1 < attempts) {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
