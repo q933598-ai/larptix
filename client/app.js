@@ -266,6 +266,24 @@ const AVATAR_SHAPE_KEY = "larptrix_avatar_shape";
 let replyingToMessage = null;
 const decryptedPayloadByMessageId = new Map();
 const mutedRemoteUserIds = new Set();
+const viewedChannelMessages = new Set();
+const channelViewObserver = typeof IntersectionObserver === "function"
+  ? new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting || entry.intersectionRatio < 0.45) continue;
+        const messageId = entry.target?.dataset?.messageId;
+        if (!messageId || viewedChannelMessages.has(messageId) || !peerId) continue;
+        const group = groups.find((item) => item.user_id === peerId && item.is_channel);
+        if (!group || !socket || socket.readyState !== WebSocket.OPEN) continue;
+        viewedChannelMessages.add(messageId);
+        socket.send(JSON.stringify({
+          type: "view_message",
+          peer_id: peerId,
+          message_id: messageId,
+        }));
+      }
+    }, { threshold: [0.45] })
+  : null;
 let callDeafened = false;
 
 function e2eResetStorageKey(peerUserId) {
@@ -1162,7 +1180,11 @@ function appendSavedMessage(item) {
   });
   actions.append(reply, remove);
   li.append(actions);
+  renderMessageReactions(message, li);
   logEl.append(li);
+  if (channelViewObserver && groups.some((item) => item.user_id === peerId && item.is_channel)) {
+    channelViewObserver.observe(li);
+  }
 }
 
 async function saveManualSavedMessage(text, extras = {}) {
@@ -3367,6 +3389,8 @@ function connect() {
           !msg.peer.is_group
           || (msg.peer.is_channel && !msg.peer.admin_ids?.includes(me?.user_id));
         renderGroupCallBanner();
+        channelViewObserver?.disconnect();
+        viewedChannelMessages.clear();
         logEl.replaceChildren();
         messageBodyElementsById.clear();
         renderE2eResetNotice(msg.peer.user_id);
@@ -3387,6 +3411,22 @@ function connect() {
           renderUsers();
         }
         break;
+      case "message_reaction": {
+        const message = messagesById.get(msg.message_id);
+        if (message) {
+          message.reactions = Array.isArray(msg.reactions) ? msg.reactions : [];
+          const row = logEl.querySelector(`[data-message-id="${CSS.escape(msg.message_id)}"]`);
+          if (row) renderMessageReactions(message, row);
+        }
+        break;
+      }
+      case "message_view_update": {
+        const message = messagesById.get(msg.message_id);
+        if (message) message.view_count = Number(msg.view_count || 0);
+        const row = logEl.querySelector(`[data-message-id="${CSS.escape(msg.message_id)}"]`);
+        if (row) renderMessageReactions(message, row);
+        break;
+      }
       case "message_deleted":
         deletedMessageIds.add(msg.message_id);
         messagesById.delete(msg.message_id);
@@ -4983,7 +5023,13 @@ async function createGroup(event) {
       is_channel: Boolean(created.is_channel),
       admin_ids: Array.isArray(created.admin_ids) ? created.admin_ids : [me.user_id],
       post_policy: created.post_policy || "members",
-      group_member_ids: created.member_ids,
+      group_member_ids: created.member_ids || [],
+      group_description: created.description || "",
+      group_avatar_url: created.avatar_url || null,
+      group_banner_url: created.banner_url || null,
+      avatar_url: created.avatar_url || null,
+      banner_url: created.banner_url || null,
+      subscriber_count: Number(created.subscriber_count || created.member_ids?.length || 0),
     };
     groups = [...groups.filter((group) => group.user_id !== newGroup.user_id), newGroup];
     createGroupDialog.close();
@@ -5080,6 +5126,65 @@ function paintAvatar(el, user) {
     const seed = [...(user.user_id || user.display_name || "")].reduce((v, ch) => v + ch.charCodeAt(0), 0);
     el.classList.add("emoji-avatar");
     el.textContent = faces[seed % faces.length];
+  }
+}
+
+const commonReactionEmojis = ["👍", "❤️", "😂", "😮", "😢", "🔥"];
+
+function renderMessageReactions(message, li) {
+  if (!li) return;
+  let bar = li.querySelector(".message-reactions");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.className = "message-reactions";
+    li.append(bar);
+  }
+  bar.replaceChildren();
+
+  for (const reaction of (message.reactions || [])) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "reaction-chip";
+    button.classList.toggle("reacted", Boolean(reaction.reacted));
+    button.textContent = `${reaction.emoji} ${reaction.count}`;
+    button.title = reaction.reacted ? "Remove reaction" : "React with " + reaction.emoji;
+    button.addEventListener("click", () => {
+      if (!socket || socket.readyState !== WebSocket.OPEN || !peerId) return;
+      socket.send(JSON.stringify({
+        type: "react",
+        peer_id: peerId,
+        message_id: message.id,
+        emoji: reaction.emoji,
+        add: !reaction.reacted,
+      }));
+    });
+    bar.append(button);
+  }
+
+  const addButton = document.createElement("button");
+  addButton.type = "button";
+  addButton.className = "reaction-add ghost";
+  addButton.textContent = "＋";
+  addButton.title = "Add reaction";
+  addButton.addEventListener("click", () => {
+    const next = prompt("Reaction emoji:", "👍")?.trim();
+    if (!next || next.length > 8 || !socket || socket.readyState !== WebSocket.OPEN || !peerId) return;
+    socket.send(JSON.stringify({
+      type: "react",
+      peer_id: peerId,
+      message_id: message.id,
+      emoji: next,
+      add: true,
+    }));
+  });
+  bar.append(addButton);
+
+  if (message.is_channel || groups.some((item) => item.user_id === peerId && item.is_channel)) {
+    const viewCount = document.createElement("span");
+    viewCount.className = "message-view-count";
+    viewCount.textContent = `◉ ${message.view_count || 0}`;
+    viewCount.title = "Unique subscribers who viewed this message";
+    bar.append(viewCount);
   }
 }
 
@@ -6663,16 +6768,45 @@ async function saveChatWallpaper(file, id) {
 
 async function showPeerProfile(id) {
   try {
-    const profile = await api("GET", `/api/users/${encodeURIComponent(id)}/profile`);
+    const group = groups.find((item) => item.user_id === id && item.is_group);
     const avatar = document.getElementById("peer-profile-avatar");
+    const nameEl = document.getElementById("peer-profile-name");
+    const usernameEl = document.getElementById("peer-profile-username");
+    const aboutEl = document.getElementById("peer-profile-about");
+    const activityEl = document.getElementById("peer-profile-activity");
+
+    if (group) {
+      avatar.hidden = !group.avatar_url;
+      if (group.avatar_url) {
+        avatar.src = group.avatar_url + "?v=" + Date.now();
+      } else {
+        avatar.removeAttribute("src");
+      }
+      avatar.alt = `${group.display_name} avatar`;
+      peerProfileBanner.style.backgroundImage = group.banner_url
+        ? 'url("' + group.banner_url + '?v=' + Date.now() + '")'
+        : "";
+      nameEl.textContent = group.display_name;
+      usernameEl.textContent = group.is_channel
+        ? `${group.subscriber_count || group.group_member_ids.length} subscribers`
+        : `${group.group_member_ids.length} members`;
+      aboutEl.textContent = group.group_description || "No description";
+      activityEl.textContent = group.is_channel ? "Channel" : "Group";
+      peerProfileDialog.showModal();
+      return;
+    }
+
+    const profile = await api("GET", `/api/users/${encodeURIComponent(id)}/profile`);
     avatar.hidden = !profile.avatar_url;
     if (profile.avatar_url) avatar.src = profile.avatar_url;
     avatar.alt = `${profile.display_name} profile photo`;
-    peerProfileBanner.style.backgroundImage = profile.banner_url ? 'url("' + profile.banner_url + '?v=' + Date.now() + '")' : "";
-    document.getElementById("peer-profile-name").textContent = profile.display_name;
-    document.getElementById("peer-profile-username").textContent = profile.username ? `@${profile.username}` : "";
-    document.getElementById("peer-profile-about").textContent = profile.about || "No profile description";
-    document.getElementById("peer-profile-activity").textContent = profile.activity || "No activity";
+    peerProfileBanner.style.backgroundImage = profile.banner_url
+      ? 'url("' + profile.banner_url + '?v=' + Date.now() + '")'
+      : "";
+    nameEl.textContent = profile.display_name;
+    usernameEl.textContent = profile.username ? `@${profile.username}` : "";
+    aboutEl.textContent = profile.about || "No profile description";
+    activityEl.textContent = profile.activity || "No activity";
     peerProfileDialog.showModal();
   } catch (err) {
     appendSystem(err.message || "Could not load profile.");
