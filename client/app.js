@@ -96,6 +96,11 @@ const localVideo = document.getElementById("local-video");
 const localScreenVideo = document.getElementById("local-screen-video");
 const remoteVideo = document.getElementById("remote-video");
 const remoteAudio = document.getElementById("remote-audio");
+const callAudioPlaceholder = document.getElementById("call-audio-placeholder");
+const callPlaceholderLocalAvatar = document.getElementById("call-placeholder-local-avatar");
+const callPlaceholderRemoteAvatar = document.getElementById("call-placeholder-remote-avatar");
+const callPlaceholderLocalName = document.getElementById("call-placeholder-local-name");
+const callPlaceholderRemoteName = document.getElementById("call-placeholder-remote-name");
 const enableCallAudio = document.getElementById("enable-call-audio");
 const incomingCallDialog = document.getElementById("incoming-call-dialog");
 const incomingCallTitle = document.getElementById("incoming-call-title");
@@ -799,9 +804,35 @@ function applySavedCallPosition() {
   callStage.style.bottom = "auto";
 }
 
+function updateCallPlaceholder({ force = false } = {}) {
+  if (!callAudioPlaceholder) return;
+  const remoteId = callPeerId || groupCallGroupId;
+  const remoteUser = groups.find((item) => item.user_id === remoteId)
+    || users.find((item) => item.user_id === remoteId)
+    || (pendingIncomingCall?.sender_id
+      ? users.find((item) => item.user_id === pendingIncomingCall.sender_id)
+      : null)
+    || { user_id: remoteId || "remote", display_name: "Larptrix user" };
+
+  callPlaceholderLocalName.textContent = me?.display_name || "You";
+  callPlaceholderRemoteName.textContent = remoteUser.display_name || "Larptrix user";
+  paintAvatar(callPlaceholderLocalAvatar, me || { user_id: "local", display_name: "You" });
+  paintAvatar(callPlaceholderRemoteAvatar, remoteUser);
+
+  const hasRemoteVideo = Boolean(
+    remoteVideo?.srcObject instanceof MediaStream
+      && remoteVideo.srcObject.getVideoTracks().some((track) => track.readyState !== "ended"),
+  );
+  const hasLocalVideo = Boolean(
+    localMediaStream?.getVideoTracks().some((track) => track.readyState !== "ended" && track.enabled),
+  );
+  callAudioPlaceholder.hidden = !force && (hasRemoteVideo || hasLocalVideo || Boolean(screenMediaStream));
+}
+
 function showCallStage() {
   callStage.hidden = false;
   applySavedCallPosition();
+  updateCallPlaceholder({ force: !localMediaStream?.getVideoTracks().length });
   renderCallParticipantSettings();
 }
 
@@ -4230,6 +4261,7 @@ async function startCall(kind) {
   if (peerConnection) endCall(true);
   callPeerId = peerId;
   callMediaKind = kind;
+  updateCallPlaceholder({ force: true });
   startOutgoingCallRingtone();
   try {
     localMediaStream = await acquireCallMedia(kind);
@@ -4289,6 +4321,7 @@ async function createPeerConnection() {
   });
   connection.addEventListener("track", (event) => {
     if (event.track.kind === "audio") {
+      updateCallPlaceholder();
       const volume = Number(localStorage.getItem("larptrix_call_audio_volume"));
       if (Number.isFinite(volume)) remoteAudio.volume = Math.min(1, Math.max(0, volume));
       const stream = remoteAudio.srcObject instanceof MediaStream
@@ -4309,6 +4342,8 @@ async function createPeerConnection() {
       });
     } else if (event.streams[0]) {
       remoteVideo.srcObject = event.streams[0];
+      remoteVideo.hidden = false;
+      callAudioPlaceholder.hidden = true;
       remoteVideo.play().catch(() => {});
     }
   });
@@ -4435,6 +4470,7 @@ async function acceptIncomingCall() {
   stopCallRingtone();
   incomingCallDialog.close();
   peerId = incoming.sender_id;
+  updateCallPlaceholder({ force: true });
   renderUsers();
   if (socket?.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "open", peer_id: peerId }));
@@ -4742,6 +4778,7 @@ async function stopScreenShare() {
   localScreenVideo.srcObject = null;
   localScreenVideo.muted = true;
   localScreenVideo.hidden = true;
+  updateCallPlaceholder({ force: !localMediaStream?.getVideoTracks().length });
   document.getElementById("toggle-screen-share").textContent = "Share screen";
   if (callStatus.textContent.startsWith("Sharing ")) callStatus.textContent = "Connected";
 }
@@ -4810,6 +4847,8 @@ function endCall(notifyPeer) {
   localVideo.srcObject = null;
   localScreenVideo.srcObject = null;
   localScreenVideo.hidden = true;
+  callAudioPlaceholder.hidden = true;
+  callStage.classList.remove("screen-sharing");
   remoteVideo.srcObject = null;
   remoteVideo.hidden = false;
   remoteAudio.srcObject = null;
