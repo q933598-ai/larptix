@@ -4249,3 +4249,92 @@ html[data-theme="custom"] .music-library {
 #music-library {
   z-index: 180;
 }
+
+
+/* Final compact player polish: one thin row, no floating behavior. */
+.music-player {
+  min-height: 52px;
+  height: 52px;
+  grid-template-columns: minmax(150px, .7fr) minmax(220px, 1.8fr) minmax(145px, .65fr);
+  grid-template-rows: 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px;
+}
+.music-player-track {
+  gap: 8px;
+}
+.music-player-cover {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  font-size: .95rem;
+}
+.music-player-copy strong {
+  font-size: .74rem;
+}
+.music-player-copy span {
+  font-size: .62rem;
+  opacity: .8;
+}
+.music-player-main {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+.music-player-controls {
+  flex: 0 0 auto;
+  justify-content: flex-start;
+  gap: 2px;
+}
+.music-control {
+  width: 26px;
+  height: 26px;
+  font-size: .72rem;
+}
+.music-player-main .music-progress {
+  flex: 1 1 auto;
+  min-width: 60px;
+}
+.music-player-side {
+  gap: 3px;
+  font-size: .62rem;
+}
+.music-player-side .music-control {
+  width: 24px;
+  height: 24px;
+  font-size: .68rem;
+}
+.music-volume {
+  width: 58px;
+}
+@media (max-width: 760px) {
+  .music-player {
+    min-height: 46px;
+    height: 46px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: 1fr;
+    gap: 6px;
+    padding: 4px 7px;
+  }
+  .music-player-main {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .music-player-side {
+    display: none;
+  }
+  .music-player-cover {
+    width: 28px;
+    height: 28px;
+  }
+  .music-player-copy span {
+    display: none;
+  }
+}
+
+/* Never show the bottom player while the standalone library window is open. */
+body:has(#music-library:not([hidden])) #music-player {
+  display: none !important;
+}
