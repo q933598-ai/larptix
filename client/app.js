@@ -9,6 +9,7 @@ const cryptoWasmReady = initCrypto();
 const statusEl = document.getElementById("status");
 const usersEl = document.getElementById("users");
 const logEl = document.getElementById("log");
+const chatEl = document.querySelector("main.chat");
 const composer = document.getElementById("composer");
 const bodyInput = document.getElementById("body");
 const gate = document.getElementById("gate");
@@ -440,8 +441,43 @@ const OUTGOING_CALL_SOUND_KEY = "larptrix_outgoing_call_sounds";
 const MESSAGE_SOUND_KEY = "larptrix_message_sounds";
 const NOISE_SUPPRESSION_KEY = "larptrix_noise_suppression";
 const SAVED_MESSAGES_KEY = "larptrix_saved_messages_v1";
+const SAVED_MESSAGES_LOCAL_KEY_ID = "saved-messages-local-key";
 function savedMessagesKey() {
   return me ? SAVED_MESSAGES_KEY + "_" + me.user_id : SAVED_MESSAGES_KEY;
+}
+
+async function savedMessagesLocalKey() {
+  let key = (await readLocalCryptoRecord(SAVED_MESSAGES_LOCAL_KEY_ID))?.value;
+  if (!key) {
+    key = await crypto.subtle.generateKey(
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"],
+    );
+    await writeLocalCryptoRecord({ id: SAVED_MESSAGES_LOCAL_KEY_ID, value: key });
+  }
+  return key;
+}
+
+async function readLegacySavedMessages() {
+  if (!cryptoRecoveryKey || !me) return null;
+  try {
+    const raw = localStorage.getItem(savedMessagesKey());
+    if (!raw) return null;
+    const record = JSON.parse(raw);
+    if (!record?.iv || !record?.ciphertext) return null;
+    const key = await sentPlaintextCacheKey();
+    if (!key) return null;
+    const plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: new Uint8Array(record.iv) },
+      key,
+      new Uint8Array(record.ciphertext),
+    );
+    const parsed = JSON.parse(new TextDecoder().decode(plaintext));
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function readStoredBool(key, fallback = true) {
@@ -877,39 +913,61 @@ async function toggleCallNoiseSuppression() {
 }
 
 async function getSavedMessages() {
-  if (!cryptoRecoveryKey) return [];
+  if (!me?.user_id) return [];
   try {
-    const raw = localStorage.getItem(savedMessagesKey());
-    if (!raw) return [];
-    const record = JSON.parse(raw);
-    const key = await sentPlaintextCacheKey();
-    if (!key || !record?.iv || !record?.ciphertext) return [];
-    const plaintext = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: new Uint8Array(record.iv) },
-      key,
-      new Uint8Array(record.ciphertext),
-    );
-    const parsed = JSON.parse(new TextDecoder().decode(plaintext));
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+    const localRecord = await readLocalCryptoRecord(`saved-messages:${me.user_id}`);
+    if (localRecord?.iv && localRecord?.ciphertext) {
+      const key = await savedMessagesLocalKey();
+      const plaintext = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: new Uint8Array(localRecord.iv) },
+        key,
+        new Uint8Array(localRecord.ciphertext),
+      );
+      const parsed = JSON.parse(new TextDecoder().decode(plaintext));
+      return Array.isArray(parsed) ? parsed : [];
+    }
+
+    const legacy = await readLegacySavedMessages();
+    if (legacy) {
+      await setSavedMessages(legacy);
+      return legacy;
+    }
+  } catch {}
+  return [];
 }
 
 async function setSavedMessages(items) {
-  if (!cryptoRecoveryKey) return;
-  const key = await sentPlaintextCacheKey();
-  if (!key) return;
+  if (!me?.user_id) return;
+  const key = await savedMessagesLocalKey();
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encrypted = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
     key,
     new TextEncoder().encode(JSON.stringify(items)),
   );
-  localStorage.setItem(savedMessagesKey(), JSON.stringify({
+  await writeLocalCryptoRecord({
+    id: `saved-messages:${me.user_id}`,
     iv: Array.from(iv),
     ciphertext: Array.from(new Uint8Array(encrypted)),
-  }));
+  });
+
+  // Keep the old encrypted localStorage copy for one release so existing
+  // installations can recover it during migration.
+  if (cryptoRecoveryKey) {
+    const legacyKey = await sentPlaintextCacheKey();
+    if (legacyKey) {
+      const legacyIv = crypto.getRandomValues(new Uint8Array(12));
+      const legacyEncrypted = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: legacyIv },
+        legacyKey,
+        new TextEncoder().encode(JSON.stringify(items)),
+      );
+      localStorage.setItem(savedMessagesKey(), JSON.stringify({
+        iv: Array.from(legacyIv),
+        ciphertext: Array.from(new Uint8Array(legacyEncrypted)),
+      }));
+    }
+  }
 }
 
 async function toggleSavedMessage(message, textValue) {
@@ -2218,6 +2276,85 @@ composer.addEventListener("submit", async (event) => {
 photoInput.addEventListener("change", () => queueAttachment(photoInput.files[0]));
 fileInput.addEventListener("change", () => queueAttachment(fileInput.files[0]));
 audioFileInput.addEventListener("change", () => queueAttachment(audioFileInput.files[0]));
+
+let fileDropDepth = 0;
+
+function hasDroppedFiles(event) {
+  return Array.from(event.dataTransfer?.types || []).includes("Files");
+}
+
+function setFileDropActive(active) {
+  chatEl?.classList.toggle("file-drop-active", active);
+}
+
+function handleChatDragEnter(event) {
+  if (!hasDroppedFiles(event) || event.target.closest("#music-library")) return;
+  event.preventDefault();
+  fileDropDepth += 1;
+  setFileDropActive(true);
+}
+
+function handleChatDragOver(event) {
+  if (!hasDroppedFiles(event) || event.target.closest("#music-library")) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  setFileDropActive(true);
+}
+
+function handleChatDragLeave(event) {
+  if (!hasDroppedFiles(event) || event.target.closest("#music-library")) return;
+  event.preventDefault();
+  fileDropDepth = Math.max(0, fileDropDepth - 1);
+  if (fileDropDepth === 0) setFileDropActive(false);
+}
+
+async function sendDroppedFiles(files) {
+  if (!peerId) {
+    appendSystem("Open a chat before dropping files.");
+    return;
+  }
+  if (peerId === SAVED_MESSAGES_ID) {
+    appendSystem("Attachments cannot be added to Saved Messages yet.");
+    return;
+  }
+  if (!cryptoEnabled || !cryptoDevice) {
+    appendSystem("Set up E2E before sending files.");
+    return;
+  }
+
+  const validFiles = files.filter((file) => file && file.size > 0);
+  if (!validFiles.length) return;
+
+  for (const file of validFiles) {
+    try {
+      await waitForSocketOpen();
+      await cryptoReady;
+      if (!cryptoDevice) throw new Error("Unlock E2E before sending files.");
+      await sendEncryptedPayloadToPeer(peerId, {
+        text: "",
+      }, file);
+    } catch (err) {
+      appendSystem(`Could not send “${file.name}”: ${err.message || err}`);
+    }
+  }
+}
+
+async function handleChatDrop(event) {
+  if (!hasDroppedFiles(event) || event.target.closest("#music-library")) return;
+  event.preventDefault();
+  fileDropDepth = 0;
+  setFileDropActive(false);
+  await sendDroppedFiles([...event.dataTransfer.files]);
+}
+
+chatEl?.addEventListener("dragenter", handleChatDragEnter);
+chatEl?.addEventListener("dragover", handleChatDragOver);
+chatEl?.addEventListener("dragleave", handleChatDragLeave);
+chatEl?.addEventListener("drop", (event) => {
+  void handleChatDrop(event);
+});
+
+
 recordAudioButton.addEventListener("click", toggleRecording);
 document.getElementById("start-audio-call").addEventListener("click", () => startCall("audio"));
 document.getElementById("start-video-call").addEventListener("click", () => startCall("video"));
