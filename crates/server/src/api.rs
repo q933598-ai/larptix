@@ -59,14 +59,16 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/groups/{id}/settings", patch(update_group_settings))
         .route(
             "/api/groups/{id}/avatar",
-            post(set_group_avatar).layer(DefaultBodyLimit::max(MAX_IMAGE_BYTES + 64 * 1024)),
+            get(get_group_avatar)
+                .post(set_group_avatar)
+                .layer(DefaultBodyLimit::max(MAX_IMAGE_BYTES + 64 * 1024)),
         )
         .route(
             "/api/groups/{id}/banner",
-            post(set_group_banner).layer(DefaultBodyLimit::max(MAX_IMAGE_BYTES + 64 * 1024)),
+            get(get_group_banner)
+                .post(set_group_banner)
+                .layer(DefaultBodyLimit::max(MAX_IMAGE_BYTES + 64 * 1024)),
         )
-        .route("/api/groups/{id}/avatar", get(get_group_avatar))
-        .route("/api/groups/{id}/banner", get(get_group_banner))
         .route("/api/channels", post(create_channel))
         .route(
             "/api/channels/{id}/admins",
