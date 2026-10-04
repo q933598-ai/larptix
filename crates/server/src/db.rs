@@ -577,7 +577,11 @@ impl Database {
         .optional()
     }
 
-    pub fn delete_matrix_crypto_device(&self, user_id: &str, device_id: &str) -> rusqlite::Result<bool> {
+    pub fn delete_matrix_crypto_device(
+        &self,
+        user_id: &str,
+        device_id: &str,
+    ) -> rusqlite::Result<bool> {
         let conn = self.conn.lock().expect("db lock");
         let deleted = conn.execute(
             "DELETE FROM matrix_crypto_devices
