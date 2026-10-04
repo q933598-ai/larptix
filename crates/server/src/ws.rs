@@ -1632,7 +1632,7 @@ fn user_info(user: &UserRow, online: bool) -> UserInfo {
         group_avatar_url: None,
         group_banner_url: None,
         subscriber_count: 0,
-        tags: Vec::new(),
+        tags: state.db.profile_tags(&user.id).unwrap_or_default(),
     }
 }
 
