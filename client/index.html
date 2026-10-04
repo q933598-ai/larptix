@@ -117,7 +117,10 @@
               <p id="call-status" aria-live="polite">Connecting…</p>
               <small id="group-call-count" class="group-call-count" hidden></small>
             </div>
-            <button id="call-collapse" type="button" class="ghost" title="Minimize call">−</button>
+            <div class="call-heading-actions">
+              <button id="direct-call-join" type="button" class="direct-call-join" hidden>Join</button>
+              <button id="call-collapse" type="button" class="ghost" title="Minimize call">−</button>
+            </div>
           </div>
           <p class="call-security-note">WebRTC encrypts media in transit. Device-verified end-to-end encryption is not enabled yet.</p>
           <div id="call-videos" class="call-videos">
@@ -136,7 +139,6 @@
             </div>
             <div id="group-remotes" class="group-remotes" hidden></div>
             <div id="direct-call-participants" class="direct-call-participants" hidden aria-label="Call participants"></div>
-            <button id="direct-call-join" type="button" class="direct-call-join" hidden>Join</button>
           </div>
           <div class="call-controls">
             <button id="toggle-microphone" type="button" class="ghost" aria-pressed="false">🎙 Mute mic</button>
