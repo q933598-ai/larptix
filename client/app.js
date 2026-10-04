@@ -511,6 +511,7 @@ let directCallStartedAt = 0;
 let directCallAnsweredAt = 0;
 let directCallAnswered = false;
 let directCallOfferSent = false;
+let directCallRemoteVisible = true;
 const loggedDirectCallSessions = new Set();
 let callMediaNotice = "";
 let pendingIceCandidates = [];
@@ -1044,6 +1045,10 @@ function updateCallPlaceholder({ force = false } = {}) {
 
   callPlaceholderLocalName.textContent = me?.display_name || "You";
   callPlaceholderRemoteName.textContent = remoteUser.display_name || "Larptrix user";
+  const remotePlaceholder = callPlaceholderRemoteAvatar?.closest(".call-placeholder-user");
+  if (remotePlaceholder) {
+    remotePlaceholder.hidden = Boolean(!groupCallId && !directCallRemoteVisible);
+  }
   paintAvatar(callPlaceholderLocalAvatar, me || { user_id: "local", display_name: "You" });
   paintAvatar(callPlaceholderRemoteAvatar, remoteUser);
   callPlaceholderRemoteName.classList.remove("call-no-answer");
@@ -4314,10 +4319,30 @@ function renderDirectCallTopbar(id = peerId) {
     || pendingIncomingCall?.sender_id
     || lastDirectCallJoinPeerId
     || (id && id !== me?.user_id ? id : null);
-  const active = Boolean(remoteId && isDirectCallActive(remoteId));
-  const incoming = Boolean(remoteId && pendingIncomingCall?.sender_id === remoteId && !peerConnection);
-  const joinable = Boolean(remoteId && lastDirectCallJoinPeerId === remoteId && !peerConnection && !directCallOutgoing);
-  const isDirect = Boolean(remoteId && id === remoteId && !selected?.is_group && !groupCallId);
+  const active = Boolean(
+    remoteId
+      && isDirectCallActive(remoteId)
+      && id === remoteId
+  );
+  const incoming = Boolean(
+    remoteId
+      && pendingIncomingCall?.sender_id === remoteId
+      && !peerConnection
+      && id === remoteId
+  );
+  const joinable = Boolean(
+    remoteId
+      && lastDirectCallJoinPeerId === remoteId
+      && !peerConnection
+      && !directCallOutgoing
+      && id === remoteId
+  );
+  const isDirect = Boolean(
+    remoteId
+      && id === remoteId
+      && !selected?.is_group
+      && !groupCallId
+  );
 
   if (!isDirect) {
     directCallJoin.hidden = true;
@@ -4326,20 +4351,20 @@ function renderDirectCallTopbar(id = peerId) {
     return;
   }
 
-  if (active && directCallOutgoing) {
-    paintAvatar(directCallTopbarAvatar, getDirectCallUser(remoteId));
-    directCallTopbarLabel.textContent = "Calling…";
-    directCallJoin.disabled = true;
-    directCallJoin.hidden = false;
-  } else if (incoming || joinable) {
+  if (incoming || joinable) {
     paintAvatar(directCallTopbarAvatar, getDirectCallUser(remoteId));
     directCallTopbarLabel.textContent =
       (callMediaKind || lastDirectCallJoinKind) === "video" ? "Join video" : "Join call";
     directCallJoin.disabled = false;
     directCallJoin.hidden = false;
-  } else if (active) {
+  } else if (active && directCallAnswered) {
     paintAvatar(directCallTopbarAvatar, getDirectCallUser(remoteId));
     directCallTopbarLabel.textContent = "Connected";
+    directCallJoin.disabled = true;
+    directCallJoin.hidden = false;
+  } else if (active && directCallOutgoing) {
+    paintAvatar(directCallTopbarAvatar, getDirectCallUser(remoteId));
+    directCallTopbarLabel.textContent = "Calling…";
     directCallJoin.disabled = true;
     directCallJoin.hidden = false;
   } else {
@@ -4350,7 +4375,6 @@ function renderDirectCallTopbar(id = peerId) {
   if (callButton) callButton.hidden = headerCallState;
   if (videoButton) videoButton.hidden = headerCallState;
 }
-
 async function sendDirectCallLog(peerTargetId, kind, answered, startedAt, answeredAt = 0, endedAt = Date.now(), sessionId = null) {
   if (!peerTargetId || !startedAt) return;
   if (sessionId && loggedDirectCallSessions.has(sessionId)) return;
@@ -4895,6 +4919,7 @@ async function startCall(kind) {
   directCallAnsweredAt = 0;
   directCallAnswered = false;
   directCallOfferSent = false;
+  directCallRemoteVisible = true;
   callPeerId = peerId;
   callMediaKind = kind;
   callNoAnswer = false;
@@ -4906,7 +4931,7 @@ async function startCall(kind) {
     localMediaStream = await acquireCallMedia(kind);
     showCallStage();
     await attachLocalMediaPreview();
-    callStatus.textContent = `Calling…${callMediaNotice}`;
+    callStatus.textContent = `Waiting for answer…${callMediaNotice}`;
     peerConnection = await createPeerConnection();
     for (const track of localMediaStream.getTracks()) {
       peerConnection.addTrack(track, localMediaStream);
@@ -4927,35 +4952,18 @@ async function startCall(kind) {
     renderDirectCallTopbar(peerId);
     clearTimeout(outgoingCallTimeout);
     outgoingCallTimeout = setTimeout(() => {
-      if (!peerConnection || callPeerId !== peerId) return;
+      if (!peerConnection || callPeerId !== peerId || directCallAnswered) return;
       stopCallRingtone();
       callNoAnswer = true;
-      lastDirectCallAvatarPeerId = me?.user_id || null;
-      callStatus.textContent = "No answer";
-      callAudioPlaceholder.hidden = true;
-      callPlaceholderRemoteAvatar.replaceChildren();
-      callPlaceholderRemoteName.textContent = "No answer";
-      callPlaceholderRemoteName.classList.add("call-no-answer");
+      directCallRemoteVisible = false;
+      callStatus.textContent = "Waiting for answer…";
+      updateCallPlaceholder({ force: true });
       renderDirectCallAvatarStack();
-      updateDirectCallButtons(peerId);
-      clearTimeout(noAnswerCleanupTimeout);
-      noAnswerCleanupTimeout = setTimeout(() => {
-        if (!callNoAnswer || callPeerId !== peerId) return;
-        const unansweredPeerId = callPeerId;
-        const unansweredKind = callMediaKind || "audio";
-        sendCallSignal("hangup", {
-          call_id: directCallSessionId,
-          reason: "no_answer",
-        });
-        endCall(false);
-        showDirectCallNotice(unansweredPeerId, "No answer", {
-          join: false,
-          persist: true,
-          kind: unansweredKind,
-          duration: 3000,
-          avatarPeerId: me?.user_id,
-        });
-      }, 3000);
+      renderDirectCallTopbar(peerId);
+      sendCallSignal("hangup", {
+        call_id: directCallSessionId,
+        reason: "no_answer",
+      });
     }, 15000);
   } catch (err) {
     appendSystem(`Call setup failed: ${err.message || "Check camera and microphone permissions."}`);
@@ -5053,16 +5061,12 @@ async function createPeerConnection() {
         outgoingCallTimeout = null;
         clearTimeout(noAnswerCleanupTimeout);
         noAnswerCleanupTimeout = null;
-        const unansweredPeerId = callPeerId;
-        const unansweredKind = callMediaKind || "audio";
-        endCall(false);
-        showDirectCallNotice(unansweredPeerId, "No answer", {
-          join: false,
-          persist: true,
-          kind: unansweredKind,
-          duration: 3000,
-          avatarPeerId: me?.user_id,
-        });
+        callNoAnswer = true;
+        directCallRemoteVisible = false;
+        callStatus.textContent = "Waiting for answer…";
+        updateCallPlaceholder({ force: true });
+        renderDirectCallAvatarStack();
+        renderDirectCallTopbar(peerId);
         return;
       }
       endCall(false);
@@ -5122,6 +5126,7 @@ async function handleCallSignal(signal) {
     directCallAnsweredAt = 0;
     directCallAnswered = false;
     directCallOfferSent = true;
+    directCallRemoteVisible = true;
     callPeerId = signal.sender_id;
     renderDirectCallAvatarStack();
     pendingIceCandidates = iceCandidatesBeforeOffer.get(signal.sender_id) || [];
@@ -5142,18 +5147,12 @@ async function handleCallSignal(signal) {
     clearTimeout(incomingCallTimeout);
     incomingCallTimeout = setTimeout(() => {
       if (!pendingIncomingCall || pendingIncomingCall.sender_id !== signal.sender_id) return;
-      const missedPeerId = signal.sender_id;
-      const missedKind = callMediaKind || "audio";
       stopCallRingtone();
-      incomingCallDialog.open && incomingCallDialog.close();
-      pendingIncomingCall = null;
-      callPeerId = null;
-      showDirectCallNotice(missedPeerId, "No answer", {
-        join: true,
-        kind: missedKind,
-        duration: 3000,
-      });
-    }, 20000);
+      directCallJoin.hidden = false;
+      lastDirectCallJoinPeerId = signal.sender_id;
+      lastDirectCallJoinKind = callMediaKind || "audio";
+      renderDirectCallTopbar(signal.sender_id);
+    }, 15000);
     // Direct calls are handled from the chat header so the normal chat stays visible.
     return;
   }
@@ -5167,17 +5166,18 @@ async function handleCallSignal(signal) {
     const missedPeerId = pendingIncomingCall.sender_id;
     const missedKind = callMediaKind || "audio";
     const wasNoAnswer = signal.kind === "hangup" && signal.payload?.reason === "no_answer";
-    pendingIncomingCall = null;
     stopCallRingtone();
     if (wasNoAnswer) {
-      callPeerId = null;
-      showDirectCallNotice(missedPeerId, "No answer", {
-        join: true,
-        kind: missedKind,
-        duration: 3000,
-        avatarPeerId: missedPeerId,
-      });
+      directCallRemoteVisible = true;
+      lastDirectCallJoinPeerId = missedPeerId;
+      lastDirectCallJoinKind = missedKind;
+      renderDirectCallTopbar(peerId || missedPeerId);
     } else {
+      pendingIncomingCall = null;
+      callPeerId = null;
+      directCallSessionId = null;
+      lastDirectCallJoinPeerId = null;
+      renderDirectCallTopbar(peerId);
       renderDirectCallAvatarStack();
       updateDirectCallButtons(peerId);
     }
@@ -5263,6 +5263,7 @@ async function acceptIncomingCall() {
   directCallStartedAt = Number(incoming.payload?.started_at) || directCallStartedAt || Date.now();
   directCallAnsweredAt = Date.now();
   directCallAnswered = true;
+  directCallRemoteVisible = true;
   directCallOutgoing = false;
   lastDirectCallJoinPeerId = null;
   lastDirectCallJoinKind = callMediaKind || "audio";
@@ -5699,7 +5700,6 @@ async function stopScreenShare() {
 
 
 function endCall(notifyPeer) {
-  const preserveNoAnswerAvatar = Boolean(callNoAnswer && callPeerId);
   const endedDirectPeerId = callPeerId;
   const endedDirectCallKind = callMediaKind || "audio";
   clearTimeout(outgoingCallTimeout);
@@ -5800,30 +5800,16 @@ function endCall(notifyPeer) {
   directCallAnsweredAt = 0;
   directCallAnswered = false;
   directCallOfferSent = false;
+  directCallRemoteVisible = true;
   callNoAnswer = false;
 
-  if (preserveNoAnswerAvatar && endedDirectPeerId) {
-    lastDirectCallJoinPeerId = endedDirectPeerId;
-    lastDirectCallJoinKind = endedDirectCallKind;
-    lastDirectCallPeerId = endedDirectPeerId;
-    lastDirectCallAvatarPeerId = me?.user_id || endedDirectPeerId;
-    clearTimeout(lastDirectCallAvatarTimeout);
-    lastDirectCallAvatarTimeout = setTimeout(() => {
-      if (lastDirectCallPeerId === endedDirectPeerId) {
-        lastDirectCallPeerId = null;
-        lastDirectCallAvatarPeerId = null;
-        lastDirectCallAvatarTimeout = null;
-        renderDirectCallAvatarStack();
-      }
-    }, 8000);
-  } else {
-    clearTimeout(lastDirectCallAvatarTimeout);
-    lastDirectCallAvatarTimeout = null;
-    lastDirectCallPeerId = null;
-    lastDirectCallAvatarPeerId = null;
-    lastDirectCallJoinPeerId = null;
-    lastDirectCallJoinKind = "audio";
-  }
+  clearTimeout(lastDirectCallAvatarTimeout);
+  lastDirectCallAvatarTimeout = null;
+  lastDirectCallPeerId = null;
+  lastDirectCallAvatarPeerId = null;
+  lastDirectCallJoinPeerId = null;
+  lastDirectCallJoinKind = "audio";
+
 
   updateDirectCallButtons(peerId);
   updateGroupCallControls();
@@ -6645,27 +6631,18 @@ function showDirectCallNotice(targetPeerId, message, { join = false, persist = f
   lastDirectCallAvatarPeerId = avatarPeerId || targetPeerId;
   lastDirectCallJoinPeerId = join ? targetPeerId : null;
   lastDirectCallJoinKind = kind;
-  callNoAnswer = true;
-
-  // Once a call has ended, keep the chat unobstructed. A missed call can
-  // still be joined from the chat header without reopening the call window.
-  callStage.hidden = true;
-  callStage.classList.remove("call-ending-notice");
-  directCallJoin && (directCallJoin.hidden = !join);
-  renderDirectCallTopbar(peerId || targetPeerId);
-
-  if (!join && !persist) {
-    directCallNoticeTimeout = setTimeout(() => {
-      if (lastDirectCallPeerId !== targetPeerId) return;
-      directCallNoticeTimeout = null;
-      lastDirectCallPeerId = null;
-      lastDirectCallAvatarPeerId = null;
-      lastDirectCallJoinPeerId = null;
-      lastDirectCallJoinKind = "audio";
-      callNoAnswer = false;
-      renderDirectCallTopbar(peerId);
-      renderDirectCallAvatarStack();
-    }, duration);
+  callNoAnswer = !join;
+  if (join) {
+    directCallRemoteVisible = true;
+    renderDirectCallTopbar(peerId || targetPeerId);
+  } else {
+    directCallRemoteVisible = false;
+    callStage.hidden = false;
+    callStage.classList.remove("call-ending-notice");
+    callStatus.textContent = message || "Waiting for answer…";
+    updateCallPlaceholder({ force: true });
+    renderDirectCallTopbar(peerId || targetPeerId);
+    renderDirectCallAvatarStack();
   }
 }
 
