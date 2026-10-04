@@ -4845,7 +4845,10 @@ async function startCall(kind) {
         if (!callNoAnswer || callPeerId !== peerId) return;
         const unansweredPeerId = callPeerId;
         const unansweredKind = callMediaKind || "audio";
-        sendCallSignal("hangup", { call_id: directCallSessionId });
+        sendCallSignal("hangup", {
+          call_id: directCallSessionId,
+          reason: "no_answer",
+        });
         endCall(false);
         showDirectCallNotice(unansweredPeerId, "No answer", {
           join: false,
@@ -5058,10 +5061,23 @@ async function handleCallSignal(signal) {
   ) {
     clearTimeout(incomingCallTimeout);
     incomingCallTimeout = null;
+    const missedPeerId = pendingIncomingCall.sender_id;
+    const missedKind = callMediaKind || "audio";
+    const wasNoAnswer = signal.kind === "hangup" && signal.payload?.reason === "no_answer";
     pendingIncomingCall = null;
     stopCallRingtone();
-    renderDirectCallAvatarStack();
-    updateDirectCallButtons(peerId);
+    if (wasNoAnswer) {
+      callPeerId = null;
+      showDirectCallNotice(missedPeerId, "No answer", {
+        join: true,
+        kind: missedKind,
+        duration: 3000,
+        avatarPeerId: missedPeerId,
+      });
+    } else {
+      renderDirectCallAvatarStack();
+      updateDirectCallButtons(peerId);
+    }
     return;
   }
 
