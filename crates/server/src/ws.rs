@@ -160,14 +160,9 @@ pub async fn handle_socket(
                     emoji,
                     add,
                 }) => {
-                    if let Err(err) = react_to_message(
-                        &state,
-                        &user,
-                        &peer_id,
-                        &message_id,
-                        &emoji,
-                        add,
-                    ) {
+                    if let Err(err) =
+                        react_to_message(&state, &user, &peer_id, &message_id, &emoji, add)
+                    {
                         send_error(&tx, "bad_reaction", err);
                     }
                 }
@@ -175,9 +170,7 @@ pub async fn handle_socket(
                     peer_id,
                     message_id,
                 }) => {
-                    if let Err(err) =
-                        view_channel_message(&state, &user, &peer_id, &message_id)
-                    {
+                    if let Err(err) = view_channel_message(&state, &user, &peer_id, &message_id) {
                         send_error(&tx, "bad_message_view", err);
                     }
                 }
@@ -839,7 +832,9 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
                 username: String::new(),
                 email: None,
                 online: group.member_ids.iter().any(|id| online.contains(id)),
-                avatar_url: group.avatar_id.map(|_| format!("/api/groups/{}/avatar", group.id)),
+                avatar_url: group
+                    .avatar_id
+                    .map(|_| format!("/api/groups/{}/avatar", group.id)),
                 activity: None,
                 is_group: true,
                 is_channel: group.is_channel,
@@ -850,8 +845,12 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
                 message_policy: "everyone".to_string(),
                 group_member_ids: group.member_ids,
                 group_description: group.description,
-                group_avatar_url: group.avatar_id.map(|_| format!("/api/groups/{}/avatar", group.id)),
-                group_banner_url: group.banner_id.map(|_| format!("/api/groups/{}/banner", group.id)),
+                group_avatar_url: group
+                    .avatar_id
+                    .map(|_| format!("/api/groups/{}/avatar", group.id)),
+                group_banner_url: group
+                    .banner_id
+                    .map(|_| format!("/api/groups/{}/banner", group.id)),
                 subscriber_count: group.member_ids.len(),
             },
             history,
