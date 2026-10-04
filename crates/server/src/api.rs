@@ -3,10 +3,10 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use axum::body::Body;
-use axum::extract::{DefaultBodyLimit, Multipart, Path, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use larptrix_protocol::{
     attachment_url, avatar_url, sanitize_display_name, sanitize_email, sanitize_password,
@@ -34,6 +34,11 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/me", get(me))
         .route("/api/me", patch(update_profile))
         .route("/api/me/activity", post(update_activity))
+        .route("/api/me/settings", patch(update_message_policy))
+        .route("/api/friends", get(list_friends))
+        .route("/api/friends/{id}", post(send_friend_request).delete(remove_friend))
+        .route("/api/friends/{id}/accept", post(accept_friend_request))
+        .route("/api/users/search", get(search_users))
         .route("/api/users/{id}/profile", get(get_user_profile))
         .route(
             "/api/users/{id}/matrix-devices",
@@ -172,6 +177,16 @@ pub struct UpdateProfileBody {
 #[derive(Deserialize)]
 pub struct UpdateActivityBody {
     pub activity: String,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateMessagePolicyBody {
+    pub message_policy: String,
+}
+
+#[derive(Deserialize)]
+pub struct UserSearchQuery {
+    pub q: String,
 }
 
 #[derive(Deserialize)]
@@ -321,7 +336,147 @@ async fn me(
     if let Some((_, username, _, _)) = state.db.profile_fields(&user.id).map_err(ApiError::db)? {
         info.username = username;
     }
+    info.message_policy = state.db.message_policy(&user.id).map_err(ApiError::db)?;
     Ok(Json(info))
+}
+
+async fn update_message_policy(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<UpdateMessagePolicyBody>,
+) -> Result<Json<UserInfo>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    state
+        .db
+        .set_message_policy(&user.id, body.message_policy.trim())
+        .map_err(ApiError::from_db)?;
+    let mut info = public_me(&user);
+    info.message_policy = state.db.message_policy(&user.id).map_err(ApiError::db)?;
+    Ok(Json(info))
+}
+
+fn user_info_with_relationship(
+    state: &AppState,
+    mut user: UserInfo,
+    viewer_id: &str,
+) -> Result<UserInfo, ApiError> {
+    user.friend_status = state
+        .db
+        .friend_status(viewer_id, &user.user_id)
+        .map_err(ApiError::db)?;
+    Ok(user)
+}
+
+fn users_from_ids(
+    state: &AppState,
+    ids: &[String],
+    viewer_id: &str,
+) -> Result<Vec<UserInfo>, ApiError> {
+    let online = state.hub.online_ids();
+    let all = state.db.list_users(&online).map_err(ApiError::db)?;
+    ids.iter()
+        .filter_map(|id| all.iter().find(|user| &user.user_id == id).cloned())
+        .map(|user| user_info_with_relationship(state, user, viewer_id))
+        .collect()
+}
+
+async fn list_friends(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let friends = state.db.friend_ids(&user.id).map_err(ApiError::db)?;
+    let incoming = state.db.pending_friend_ids(&user.id, true).map_err(ApiError::db)?;
+    let outgoing = state.db.pending_friend_ids(&user.id, false).map_err(ApiError::db)?;
+    Ok(Json(serde_json::json!({
+        "friends": users_from_ids(&state, &friends, &user.id)?,
+        "incoming": users_from_ids(&state, &incoming, &user.id)?,
+        "outgoing": users_from_ids(&state, &outgoing, &user.id)?,
+    })))
+}
+
+async fn search_users(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<UserSearchQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let query = query.q.trim().trim_start_matches('@').to_lowercase();
+    if query.is_empty() {
+        return Ok(Json(serde_json::json!({ "users": [] })));
+    }
+    if query.chars().count() > 64 {
+        return Err(ApiError::bad("search query is too long"));
+    }
+    let online = state.hub.online_ids();
+    let users = state
+        .db
+        .list_users(&online)
+        .map_err(ApiError::db)?
+        .into_iter()
+        .filter(|candidate| candidate.user_id != user.id)
+        .filter(|candidate| {
+            candidate.display_name.to_lowercase().contains(&query)
+                || candidate.username.to_lowercase().contains(&query)
+        })
+        .take(50)
+        .map(|candidate| user_info_with_relationship(&state, candidate, &user.id))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Json(serde_json::json!({ "users": users })))
+}
+
+fn broadcast_friend_directories(state: &AppState, users: &[String]) {
+    for id in users {
+        if let Ok(uuid) = Uuid::parse_str(id) {
+            let online = state.hub.online_ids();
+            let friend_ids = state.db.friend_ids(id).unwrap_or_default();
+            let mut directory = state.db.list_users(&online).unwrap_or_default();
+            directory.retain(|user| friend_ids.iter().any(|friend_id| friend_id == &user.user_id));
+            for entry in &mut directory {
+                entry.friend_status = "accepted".to_string();
+            }
+            let _ = state.hub.send_to(uuid, ServerMessage::Directory { users: directory });
+        }
+    }
+}
+
+async fn send_friend_request(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let target = state.db.user_by_id(&id).map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::not_found("user not found"))?;
+    let status = state.db.send_friend_request(&user.id, &target.id).map_err(ApiError::from_db)?;
+    broadcast_friend_directories(&state, &[user.id.clone(), target.id.clone()]);
+    Ok(Json(serde_json::json!({ "status": status })))
+}
+
+async fn accept_friend_request(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let target = state.db.user_by_id(&id).map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::not_found("user not found"))?;
+    state.db.accept_friend_request(&user.id, &target.id).map_err(ApiError::from_db)?;
+    broadcast_friend_directories(&state, &[user.id.clone(), target.id.clone()]);
+    Ok(Json(serde_json::json!({ "status": "accepted" })))
+}
+
+async fn remove_friend(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let target = state.db.user_by_id(&id).map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::not_found("user not found"))?;
+    let removed = state.db.remove_friendship(&user.id, &target.id).map_err(ApiError::db)?;
+    broadcast_friend_directories(&state, &[user.id.clone(), target.id.clone()]);
+    Ok(Json(serde_json::json!({ "removed": removed })))
 }
 
 async fn rtc_config(
@@ -2010,6 +2165,8 @@ fn public_me(user: &UserRow) -> UserInfo {
         admin_ids: Vec::new(),
         post_policy: String::new(),
         e2e_enabled: false,
+        friend_status: "self".to_string(),
+        message_policy: "everyone".to_string(),
         group_member_ids: Vec::new(),
     }
 }
