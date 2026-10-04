@@ -1433,9 +1433,11 @@ impl Database {
     pub fn profile_tags(&self, user_id: &str) -> rusqlite::Result<Vec<String>> {
         let conn = self.conn.lock().expect("db lock");
         let raw = conn
-            .query_row("SELECT profile_tags FROM users WHERE id = ?1", [user_id], |row| {
-                row.get::<_, String>(0)
-            })
+            .query_row(
+                "SELECT profile_tags FROM users WHERE id = ?1",
+                [user_id],
+                |row| row.get::<_, String>(0),
+            )
             .optional()?;
 
         let Some(raw) = raw else {
