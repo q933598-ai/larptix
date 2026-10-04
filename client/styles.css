@@ -3632,3 +3632,204 @@ html[data-theme="custom"] .music-library {
     max-height: 34dvh;
   }
 }
+
+
+/* Friends list: keep presence visible without painting every row blue. */
+.people {
+  background: var(--bg);
+}
+.people li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+}
+.people li > button,
+.people li > button:hover,
+.people li > button.active {
+  background: transparent;
+  color: var(--text);
+}
+.people li > button:hover {
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+}
+.people li > button.active {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.friends-search-hint {
+  margin: 8px 2px 0;
+  color: var(--muted);
+  font-size: .68rem;
+  line-height: 1.35;
+}
+.search-person {
+  align-items: center;
+}
+.search-person .chat-friend-action {
+  width: auto;
+  min-width: 76px;
+  min-height: 34px;
+  padding: 6px 9px;
+  font-size: .72rem;
+  justify-content: center;
+}
+.search-person .chat-friend-action:disabled {
+  opacity: .65;
+  cursor: default;
+}
+.search-result-button {
+  min-width: 0;
+}
+.search-empty {
+  padding: 12px 8px;
+  color: var(--muted);
+  font-size: .8rem;
+}
+
+/* Native app fullscreen fallback for Electron. */
+.call-stage.native-window-fullscreen {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 1000 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  max-height: none !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  border-radius: 0 !important;
+  resize: none !important;
+  background: #050506;
+}
+.call-stage.native-window-fullscreen .call-videos {
+  min-height: 0;
+  height: 100%;
+  max-height: none;
+  aspect-ratio: auto;
+}
+.call-stage.native-window-fullscreen .call-security-note {
+  max-height: 3em;
+}
+.call-stage.screen-sharing {
+  width: min(620px, 56vw);
+}
+.call-stage.screen-sharing .call-controls {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  max-height: 128px;
+  gap: 5px;
+}
+.call-stage.screen-sharing .call-controls button,
+.call-stage.screen-sharing .call-controls select {
+  min-height: 34px;
+  padding: 5px 7px;
+  font-size: .72rem;
+}
+
+/* Compact movable music player, independent from the library window. */
+.music-player {
+  position: fixed;
+  z-index: 240;
+  left: auto;
+  right: 16px;
+  bottom: 82px;
+  width: min(540px, calc(100vw - 32px));
+  min-height: 0;
+  grid-template-columns: minmax(150px, 1fr) auto;
+  grid-template-rows: auto auto;
+  gap: 4px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-bright);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  box-shadow: 0 18px 55px rgb(0 0 0 / 48%);
+}
+.music-player-track {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.music-player-track.dragging {
+  cursor: grabbing;
+}
+.music-player-cover {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  font-size: 1rem;
+}
+.music-player-copy strong {
+  font-size: .78rem;
+}
+.music-player-copy span {
+  font-size: .65rem;
+}
+.music-player-side {
+  grid-column: 2;
+  grid-row: 1;
+  gap: 3px;
+  font-size: .64rem;
+}
+.music-player-main {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  grid-template-columns: auto minmax(90px, 1fr);
+  align-items: center;
+  gap: 5px;
+}
+.music-player-controls {
+  justify-content: flex-start;
+}
+.music-control {
+  width: 28px;
+  height: 28px;
+}
+.music-progress {
+  min-width: 0;
+}
+.music-volume {
+  width: 58px;
+}
+.music-player .music-player-side .music-volume {
+  display: none;
+}
+.music-player .music-player-side .music-control {
+  width: 26px;
+  height: 26px;
+  font-size: .72rem;
+}
+@media (max-width: 700px) {
+  .music-player {
+    left: 8px;
+    right: 8px;
+    bottom: calc(66px + env(safe-area-inset-bottom));
+    width: calc(100vw - 16px);
+  }
+  .music-player-side {
+    max-width: 150px;
+  }
+  .music-player-side > span {
+    display: none;
+  }
+}
+@media (max-width: 480px) {
+  .music-player {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .music-player-copy span {
+    display: none;
+  }
+  .music-player-side .music-control[aria-pressed="false"] {
+    display: none;
+  }
+  .call-stage.screen-sharing {
+    left: 8px;
+    right: 8px;
+    bottom: calc(66px + env(safe-area-inset-bottom));
+    width: calc(100vw - 16px);
+  }
+  .call-stage.screen-sharing .call-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
