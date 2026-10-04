@@ -855,6 +855,7 @@ fn open_chat(state: &AppState, tx: &Outbound, user: &UserRow, peer_id: &str) -> 
                     .as_ref()
                     .map(|_| format!("/api/groups/{}/banner", group.id)),
                 subscriber_count: group.member_ids.len(),
+        tags: Vec::new(),
             },
             history,
         });
@@ -1631,6 +1632,7 @@ fn user_info(user: &UserRow, online: bool) -> UserInfo {
         group_avatar_url: None,
         group_banner_url: None,
         subscriber_count: 0,
+        tags: Vec::new(),
     }
 }
 
