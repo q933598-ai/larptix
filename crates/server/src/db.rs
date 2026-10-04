@@ -3007,7 +3007,7 @@ mod tests {
                 .username,
             "alice_a"
         );
-        assert!(db.update_profile(&bob.id, "Bob", "ALICE_A", "").is_err());
+        assert!(db.update_profile(&bob.id, "Bob", "ALICE_A", "", "[]").is_err());
     }
 
     #[test]
