@@ -5276,3 +5276,74 @@ html[data-theme="catppuccin-mocha"] .log a {
     max-height: 90dvh;
   }
 }
+
+
+/* Final theme/mobile polish */
+html[data-theme="light"] .call-stage .call-heading-copy p,
+html[data-theme="light"] .call-stage .call-heading-copy small {
+  color: var(--text);
+}
+html[data-theme="light"] .call-stage .call-security-note,
+html[data-theme="catppuccin-latte"] .call-stage .call-security-note {
+  color: var(--muted);
+}
+html[data-theme="catppuccin-mocha"] .xp-window-titlebar,
+html[data-theme="catppuccin-mocha"] .music-window-titlebar {
+  background: linear-gradient(180deg, #5b607c 0%, #3e4259 54%, #313447 100%);
+  color: #cdd6f4;
+}
+html[data-theme="catppuccin-mocha"] .call-stage .call-heading-copy p,
+html[data-theme="catppuccin-mocha"] .call-stage .call-heading-copy small {
+  color: #cdd6f4;
+}
+html[data-theme="catppuccin-mocha"] .call-stage .call-dock-heading > .ghost {
+  color: #cdd6f4;
+  border-color: #585b70;
+  background: rgb(255 255 255 / 8%);
+}
+
+@media (max-width: 760px) {
+  .top-right {
+    min-width: 0;
+  }
+  .top-right .status,
+  .top-right .me-label {
+    display: none;
+  }
+  .call-actions {
+    flex: 1 1 100%;
+    max-width: 100%;
+  }
+  .call-actions .photo-btn {
+    flex: 0 0 auto;
+  }
+  .direct-call-avatars {
+    flex: 0 0 auto;
+  }
+  .person-name {
+    min-width: 0;
+  }
+  .message-user-tag {
+    max-width: 140px;
+  }
+  #composer {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .composer-tools {
+    max-height: 54px;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+  .composer-send-cluster {
+    min-width: 92px;
+  }
+  .voice-recording {
+    flex-wrap: wrap;
+  }
+  .voice-recording-status {
+    flex: 1 1 120px;
+  }
+  .call-mini-avatars {
+    max-width: 120px;
+  }
+}
