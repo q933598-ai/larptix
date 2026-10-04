@@ -577,6 +577,21 @@ impl Database {
         .optional()
     }
 
+    pub fn delete_matrix_crypto_device(&self, user_id: &str, device_id: &str) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("db lock");
+        let deleted = conn.execute(
+            "DELETE FROM matrix_crypto_devices
+             WHERE user_id = ?1 AND device_id = ?2",
+            params![user_id, device_id],
+        )?;
+        conn.execute(
+            "DELETE FROM matrix_to_device_events
+             WHERE recipient_user_id = ?1 AND recipient_device_id = ?2",
+            params![user_id, device_id],
+        )?;
+        Ok(deleted > 0)
+    }
+
     pub fn matrix_one_time_key_count(&self, device_id: &str) -> rusqlite::Result<usize> {
         let conn = self.conn.lock().expect("db lock");
 
