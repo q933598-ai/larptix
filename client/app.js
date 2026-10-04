@@ -5980,10 +5980,11 @@ function attachLocalMediaPreview() {
   document.getElementById("toggle-microphone").disabled = !localMediaStream?.getAudioTracks().length;
   document.getElementById("toggle-camera").disabled = !localMediaStream?.getVideoTracks().length;
   if (!localVideo.hidden) {
-    try {
-      await localVideo.play();
-    } catch {
-      callStatus.textContent = "Camera is on. Click the preview to start local playback.";
+    const playback = localVideo.play();
+    if (playback && typeof playback.catch === "function") {
+      playback.catch(() => {
+        callStatus.textContent = "Camera is on. Click the preview to start local playback.";
+      });
     }
   }
 }
