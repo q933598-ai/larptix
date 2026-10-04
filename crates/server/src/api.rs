@@ -1457,6 +1457,7 @@ async fn update_profile(
     let mut info = public_me(&user);
     info.display_name = display_name;
     info.username = username;
+    info.tags = tags;
     Ok(Json(info))
 }
 
@@ -2527,6 +2528,7 @@ fn public_me(user: &UserRow) -> UserInfo {
         group_avatar_url: None,
         group_banner_url: None,
         subscriber_count: 0,
+        tags: Vec::new(),
     }
 }
 

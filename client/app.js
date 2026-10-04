@@ -45,6 +45,10 @@ const profileName = document.getElementById("profile-name");
 const profileUsername = document.getElementById("profile-username");
 const profileAbout = document.getElementById("profile-about");
 const profileTags = document.getElementById("profile-tags");
+const profileMicrophone = document.getElementById("profile-microphone");
+const profileSpeakers = document.getElementById("profile-speakers");
+const profileCamera = document.getElementById("profile-camera");
+const profileDevicesStatus = document.getElementById("profile-devices-status");
 const profileEmail = document.getElementById("profile-email");
 const profileEmailLabel = document.getElementById("profile-email-label");
 const profileActivity = document.getElementById("profile-activity");
@@ -177,9 +181,15 @@ const groupCallStart = document.getElementById("group-call-start");
 const groupCallBanner = document.getElementById("group-call-banner");
 const groupCallBannerTitle = document.getElementById("group-call-banner-title");
 const groupCallBannerMeta = document.getElementById("group-call-banner-meta");
+const groupCallBannerAvatars = document.getElementById("group-call-banner-avatars");
+const directCallAvatarStack = document.getElementById("direct-call-avatar-stack");
 const groupCallJoin = document.getElementById("group-call-join");
 const callWindowTitle = document.getElementById("call-window-title");
 const callRingtone = document.getElementById("call-ringtone");
+const voiceRecording = document.getElementById("voice-recording");
+const voiceRecordingTime = document.getElementById("voice-recording-time");
+const voiceRecordingCancel = document.getElementById("voice-recording-cancel");
+const voiceRecordingStatus = document.getElementById("voice-recording-status");
 const CALL_RING_VOLUME_KEY = "larptrix_call_ring_volume";
 const OUTGOING_RING_VOLUME_KEY = "larptrix_outgoing_ring_volume";
 const SAVED_THEMES_KEY = "larptrix_saved_themes_v1";
@@ -466,6 +476,12 @@ let callPeerId = null;
 let callMediaKind = null;
 let callMediaNotice = "";
 let pendingIceCandidates = [];
+let outgoingCallTimeout = null;
+let incomingCallTimeout = null;
+let callNoAnswer = false;
+let voiceRecordingTimer = null;
+let voiceRecordingStartedAt = 0;
+const speakingMonitors = new Map();
 const iceCandidatesBeforeOffer = new Map();
 
 let groupCallId = null;
@@ -488,6 +504,9 @@ const CALL_SOUND_KEY = "larptrix_call_sounds";
 const OUTGOING_CALL_SOUND_KEY = "larptrix_outgoing_call_sounds";
 const MESSAGE_SOUND_KEY = "larptrix_message_sounds";
 const NOISE_SUPPRESSION_KEY = "larptrix_noise_suppression";
+const CALL_MIC_KEY = "larptrix_call_microphone";
+const CALL_CAMERA_KEY = "larptrix_call_camera";
+const CALL_SPEAKERS_KEY = "larptrix_call_speakers";
 const SAVED_MESSAGES_KEY = "larptrix_saved_messages_v1";
 const SAVED_MESSAGES_LOCAL_KEY_ID = "saved-messages-local-key";
 function savedMessagesKey() {
@@ -892,6 +911,7 @@ function updateCallPlaceholder({ force = false } = {}) {
   callPlaceholderRemoteName.textContent = remoteUser.display_name || "Larptrix user";
   paintAvatar(callPlaceholderLocalAvatar, me || { user_id: "local", display_name: "You" });
   paintAvatar(callPlaceholderRemoteAvatar, remoteUser);
+  callPlaceholderRemoteName.classList.remove("call-no-answer");
 
   const hasRemoteVideo = Boolean(
     remoteVideo?.srcObject instanceof MediaStream
@@ -1020,8 +1040,11 @@ function toggleCallDeafen() {
 async function replaceCallMicrophoneTrack() {
   const oldTrack = localMediaStream?.getAudioTracks()[0];
   if (!oldTrack || !navigator.mediaDevices?.getUserMedia) return;
+  const baseAudio = callAudioConstraints();
+  const micId = selectedCallDeviceId("audioinput");
+  const audio = micId ? { ...baseAudio, deviceId: { exact: micId } } : baseAudio;
   const stream = await navigator.mediaDevices.getUserMedia({
-    audio: callAudioConstraints(),
+    audio,
     video: false,
   });
   const newTrack = stream.getAudioTracks()[0];
@@ -1762,6 +1785,10 @@ profileOpen.addEventListener("click", async () => {
     customActivity = profile.activity?.startsWith("Listening to ") ? "" : (profile.activity || "");
     profileActivity.value = customActivity;
     showMusicActivity.checked = musicActivityEnabled;
+    await populateCallDeviceSelects();
+    if (profileMicrophone) profileMicrophone.value = selectedCallDeviceId("audioinput");
+    if (profileSpeakers) profileSpeakers.value = selectedCallDeviceId("audiooutput");
+    if (profileCamera) profileCamera.value = selectedCallDeviceId("videoinput");
     profileBanner.style.backgroundImage = profile.banner_url ? 'url("' + profile.banner_url + '?v=' + Date.now() + '")' : "";
     renderNotificationSettings();
     resetE2eKeysButton.hidden = !cryptoEnabled;
@@ -1865,6 +1892,30 @@ themeDeleteSaved?.addEventListener("click", () => {
   localStorage.setItem(SAVED_THEMES_KEY, JSON.stringify(next));
   renderSavedThemeOptions();
 });
+for (const [select, key, kind, replacer] of [
+  [profileMicrophone, CALL_MIC_KEY, "audioinput", null],
+  [profileSpeakers, CALL_SPEAKERS_KEY, "audiooutput", null],
+  [profileCamera, CALL_CAMERA_KEY, "videoinput", null],
+]) {
+  select?.addEventListener("change", async () => {
+    const value = select.value || "";
+    if (value) localStorage.setItem(key, value);
+    else localStorage.removeItem(key);
+    try {
+      if (kind === "audiooutput") {
+        await applyCallSpeakerDevice(value);
+      } else if (kind === "audioinput" && localMediaStream?.getAudioTracks().length) {
+        await replaceCallMicrophoneTrack();
+      } else if (kind === "videoinput" && localMediaStream?.getVideoTracks().length) {
+        await replaceCallVideoTrack();
+      }
+      await populateCallDeviceSelects();
+    } catch (err) {
+      if (profileDevicesStatus) profileDevicesStatus.textContent = err.message || "Could not change call device.";
+      await populateCallDeviceSelects();
+    }
+  });
+}
 settingsPresence.addEventListener("change", () => setPresence(settingsPresence.value));
 settingsCallSounds.addEventListener("change", () => localStorage.setItem(CALL_SOUND_KEY, settingsCallSounds.checked ? "1" : "0"));
 settingsOutgoingCallSounds.addEventListener("change", () => localStorage.setItem(OUTGOING_CALL_SOUND_KEY, settingsOutgoingCallSounds.checked ? "1" : "0"));
@@ -3844,6 +3895,13 @@ function renderGroupCallBanner() {
   }
   const joined = state.participant_ids.includes(me?.user_id);
   groupCallBannerTitle.textContent = state.media === "video" ? "Group video call is active" : "Group call is active";
+  groupCallBannerAvatars?.replaceChildren();
+  for (const id of state.participant_ids.slice(0, 6)) {
+    const avatar = document.createElement("span");
+    avatar.className = "avatar call-mini-avatar";
+    paintAvatar(avatar, users.find((item) => item.user_id === id) || (id === me?.user_id ? me : null) || { user_id: id, display_name: "?" });
+    groupCallBannerAvatars?.append(avatar);
+  }
   groupCallBannerMeta.textContent =
     " · " + state.participant_ids.length + "/" + group.group_member_ids.length + " joined";
   groupCallJoin.textContent = joined ? "Open call" : "Join";
@@ -3929,8 +3987,9 @@ function updateDirectCallButtons(id = peerId) {
     return;
   }
   const joining = isDirectCallActive(id);
-  callButton.textContent = joining ? "Join" : "Call";
-  videoButton.textContent = joining ? "Join video" : "Video";
+  const missedIncoming = Boolean(pendingIncomingCall?.sender_id === id);
+  callButton.textContent = joining || missedIncoming ? "Join" : "Call";
+  videoButton.textContent = joining || missedIncoming ? "Join video" : "Video";
 }
 function openOrJoinDirectCall(kind) {
   if (!peerId) return;
@@ -4334,6 +4393,7 @@ function renderGroupRemoteTrack(remoteId, stream, kind) {
     identity.className = "group-participant";
     const avatar = document.createElement("span");
     avatar.className = "avatar";
+    avatar.dataset.groupAvatarId = remoteId;
     const user = users.find((item) => item.user_id === remoteId);
     paintAvatar(avatar, user || { display_name: "?" });
     const name = document.createElement("span");
@@ -4355,6 +4415,12 @@ function renderGroupRemoteTrack(remoteId, stream, kind) {
         if (!audioStream.getTracks().includes(track)) audioStream.addTrack(track);
       }
       media.srcObject = audioStream;
+      void applyCallSpeakerDevice(selectedCallDeviceId("audiooutput"));
+      startSpeakingMonitor(
+        audioStream,
+        "group-" + remoteId,
+        tile.querySelector("[data-group-avatar-id=\"" + CSS.escape(remoteId) + "\"]"),
+      );
       for (const track of stream.getAudioTracks()) {
         track.addEventListener("ended", () => {
           if (media.srcObject instanceof MediaStream && media.srcObject.getTracks().includes(track)) {
@@ -4376,6 +4442,7 @@ function removeGroupPeer(remoteId) {
   connection?.close();
   groupPeerConnections.delete(remoteId);
   groupPendingIceCandidates.delete(remoteId);
+  stopSpeakingMonitor("group-" + remoteId);
   document.getElementById("group-remotes")
     ?.querySelectorAll('[data-group-remote-id="' + CSS.escape(remoteId) + '"]')
     .forEach((element) => element.remove());
@@ -4407,7 +4474,9 @@ async function startCall(kind) {
   if (peerConnection) endCall(true);
   callPeerId = peerId;
   callMediaKind = kind;
+  callNoAnswer = false;
   updateDirectCallButtons(peerId);
+  renderDirectCallAvatarStack();
   updateCallPlaceholder({ force: true });
   startOutgoingCallRingtone();
   try {
@@ -4429,6 +4498,17 @@ async function startCall(kind) {
       description: peerConnection.localDescription,
       media: kind,
     });
+    clearTimeout(outgoingCallTimeout);
+    outgoingCallTimeout = setTimeout(() => {
+      if (!peerConnection || callPeerId !== peerId) return;
+      stopCallRingtone();
+      callNoAnswer = true;
+      callStatus.textContent = "No answer";
+      callAudioPlaceholder.hidden = true;
+      callPlaceholderRemoteAvatar.replaceChildren();
+      callPlaceholderRemoteName.textContent = "No answer";
+      callPlaceholderRemoteName.classList.add("call-no-answer");
+    }, 30000);
   } catch (err) {
     appendSystem(`Call setup failed: ${err.message || "Check camera and microphone permissions."}`);
     endCall(false);
@@ -4476,6 +4556,8 @@ async function createPeerConnection() {
         : new MediaStream();
       if (!stream.getTracks().includes(event.track)) stream.addTrack(event.track);
       remoteAudio.srcObject = stream;
+      void applyCallSpeakerDevice(selectedCallDeviceId("audiooutput"));
+      startSpeakingMonitor(stream, "remote", callPlaceholderRemoteAvatar);
       event.track.addEventListener("ended", () => {
         if (remoteAudio.srcObject instanceof MediaStream && remoteAudio.srcObject.getTracks().includes(event.track)) {
           remoteAudio.srcObject.removeTrack(event.track);
@@ -4546,6 +4628,7 @@ async function handleCallSignal(signal) {
   if (signal.kind === "offer" && !peerConnection) {
     pendingIncomingCall = signal;
     callPeerId = signal.sender_id;
+    renderDirectCallAvatarStack();
     pendingIceCandidates = iceCandidatesBeforeOffer.get(signal.sender_id) || [];
     iceCandidatesBeforeOffer.delete(signal.sender_id);
     callMediaKind = signal.payload.media === "video" ? "video" : "audio";
@@ -4560,9 +4643,31 @@ async function handleCallSignal(signal) {
       ? "Accept"
       : "Open browser";
     startCallRingtone();
+    clearTimeout(incomingCallTimeout);
+    incomingCallTimeout = setTimeout(() => {
+      if (!pendingIncomingCall || pendingIncomingCall.sender_id !== signal.sender_id) return;
+      stopCallRingtone();
+      incomingCallDialog.open && incomingCallDialog.close();
+      callStatus.textContent = "Missed call — Join from the chat when you're ready.";
+      renderDirectCallAvatarStack();
+      updateDirectCallButtons(peerId);
+    }, 30000);
     incomingCallDialog.showModal();
     return;
   }
+  if (
+    (signal.kind === "hangup" || signal.kind === "reject")
+    && pendingIncomingCall?.sender_id === signal.sender_id
+  ) {
+    clearTimeout(incomingCallTimeout);
+    incomingCallTimeout = null;
+    pendingIncomingCall = null;
+    stopCallRingtone();
+    renderDirectCallAvatarStack();
+    updateDirectCallButtons(peerId);
+    return;
+  }
+
   if (signal.kind === "ice_candidate" && !peerConnection) {
     if (pendingIncomingCall && signal.sender_id === callPeerId) {
       pendingIceCandidates.push(signal.payload);
@@ -4576,6 +4681,10 @@ async function handleCallSignal(signal) {
   if (signal.sender_id !== callPeerId) return;
   if (!peerConnection) return;
   if (signal.kind === "answer") {
+    clearTimeout(outgoingCallTimeout);
+    outgoingCallTimeout = null;
+    callNoAnswer = false;
+    renderDirectCallAvatarStack();
     stopCallRingtone();
     await peerConnection.setRemoteDescription(signal.payload);
     await flushIceCandidates();
@@ -4591,6 +4700,8 @@ async function handleCallSignal(signal) {
     await peerConnection.setLocalDescription(answer);
     sendCallSignal("answer", peerConnection.localDescription);
   } else if (signal.kind === "reject" || signal.kind === "hangup") {
+    clearTimeout(outgoingCallTimeout);
+    outgoingCallTimeout = null;
     callStatus.textContent = signal.kind === "reject" ? "Call declined" : "Call ended";
     endCall(false);
   }
@@ -4615,10 +4726,14 @@ async function acceptIncomingCall() {
     return;
   }
   const incoming = pendingIncomingCall;
+  clearTimeout(incomingCallTimeout);
+  incomingCallTimeout = null;
   stopCallRingtone();
   incomingCallDialog.close();
   peerId = incoming.sender_id;
+  callNoAnswer = false;
   updateCallPlaceholder({ force: true });
+  renderDirectCallAvatarStack();
   renderUsers();
   if (socket?.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "open", peer_id: peerId }));
@@ -4645,6 +4760,8 @@ async function acceptIncomingCall() {
 }
 
 function rejectIncomingCall() {
+  clearTimeout(incomingCallTimeout);
+  incomingCallTimeout = null;
   stopCallRingtone();
   if (pendingIncomingCall?.payload?.group_id) {
     const incoming = pendingIncomingCall;
@@ -4688,6 +4805,79 @@ function callAudioConstraints() {
   };
 }
 
+async function applyCallSpeakerDevice(deviceId) {
+  if (!deviceId) return;
+  const audioElements = [remoteAudio, ...document.querySelectorAll("#group-remotes audio[data-kind=\"audio\"]")];
+  for (const audio of audioElements) {
+    if (typeof audio?.setSinkId !== "function") continue;
+    try {
+      await audio.setSinkId(deviceId);
+    } catch {}
+  }
+}
+
+function selectedCallDeviceId(kind) {
+  if (kind === "audioinput") return localStorage.getItem(CALL_MIC_KEY) || "";
+  if (kind === "videoinput") return localStorage.getItem(CALL_CAMERA_KEY) || "";
+  if (kind === "audiooutput") return localStorage.getItem(CALL_SPEAKERS_KEY) || "";
+  return "";
+}
+
+async function populateCallDeviceSelects() {
+  if (!navigator.mediaDevices?.enumerateDevices) return;
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const fill = (select, kind, defaultLabel) => {
+      if (!select) return;
+      const previous = select.value || selectedCallDeviceId(kind);
+      select.replaceChildren();
+      const def = document.createElement("option");
+      def.value = "";
+      def.textContent = defaultLabel;
+      select.append(def);
+      for (const device of devices.filter((item) => item.kind === kind)) {
+        if (!device.deviceId) continue;
+        const option = document.createElement("option");
+        option.value = device.deviceId;
+        option.textContent = device.label || `${defaultLabel} ${option.index}`;
+        select.append(option);
+      }
+      select.value = [...select.options].some((option) => option.value === previous) ? previous : "";
+    };
+    fill(profileMicrophone, "audioinput", "Default microphone");
+    fill(profileSpeakers, "audiooutput", "Default speakers");
+    fill(profileCamera, "videoinput", "Default camera");
+    if (profileDevicesStatus) {
+      profileDevicesStatus.textContent = devices.some((device) => device.label)
+        ? "Choose the devices Larptrix should use for calls."
+        : "Device names appear after the browser grants microphone/camera permission.";
+    }
+  } catch (err) {
+    if (profileDevicesStatus) profileDevicesStatus.textContent = err.message || "Could not enumerate call devices.";
+  }
+}
+
+async function replaceCallVideoTrack() {
+  const oldTrack = localMediaStream?.getVideoTracks()[0];
+  if (!oldTrack || !navigator.mediaDevices?.getUserMedia) return;
+  const deviceId = selectedCallDeviceId("videoinput");
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: deviceId ? { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } } : true,
+  });
+  const newTrack = stream.getVideoTracks()[0];
+  if (!newTrack) throw new Error("Camera unavailable.");
+  const connections = groupCallId ? [...groupPeerConnections.values()] : peerConnection ? [peerConnection] : [];
+  for (const connection of connections) {
+    const sender = connection.getSenders().find((item) => item.track?.kind === "video");
+    if (sender) await sender.replaceTrack(newTrack);
+  }
+  oldTrack.stop();
+  localMediaStream.removeTrack(oldTrack);
+  localMediaStream.addTrack(newTrack);
+  localVideo.srcObject = localMediaStream;
+}
+
 async function acquireCallMedia(kind) {
   callMediaNotice = "";
   if (!navigator.mediaDevices?.getUserMedia) {
@@ -4700,16 +4890,25 @@ async function acquireCallMedia(kind) {
   } catch {
     // Device enumeration can be blocked until capture permission is granted.
   }
+  const cameraId = selectedCallDeviceId("videoinput");
+  const preferredVideo = cameraId
+    ? { deviceId: { exact: cameraId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+    : { width: { ideal: 1280 }, height: { ideal: 720 } };
   const videoAttempts = kind === "video"
-    ? [{ width: { ideal: 1280 }, height: { ideal: 720 } }, true]
+    ? [preferredVideo, true]
     : [false];
   const attempts = [];
   if (hasMicrophone) {
     // Prefer the browser's native audio profile first. Some Linux/PipeWire
     // devices reject processing constraints even though plain microphone
     // capture works perfectly.
-    for (const video of videoAttempts) attempts.push({ audio: true, video });
-    for (const video of videoAttempts) attempts.push({ audio: callAudioConstraints(), video });
+    const micId = selectedCallDeviceId("audioinput");
+    const audioConstraint = micId ? { deviceId: { exact: micId } } : true;
+    for (const video of videoAttempts) attempts.push({ audio: audioConstraint, video });
+
+    const baseAudio = callAudioConstraints();
+    const processedAudioConstraint = micId ? { ...baseAudio, deviceId: { exact: micId } } : baseAudio;
+    for (const video of videoAttempts) attempts.push({ audio: processedAudioConstraint, video });
     if (kind === "video") {
       attempts.push({ audio: true, video: false });
       attempts.push({ audio: callAudioConstraints(), video: false });
@@ -4726,6 +4925,7 @@ async function acquireCallMedia(kind) {
   for (const constraints of attempts) {
     try {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      void populateCallDeviceSelects();
       if (kind === "video" && !stream.getVideoTracks().length) {
         callMediaNotice = " · camera unavailable, audio-only";
       } else if (!stream.getAudioTracks().length) {
@@ -4946,7 +5146,16 @@ async function stopScreenShare() {
 
 
 function endCall(notifyPeer) {
+  clearTimeout(outgoingCallTimeout);
+  outgoingCallTimeout = null;
+  clearTimeout(incomingCallTimeout);
+  incomingCallTimeout = null;
   stopCallRingtone();
+  stopSpeakingMonitor("local");
+  stopSpeakingMonitor("remote");
+  for (const key of [...speakingMonitors.keys()].filter((item) => item.startsWith("group-"))) {
+    stopSpeakingMonitor(key);
+  }
   if (groupCallGroupId && groupCallId) {
     const groupId = groupCallGroupId;
     const callId = groupCallId;
@@ -5005,7 +5214,9 @@ function endCall(notifyPeer) {
   if (endedPeerId) iceCandidatesBeforeOffer.delete(endedPeerId);
   callPeerId = null;
   callMediaKind = null;
+  callNoAnswer = false;
   updateDirectCallButtons(peerId);
+  renderDirectCallAvatarStack();
   localVideo.srcObject = null;
   localScreenVideo.srcObject = null;
   localScreenVideo.hidden = true;
@@ -5061,6 +5272,25 @@ function renderMe() {
   profileEmailLabel.hidden = !me.email;
   paintAvatar(meAvatar, me);
   updateOwnProfileCard(me);
+}
+
+function primaryUserTag(user) {
+  const tags = Array.isArray(user?.tags) ? user.tags.filter(Boolean) : [];
+  return tags[0] || "";
+}
+
+function appendUserTag(parent, user, { compact = false } = {}) {
+  const tag = primaryUserTag(user);
+  if (!tag) return;
+  const el = document.createElement("small");
+  el.className = compact ? "user-tag user-tag-compact" : "user-tag";
+  el.textContent = "🏷️ " + tag;
+  el.title = tagsTitle(user);
+  parent.append(el);
+}
+
+function tagsTitle(user) {
+  return (Array.isArray(user?.tags) ? user.tags : []).map((tag) => "🏷️ " + tag).join(" · ");
 }
 
 function renderUsers() {
@@ -5125,6 +5355,7 @@ function renderUsers() {
     name.className = "person-name";
     const label = document.createElement("span");
     label.textContent = user.is_saved_chat ? "Saved Messages" : user.is_group ? "👥 " + user.display_name : user.display_name;
+    appendUserTag(label, user, { compact: true });
     name.append(label);
     if (!user.is_saved_chat && user.username && !user.is_group) {
       const handle = document.createElement("small");
@@ -5493,6 +5724,13 @@ function appendMessage(message) {
   const meta = document.createElement("div");
   meta.className = "meta";
   meta.textContent = (message.sender_name || "Larptrix user") + " · " + new Date(message.created_at).toLocaleTimeString();
+  if (senderUser?.tags?.length) {
+    const tag = document.createElement("span");
+    tag.className = "user-tag message-user-tag";
+    tag.textContent = "🏷️ " + senderUser.tags[0];
+    tag.title = tagsTitle(senderUser);
+    meta.append(tag);
+  }
 
   const previousRow = logEl.lastElementChild;
   const previousMessage = previousRow?.dataset?.messageId
@@ -5668,9 +5906,77 @@ function appendMessage(message) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-async function attachLocalMediaPreview() {
+async function stopSpeakingMonitor(key) {
+  const monitor = speakingMonitors.get(key);
+  if (!monitor) return;
+  monitor.stopped = true;
+  if (monitor.raf) cancelAnimationFrame(monitor.raf);
+  try { monitor.source?.disconnect(); } catch {}
+  try { monitor.analyser?.disconnect(); } catch {}
+  const closeResult = monitor.audioContext?.close?.();
+  closeResult?.catch?.(() => {});
+  monitor.element?.classList.remove("speaking");
+  speakingMonitors.delete(key);
+}
+
+function startSpeakingMonitor(stream, key, element) {
+  stopSpeakingMonitor(key);
+  if (!stream?.getAudioTracks().length || !element || typeof AudioContext === "undefined") return;
+  try {
+    const audioContext = new AudioContext();
+    const source = audioContext.createMediaStreamSource(stream);
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.78;
+    source.connect(analyser);
+    const data = new Uint8Array(analyser.fftSize);
+    const state = { audioContext, source, analyser, element, raf: 0, stopped: false };
+    const tick = () => {
+      if (state.stopped) return;
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (const value of data) {
+        const centered = (value - 128) / 128;
+        sum += centered * centered;
+      }
+      const rms = Math.sqrt(sum / data.length);
+      element.classList.toggle("speaking", rms > 0.055);
+      state.raf = requestAnimationFrame(tick);
+    };
+    speakingMonitors.set(key, state);
+    tick();
+    audioContext.resume?.().catch?.(() => {});
+  } catch {}
+}
+
+function renderDirectCallAvatarStack() {
+  if (!directCallAvatarStack) return;
+  directCallAvatarStack.replaceChildren();
+  const ids = [];
+  if (pendingIncomingCall?.sender_id && !peerConnection) {
+    ids.push(pendingIncomingCall.sender_id);
+  } else if (peerConnection && callPeerId) {
+    ids.push(me?.user_id);
+    if (!callNoAnswer) ids.push(callPeerId);
+  }
+  for (const id of ids.filter(Boolean).slice(0, 4)) {
+    const avatar = document.createElement("span");
+    avatar.className = "avatar call-mini-avatar";
+    const user = id === me?.user_id ? me : users.find((item) => item.user_id === id);
+    paintAvatar(avatar, user || { user_id: id, display_name: "?" });
+    directCallAvatarStack.append(avatar);
+  }
+  directCallAvatarStack.hidden = ids.length === 0;
+}
+
+function attachLocalMediaPreview() {
   localVideo.srcObject = localMediaStream;
   localVideo.hidden = !localMediaStream?.getVideoTracks().length;
+  startSpeakingMonitor(
+    localMediaStream,
+    "local",
+    callPlaceholderLocalAvatar,
+  );
   document.getElementById("toggle-microphone").disabled = !localMediaStream?.getAudioTracks().length;
   document.getElementById("toggle-camera").disabled = !localMediaStream?.getVideoTracks().length;
   if (!localVideo.hidden) {
@@ -6843,6 +7149,8 @@ async function renderEncryptedAttachments(message, payload, container) {
       : [];
 
   if (!files.length) return;
+  const existingMedia = container.querySelector(".message-media-stack, .message-media-grid");
+  if (existingMedia) return;
 
   const media = document.createElement("div");
   media.className = files.length > 1 && files.every((file) => String(file?.mime || "").startsWith("image/"))
@@ -6963,7 +7271,9 @@ function renderSelectedGif(gif, container) {
     throw new Error("This GIF did not come from KLIPY.");
   }
 
+  if (container.querySelector("[data-klipy-gif-embed]")) return;
   const figure = document.createElement("figure");
+  figure.dataset.klipyGifEmbed = "1";
   figure.className = "gif-attachment";
 
   const image = document.createElement("img");
@@ -7007,10 +7317,28 @@ function clearAttachment() {
   audioFileInput.value = "";
 }
 
+function updateVoiceRecordingUi() {
+  if (!voiceRecording || !voiceRecordingTime) return;
+  const elapsed = Math.max(0, Date.now() - voiceRecordingStartedAt);
+  const seconds = Math.floor(elapsed / 1000);
+  voiceRecordingTime.textContent = Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0");
+}
+
+function cancelVoiceRecording() {
+  if (recorder && recorder.state !== "inactive") recorder.stop();
+  recorder = null;
+  recordingStream?.getTracks().forEach((track) => track.stop());
+  recordingStream = null;
+  recordedChunks = [];
+  clearInterval(voiceRecordingTimer);
+  voiceRecordingTimer = null;
+  voiceRecording?.setAttribute("hidden", "");
+  if (recordAudioButton) recordAudioButton.textContent = "🎙";
+}
+
 async function toggleRecording() {
   if (recorder && recorder.state === "recording") {
     recorder.stop();
-    recordAudioButton.textContent = "Record";
     return;
   }
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
@@ -7018,29 +7346,52 @@ async function toggleRecording() {
     return;
   }
   try {
-    recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    recordingStream = await navigator.mediaDevices.getUserMedia({ audio: selectedCallDeviceId("audioinput") ? { deviceId: { exact: selectedCallDeviceId("audioinput") } } : true });
     const mimeType = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus"]
       .find((type) => MediaRecorder.isTypeSupported(type));
     recorder = new MediaRecorder(recordingStream, mimeType ? { mimeType } : undefined);
     recordedChunks = [];
+    voiceRecordingStartedAt = Date.now();
+    voiceRecording?.removeAttribute("hidden");
+    if (voiceRecordingStatus) voiceRecordingStatus.textContent = "Recording voice message…";
+    voiceRecordingTimer = setInterval(updateVoiceRecordingUi, 250);
+    updateVoiceRecordingUi();
+    if (recordAudioButton) recordAudioButton.textContent = "⏹";
     recorder.addEventListener("dataavailable", (event) => {
       if (event.data.size) recordedChunks.push(event.data);
     });
     recorder.addEventListener("stop", () => {
-      const blob = new Blob(recordedChunks, { type: recorder.mimeType || "audio/webm" });
-      const ext = blob.type.includes("ogg") ? "ogg" : "webm";
-      queueAttachment(new File([blob], `voice-message.${ext}`, { type: blob.type }));
-      recordingStream.getTracks().forEach((track) => track.stop());
+      const wasCancelled = voiceRecording?.dataset.cancelled === "1";
+      voiceRecording?.dataset && delete voiceRecording.dataset.cancelled;
+      const blob = new Blob(recordedChunks, { type: recorder?.mimeType || "audio/webm" });
+      const stream = recordingStream;
       recordingStream = null;
+      stream?.getTracks().forEach((track) => track.stop());
+      clearInterval(voiceRecordingTimer);
+      voiceRecordingTimer = null;
+      recorder = null;
+      voiceRecording?.setAttribute("hidden", "");
+      if (!wasCancelled && blob.size) {
+        queueAttachment(new File([blob], "voice-message.webm", { type: blob.type || "audio/webm" }));
+      }
+      if (recordAudioButton) recordAudioButton.textContent = "🎙";
     }, { once: true });
-    recorder.start();
-    recordAudioButton.textContent = "Stop recording";
+    recorder.start(120);
   } catch (err) {
     appendSystem(err.message || "Could not access the microphone.");
     recordingStream?.getTracks().forEach((track) => track.stop());
     recordingStream = null;
+    recorder = null;
+    voiceRecording?.setAttribute("hidden", "");
   }
 }
+
+voiceRecordingCancel?.addEventListener("click", () => {
+  if (!recorder || recorder.state === "inactive") return;
+  voiceRecording.dataset.cancelled = "1";
+  voiceRecordingStatus.textContent = "Cancelling…";
+  recorder.stop();
+});
 
 function formatSize(size) {
   if (size < 1024) return `${size} B`;

@@ -92,14 +92,18 @@
               Background
             </label>
             <button id="chat-background-clear" type="button" class="ghost" title="Remove chat background">Clear background</button>
+            <span id="direct-call-avatar-stack" class="call-mini-avatars direct-call-avatars" aria-hidden="true" hidden></span>
             <button id="start-audio-call" type="button" class="ghost" title="Voice call">Call</button>
             <button id="start-video-call" type="button" class="ghost" title="Video call">Video</button>
           </div>
         </div>
         <div id="group-call-banner" class="group-call-banner" hidden>
-          <div>
-            <strong id="group-call-banner-title">Group call is active</strong>
-            <span id="group-call-banner-meta"></span>
+          <div class="group-call-banner-copy">
+            <div id="group-call-banner-avatars" class="call-mini-avatars" aria-hidden="true"></div>
+            <span class="group-call-banner-text">
+              <strong id="group-call-banner-title">Group call is active</strong>
+              <span id="group-call-banner-meta"></span>
+            </span>
           </div>
           <button id="group-call-join" type="button">Join</button>
         </div>
@@ -209,7 +213,6 @@
               <input id="audio-file" type="file" accept="audio/*" multiple hidden />
               Audio
             </label>
-            <button id="record-audio" type="button" class="ghost" title="Record a voice message">Record</button>
             <div class="emoji-control">
               <button id="emoji-picker-toggle" type="button" class="ghost" title="Insert emoji">😊</button>
               <div id="emoji-picker" class="emoji-picker" hidden>
@@ -220,7 +223,19 @@
             </div>
           </div>
           <input id="body" type="text" maxlength="4000" autocomplete="off" enterkeyhint="send" spellcheck="true" placeholder="Write a message" />
-          <button type="submit" class="send-button" title="Send message" aria-label="Send message">📨</button>
+          <div class="composer-send-cluster">
+            <button id="record-audio" type="button" class="voice-record-button" title="Record a voice message" aria-label="Record a voice message">🎙</button>
+            <button type="submit" class="send-button" title="Send message" aria-label="Send message">📨</button>
+          </div>
+          <div id="voice-recording" class="voice-recording" hidden>
+            <span id="voice-recording-dot" class="voice-recording-dot"></span>
+            <strong id="voice-recording-time">0:00</strong>
+            <span class="voice-wave" aria-hidden="true">
+              <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+            </span>
+            <span id="voice-recording-status">Recording voice message…</span>
+            <button id="voice-recording-cancel" type="button" class="ghost">Cancel</button>
+          </div>
         </form>
 
         <section id="music-library" class="music-library" hidden aria-label="Music Library">
@@ -338,9 +353,22 @@
           <label for="profile-tags">Tags</label>
           <input id="profile-tags" type="text" maxlength="192" placeholder="gamer, developer, linux" />
           <p class="settings-help">Up to 8 tags, separated by commas.</p>
-          <label for="profile-tags">Tags</label>
-          <input id="profile-tags" type="text" maxlength="192" placeholder="gamer, developer, linux" />
-          <p class="settings-help">Up to 8 tags, separated by commas.</p>
+        </section>
+        <section class="profile-section">
+          <h3>Call devices</h3>
+          <label for="profile-microphone">Microphone</label>
+          <select id="profile-microphone" aria-label="Call microphone">
+            <option value="">Default microphone</option>
+          </select>
+          <label for="profile-speakers">Speakers</label>
+          <select id="profile-speakers" aria-label="Call speakers">
+            <option value="">Default speakers</option>
+          </select>
+          <label for="profile-camera">Camera</label>
+          <select id="profile-camera" aria-label="Call camera">
+            <option value="">Default camera</option>
+          </select>
+          <p id="profile-devices-status" class="settings-help">Choose the devices Larptrix should use for calls.</p>
         </section>
         <section class="profile-section">
           <h3>Status</h3>
@@ -425,6 +453,7 @@
           <option value="black">Black</option>
           <option value="light">Light</option>
           <option value="catppuccin-latte">Catppuccin Latte</option>
+          <option value="catppuccin-mocha">Catppuccin Mocha</option>
           <option value="custom">Custom</option>
         </select>
         <div id="custom-theme-editor" class="custom-theme-editor" hidden>
