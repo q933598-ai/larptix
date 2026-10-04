@@ -4848,7 +4848,8 @@ async function startCall(kind) {
         sendCallSignal("hangup", { call_id: directCallSessionId });
         endCall(false);
         showDirectCallNotice(unansweredPeerId, "No answer", {
-          join: true,
+          join: false,
+          persist: true,
           kind: unansweredKind,
           duration: 3000,
           avatarPeerId: me?.user_id,
@@ -4955,7 +4956,8 @@ async function createPeerConnection() {
         const unansweredKind = callMediaKind || "audio";
         endCall(false);
         showDirectCallNotice(unansweredPeerId, "No answer", {
-          join: true,
+          join: false,
+          persist: true,
           kind: unansweredKind,
           duration: 3000,
           avatarPeerId: me?.user_id,
@@ -6481,7 +6483,7 @@ function renderDirectCallParticipants() {
   directCallParticipants.hidden = directCallParticipants.childElementCount === 0;
 }
 
-function showDirectCallNotice(targetPeerId, message, { join = false, kind = "audio", duration = 3000, avatarPeerId = targetPeerId } = {}) {
+function showDirectCallNotice(targetPeerId, message, { join = false, persist = false, kind = "audio", duration = 3000, avatarPeerId = targetPeerId } = {}) {
   if (!targetPeerId || !callStage) return;
   clearTimeout(directCallNoticeTimeout);
   directCallNoticeTimeout = null;
@@ -6513,7 +6515,7 @@ function showDirectCallNotice(targetPeerId, message, { join = false, kind = "aud
     renderDirectCallParticipants();
   renderDirectCallAvatarStack();
   updateDirectCallButtons(peerId);
-  if (!join) {
+  if (!join && !persist) {
     directCallNoticeTimeout = setTimeout(() => {
       if (lastDirectCallPeerId !== targetPeerId) return;
       callStage.classList.remove("call-ending-notice");
@@ -6532,17 +6534,32 @@ function showDirectCallNotice(targetPeerId, message, { join = false, kind = "aud
     return;
   }
 
-  directCallNoticeTimeout = setTimeout(() => {
-    if (lastDirectCallPeerId !== targetPeerId) return;
-    directCallNoticeTimeout = null;
-    callNoAnswer = true;
-    lastDirectCallAvatarPeerId = avatarPeerId || targetPeerId;
-    if (directCallJoin) directCallJoin.hidden = false;
-    callStatus.textContent = "No answer · ready to join";
-    renderDirectCallParticipants();
-    renderDirectCallAvatarStack();
-    updateDirectCallButtons(peerId);
-  }, duration);
+  if (join) {
+    directCallNoticeTimeout = setTimeout(() => {
+      if (lastDirectCallPeerId !== targetPeerId) return;
+      directCallNoticeTimeout = null;
+      callNoAnswer = true;
+      lastDirectCallAvatarPeerId = avatarPeerId || targetPeerId;
+      if (directCallJoin) directCallJoin.hidden = false;
+      callStatus.textContent = "No answer · ready to join";
+      renderDirectCallParticipants();
+      renderDirectCallAvatarStack();
+      updateDirectCallButtons(peerId);
+    }, duration);
+  } else {
+    // The caller owns the outgoing call already, so there is nothing to join.
+    directCallNoticeTimeout = setTimeout(() => {
+      if (lastDirectCallPeerId !== targetPeerId) return;
+      directCallNoticeTimeout = null;
+      callNoAnswer = true;
+      lastDirectCallAvatarPeerId = avatarPeerId || me?.user_id || targetPeerId;
+      if (directCallJoin) directCallJoin.hidden = true;
+      callStatus.textContent = "No answer";
+      renderDirectCallParticipants();
+      renderDirectCallAvatarStack();
+      updateDirectCallButtons(peerId);
+    }, duration);
+  }
 }
 
 function renderDirectCallAvatarStack() {
