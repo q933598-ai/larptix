@@ -5154,7 +5154,7 @@ async function handleCallSignal(signal) {
         duration: 3000,
       });
     }, 20000);
-    incomingCallDialog.showModal();
+    // Direct calls are handled from the chat header so the normal chat stays visible.
     return;
   }
   if (
