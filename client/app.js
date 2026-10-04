@@ -5065,7 +5065,13 @@ async function createChannel(event) {
       is_channel: true,
       admin_ids: Array.isArray(created.admin_ids) ? created.admin_ids : [me.user_id],
       post_policy: created.post_policy || "admins",
-      group_member_ids: created.member_ids,
+      group_member_ids: created.member_ids || [],
+      group_description: created.description || "",
+      group_avatar_url: created.avatar_url || null,
+      group_banner_url: created.banner_url || null,
+      avatar_url: created.avatar_url || null,
+      banner_url: created.banner_url || null,
+      subscriber_count: Number(created.subscriber_count || created.member_ids?.length || 0),
     };
     groups = [...groups.filter((group) => group.user_id !== newChannel.user_id), newChannel];
     createChannelDialog.close();
