@@ -4353,3 +4353,111 @@ html[data-theme="custom"] .music-library {
     padding-bottom: 56px;
   }
 }
+
+
+/* Music library player: force every playback control onto one horizontal row,
+   including narrow library windows where the global mobile rule would otherwise stack/hide controls. */
+#music-library > #music-player {
+  display: grid;
+  grid-template-columns: minmax(120px, .8fr) minmax(170px, 1.4fr) minmax(130px, .8fr);
+  grid-template-rows: 1fr;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  min-height: 48px;
+  padding: 4px 8px;
+}
+
+#music-library > #music-player .music-player-track {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+}
+
+#music-library > #music-player .music-player-main {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+}
+
+#music-library > #music-player .music-player-controls {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+#music-library > #music-player .music-player-main .music-progress {
+  flex: 1 1 auto;
+  min-width: 45px;
+  width: auto;
+}
+
+#music-library > #music-player .music-player-side {
+  grid-column: 3;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  gap: 3px;
+  overflow: hidden;
+}
+
+#music-library > #music-player .music-player-side > span {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+#music-library > #music-player .music-volume {
+  flex: 0 1 55px;
+  min-width: 38px;
+  width: 55px;
+}
+
+#music-library > #music-player .music-control {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  font-size: .68rem;
+}
+
+#music-library > #music-player .music-player-cover {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  font-size: .85rem;
+}
+
+#music-library > #music-player .music-player-copy strong {
+  font-size: .7rem;
+}
+
+#music-library > #music-player .music-player-copy span {
+  font-size: .58rem;
+}
+
+@media (max-width: 760px) {
+  #music-library > #music-player {
+    grid-template-columns: minmax(95px, .75fr) minmax(135px, 1.25fr) minmax(105px, .75fr);
+    height: 44px;
+    min-height: 44px;
+    gap: 5px;
+    padding: 3px 6px;
+  }
+
+  #music-library > #music-player .music-player-side {
+    display: flex;
+  }
+
+  #music-library > #music-player .music-player-side > span {
+    display: inline;
+  }
+
+  #music-library > #music-player .music-player-copy span {
+    display: none;
+  }
+}
