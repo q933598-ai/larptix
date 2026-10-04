@@ -1816,7 +1816,7 @@ imageViewer.addEventListener("click", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && imageViewer.open) {
     event.preventDefault();
-    imageViewer.close();
+    closeMediaViewer();
   }
 });
 document.getElementById("peer-profile-open").addEventListener("click", () => {
@@ -5086,6 +5086,15 @@ function appendMessage(message) {
         }
       });
       li.append(img);
+    } else if (message.attachment.mime.startsWith("video/")) {
+      const video = document.createElement("video");
+      video.className = "chat-video";
+      video.controls = true;
+      video.playsInline = true;
+      video.preload = "metadata";
+      video.src = message.attachment.url;
+      video.addEventListener("dblclick", () => openVideoViewer(video.src, message.attachment.name));
+      li.append(video);
     } else if (message.attachment.mime.startsWith("audio/")) {
       const audio = document.createElement("audio");
       audio.controls = true;
