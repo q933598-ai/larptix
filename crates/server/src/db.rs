@@ -1977,6 +1977,28 @@ impl Database {
         conn.execute("DELETE FROM sessions WHERE token = ?1", [token])?;
         Ok(())
     }
+    pub fn session_id_for_token(&self, token: &str) -> rusqlite::Result<Option<String>> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.query_row(
+            "SELECT session_id FROM sessions WHERE token = ?1",
+            [token],
+            |row| row.get(0),
+        )
+        .optional()
+    }
+
+    pub fn delete_other_sessions(
+        &self,
+        user_id: &str,
+        current_token: &str,
+    ) -> rusqlite::Result<usize> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "DELETE FROM sessions WHERE user_id = ?1 AND token <> ?2",
+            params![user_id, current_token],
+        )
+    }
+
 
     pub fn insert_attachment(
         &self,
