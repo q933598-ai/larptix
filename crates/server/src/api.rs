@@ -31,7 +31,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/register", post(register))
         .route("/api/register/password", post(register_password))
         .route("/api/login", post(login))
-        .route("/api/qr-login/claim", post(claim_qr_login))
+        .route("/api/qr-login/claim/{token}", post(claim_qr_login))
         .route("/api/qr-login/status/{token}", get(qr_login_status))
         .route("/api/logout", post(logout))
         .route("/api/me", get(me))
