@@ -6307,3 +6307,75 @@ html[data-theme="catppuccin-mocha"] .call-stage .call-dock-heading > .ghost {
     height: 88px;
   }
 }
+
+/* Chat identity: Telegram-style avatar immediately to the left of the name. */
+.peer-chat-avatar {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  border: 1px solid var(--line);
+}
+
+.chat-titlebar > .peer-heading-copy {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(34vw, 360px);
+}
+
+@media (max-width: 760px) {
+  .peer-chat-avatar {
+    width: 36px;
+    height: 36px;
+    flex-basis: 36px;
+  }
+
+  .chat-titlebar > .peer-heading-copy {
+    flex: 1 1 auto;
+    max-width: none;
+  }
+}
+
+/* Local QR for account sign-in; the credential never needs to leave the server/client pair. */
+.sign-in-qr {
+  width: min(280px, 80vw);
+  min-height: 280px;
+  margin: 12px auto;
+  padding: 14px;
+  display: grid;
+  place-items: center;
+  background: #fff;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.sign-in-qr[hidden],
+.sign-in-qr-help[hidden] {
+  display: none !important;
+}
+
+.sign-in-qr svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 252px;
+  aspect-ratio: 1;
+}
+
+#key-dialog {
+  width: min(460px, 94vw);
+}
+
+#key-dialog .generated-key {
+  font-size: .85rem;
+}
+
+.video-message-no-controls {
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.video-message-no-controls:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}

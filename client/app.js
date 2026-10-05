@@ -28,6 +28,8 @@ const tabLogin = document.getElementById("tab-login");
 const tabRegister = document.getElementById("tab-register");
 const keyDialog = document.getElementById("key-dialog");
 const generatedKey = document.getElementById("generated-key");
+const signInQr = document.getElementById("sign-in-qr");
+const signInQrHelp = document.getElementById("sign-in-qr-help");
 const keySaved = document.getElementById("key-saved");
 const keyContinue = document.getElementById("key-continue");
 const imageViewer = document.getElementById("image-viewer");
@@ -104,6 +106,7 @@ const videoRecordingCancel = document.getElementById("video-recording-cancel");
 const videoRecordingStatus = document.getElementById("video-recording-status");
 const emptyEl = document.getElementById("empty");
 const peerName = document.getElementById("peer-name");
+const peerAvatar = document.getElementById("peer-avatar");
 const peerMeta = document.getElementById("peer-meta");
 const peerVerified = document.getElementById("peer-verified");
 const chatTitlebar = document.getElementById("chat-titlebar");
@@ -1486,6 +1489,8 @@ function openSavedMessagesChat() {
   channelViewObserver?.disconnect();
   viewedChannelMessages.clear();
   peerId = SAVED_MESSAGES_ID;
+  peerAvatar?.replaceChildren();
+  peerAvatar?.classList.remove("avatar-image");
   peerName.textContent = "Saved Messages";
   peerMeta.textContent = "";
   chatTitlebar.hidden = false;
@@ -3041,6 +3046,20 @@ applyAvatarShape();
 bootstrap();
 
 async function bootstrap() {
+  const hash = location.hash.startsWith("#") ? location.hash.slice(1) : "";
+  const hashParams = new URLSearchParams(hash);
+  const qrAccessKey = hashParams.get("access_key")?.trim() || "";
+  if (qrAccessKey) {
+    history.replaceState(null, "", location.pathname + location.search);
+    try {
+      const user = await api("POST", "/api/login", { access_key: qrAccessKey });
+      signedIn(user);
+      return;
+    } catch (err) {
+      showAuthError("QR sign-in failed: " + (err.message || "invalid sign-in code"));
+    }
+  }
+
   try {
     const user = await api("GET", "/api/me");
     signedIn(user, {
@@ -3052,9 +3071,35 @@ async function bootstrap() {
   }
 }
 
+function renderSignInQr(accessKey) {
+  if (!signInQr || !signInQrHelp) return;
+  signInQr.replaceChildren();
+  signInQr.hidden = true;
+  signInQrHelp.hidden = true;
+  try {
+    if (typeof globalThis.qrcode !== "function") return;
+    const loginUrl = new URL(location.href);
+    loginUrl.search = "";
+    loginUrl.hash = "access_key=" + accessKey;
+    const qr = globalThis.qrcode(0, "M");
+    qr.addData(loginUrl.toString(), "Byte");
+    qr.make();
+    signInQr.innerHTML = qr.createSvgTag({
+      cellSize: 4,
+      margin: 12,
+      scalable: true,
+    });
+    signInQr.hidden = false;
+    signInQrHelp.hidden = false;
+  } catch (err) {
+    console.warn("[QR] Could not generate sign-in QR:", err);
+  }
+}
+
 function showKeyDialog(accessKey, user) {
   pendingKeyUser = user;
   generatedKey.textContent = accessKey;
+  renderSignInQr(accessKey);
   document.getElementById("key-error").hidden = true;
   keySaved.checked = false;
   keyContinue.disabled = true;
@@ -3872,6 +3917,7 @@ function connect() {
         chatTitlebar.hidden = false;
         peerName.hidden = false;
         composer.hidden = false;
+        paintAvatar(peerAvatar, msg.peer);
         peerName.textContent = msg.peer.display_name;
         peerName.classList.toggle("has-activities", getUserActivities(msg.peer).length > 0);
         peerMeta.textContent = msg.peer.is_channel
@@ -4377,7 +4423,9 @@ function renderDirectCallTopbar(id = peerId) {
     directCallJoin.hidden = false;
   } else if (active && directCallOutgoing) {
     paintAvatar(directCallTopbarAvatar, getDirectCallUser(remoteId));
-    directCallTopbarLabel.textContent = "Calling…";
+    directCallTopbarLabel.textContent = callNoAnswer
+      ? "Waiting for them…"
+      : "Calling…";
     directCallJoin.disabled = true;
     directCallJoin.hidden = false;
   } else {
@@ -4445,6 +4493,7 @@ function openChat(id) {
   // Calls live independently from the currently opened chat.
   peerId = id;
   const selected = getChatEntries().find((user) => user.user_id === id);
+  paintAvatar(peerAvatar, selected || { user_id: id, display_name: "?" });
   peerVerified.hidden = true;
   if (!selected?.is_group) void refreshPeerVerification(id);
   const isChannel = Boolean(selected?.is_channel);
@@ -4956,19 +5005,12 @@ async function startCall(kind) {
     outgoingCallTimeout = setTimeout(() => {
       if (!peerConnection || callPeerId !== peerId || directCallAnswered) return;
       stopCallRingtone();
-      const unansweredPeerId = callPeerId;
-      sendCallSignal("hangup", {
-        call_id: directCallSessionId,
-        reason: "no_answer",
-      });
-      endCall(false);
-      void showDirectCallNotice(unansweredPeerId, "No answer", {
-        join: false,
-        persist: false,
-        kind: callMediaKind || "audio",
-        duration: 3000,
-        avatarPeerId: me?.user_id,
-      });
+      callNoAnswer = true;
+      directCallRemoteVisible = false;
+      callStatus.textContent = "No answer · waiting for them to join" + callMediaNotice;
+      updateCallPlaceholder({ force: true });
+      renderDirectCallAvatarStack();
+      renderDirectCallTopbar(peerId);
     }, 15000);
   } catch (err) {
     appendSystem(`Call setup failed: ${err.message || "Check camera and microphone permissions."}`);
@@ -7818,13 +7860,23 @@ async function renderEncryptedAttachment(attachment, metadata, container, { vide
           ? "circle"
           : null;
     video.className = "chat-video" + (resolvedShape
-      ? " video-message-media video-message-" + resolvedShape
+      ? " video-message-media video-message-" + resolvedShape + " video-message-no-controls"
       : "");
-    video.controls = true;
+    video.controls = !resolvedShape;
     video.playsInline = true;
     video.preload = "metadata";
     video.src = url;
     video.title = metadata.name;
+    if (resolvedShape) {
+      video.addEventListener("click", () => {
+        if (video.paused) {
+          video.play().catch(() => {});
+        } else {
+          video.pause();
+        }
+      });
+      video.setAttribute("aria-label", "Video message");
+    }
     video.addEventListener("dblclick", () => openVideoViewer(url, metadata.name));
     container.append(video);
   } else if (metadata.mime.startsWith("audio/")) {
