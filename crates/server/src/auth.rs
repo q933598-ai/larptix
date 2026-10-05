@@ -25,6 +25,12 @@ pub fn new_session_token() -> String {
     Uuid::new_v4().simple().to_string() + &Uuid::new_v4().simple().to_string()
 }
 
+pub fn new_qr_login_token() -> String {
+    Uuid::new_v4().simple().to_string() + &Uuid::new_v4().simple().to_string()
+}
+
+pub const QR_LOGIN_MS: i64 = 2 * 60 * 1000;
+
 pub fn new_access_key() -> String {
     let raw = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     raw.as_bytes()
