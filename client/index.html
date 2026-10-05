@@ -78,6 +78,7 @@
       <main class="chat">
         <div id="empty" class="empty">Pick someone to start a private chat.</div>
         <div class="chat-titlebar" id="chat-titlebar" hidden>
+          <span id="peer-avatar" class="avatar peer-chat-avatar" aria-hidden="true"></span>
           <div class="peer-heading-copy">
             <p id="peer-meta" class="peer-meta"></p>
             <h2 id="peer-name" class="peer-name"></h2>
@@ -434,7 +435,8 @@
           <h3>Account</h3>
           <label id="profile-email-label" for="profile-email">Email</label>
           <input id="profile-email" type="email" readonly />
-          <button id="issue-access-key" type="button" class="ghost">Create / replace sign-in key</button>
+          <button id="issue-access-key" type="button" class="ghost">Create / replace sign-in key + QR</button>
+          <p class="settings-help">Scan the QR with a phone camera to sign in to this account. Treat the QR like your sign-in key.</p>
         </section>
         <section class="profile-section">
           <h3>End-to-end encryption</h3>
@@ -754,6 +756,8 @@
         <h2>Save your access key</h2>
         <p class="key-warning">This key is the only way to sign in to this account. Larptrix cannot recover it.</p>
         <code id="generated-key" class="generated-key"></code>
+        <div id="sign-in-qr" class="sign-in-qr" hidden aria-label="Larptrix sign-in QR code"></div>
+        <p id="sign-in-qr-help" class="settings-help" hidden>Scan this code with another device to sign in. The code contains your current sign-in key.</p>
         <p id="key-error" class="error" hidden></p>
         <button id="copy-key" type="button" class="ghost">Copy key</button>
         <label class="key-saved-label">
@@ -828,6 +832,7 @@
 
     <script src="/layout.js" defer></script>
     <script src="/music-library.js" defer></script>
+    <script src="/qrcode.js" defer></script>
     <script src="/app.js" type="module"></script>
   </body>
 </html>
