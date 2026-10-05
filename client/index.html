@@ -435,8 +435,9 @@
           <h3>Account</h3>
           <label id="profile-email-label" for="profile-email">Email</label>
           <input id="profile-email" type="email" readonly />
-          <button id="issue-access-key" type="button" class="ghost">Create / replace sign-in key + QR</button>
-          <p class="settings-help">Scan the QR with a phone camera to sign in to this account. Treat the QR like your sign-in key.</p>
+          <button id="issue-access-key" type="button" class="ghost">Create / replace sign-in key</button>
+          <button id="create-qr-login" type="button" class="ghost">Generate QR login</button>
+          <p class="settings-help">QR login codes are temporary and must be approved from a device already signed in to this account.</p>
         </section>
         <section class="profile-section">
           <h3>End-to-end encryption</h3>
@@ -477,6 +478,13 @@
           <div><dt>Username</dt><dd id="settings-username"></dd></div>
         </dl>
         <button id="settings-open-profile" type="button" class="ghost">Open profile</button>
+      </section>
+
+      <section class="settings-section">
+        <h3>Devices &amp; sessions</h3>
+        <p class="settings-help">These are the browsers and apps currently signed in to your Larptrix account.</p>
+        <div id="sessions-list" class="sessions-list"></div>
+        <button id="sessions-terminate-others" type="button" class="ghost">Terminate all other sessions</button>
       </section>
 
       <section class="settings-section">
@@ -756,8 +764,6 @@
         <h2>Save your access key</h2>
         <p class="key-warning">This key is the only way to sign in to this account. Larptrix cannot recover it.</p>
         <code id="generated-key" class="generated-key"></code>
-        <div id="sign-in-qr" class="sign-in-qr" hidden aria-label="Larptrix sign-in QR code"></div>
-        <p id="sign-in-qr-help" class="settings-help" hidden>Scan this code with another device to sign in. The code contains your current sign-in key.</p>
         <p id="key-error" class="error" hidden></p>
         <button id="copy-key" type="button" class="ghost">Copy key</button>
         <label class="key-saved-label">
@@ -766,6 +772,24 @@
         </label>
         <button id="key-continue" type="button" disabled>Continue</button>
       </form>
+    </dialog>
+
+    <dialog id="qr-login-dialog" class="qr-login-dialog">
+      <form method="dialog">
+        <h2>Log in with QR code</h2>
+        <p id="qr-login-help" class="settings-help">Scan this code with another device. Then approve the new session here.</p>
+        <div id="qr-login-code" class="sign-in-qr" aria-label="Temporary Larptrix QR login code"></div>
+        <p id="qr-login-status" class="settings-value">Generating…</p>
+        <div class="call-controls">
+          <button id="qr-login-close" type="button" class="ghost">Close</button>
+          <button id="qr-login-approve" type="button" hidden>Approve login</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="qr-login-wait-dialog" class="qr-login-wait-dialog">
+      <h2>Approve Larptrix login</h2>
+      <p id="qr-login-wait-status">Waiting for your existing device to approve this login…</p>
     </dialog>
 
     <dialog id="image-viewer" class="image-viewer" aria-label="Media preview">
