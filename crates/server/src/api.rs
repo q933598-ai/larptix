@@ -16,8 +16,8 @@ use larptrix_protocol::{
 use serde::Deserialize;
 
 use crate::auth::{
-    access_key_hash, hash_password, new_access_key, new_session_token, verify_password,
-    COOKIE_NAME, SESSION_MS,
+    access_key_hash, hash_password, new_access_key, new_qr_login_token, new_session_token,
+    verify_password, COOKIE_NAME, QR_LOGIN_MS, SESSION_MS,
 };
 use crate::db::{DbError, UserRow};
 use crate::media::{
@@ -31,6 +31,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/register", post(register))
         .route("/api/register/password", post(register_password))
         .route("/api/login", post(login))
+        .route("/api/qr-login/claim", post(claim_qr_login))
+        .route("/api/qr-login/status/{token}", get(qr_login_status))
         .route("/api/logout", post(logout))
         .route("/api/me", get(me))
         .route("/api/me", patch(update_profile))
@@ -81,6 +83,11 @@ pub fn router() -> Router<Arc<AppState>> {
             patch(update_channel_settings),
         )
         .route("/api/me/access-key", post(create_access_key))
+        .route("/api/me/qr-login", post(create_qr_login))
+        .route("/api/me/qr-login/{token}", get(my_qr_login_status).post(approve_qr_login))
+        .route("/api/me/sessions", get(list_sessions))
+        .route("/api/me/sessions/others", delete(delete_other_sessions))
+        .route("/api/me/sessions/{session_id}", delete(delete_session))
         .route(
             "/api/me/crypto-device",
             get(get_crypto_device).put(put_crypto_device),
@@ -243,6 +250,7 @@ pub struct UpdateCryptoDeviceBody {
 
 async fn register(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(body): Json<RegisterBody>,
 ) -> Result<Response, ApiError> {
     let display_name = sanitize_display_name(&body.display_name).map_err(ApiError::bad)?;
@@ -271,6 +279,7 @@ async fn register(
 
 async fn register_password(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(body): Json<PasswordRegisterBody>,
 ) -> Result<Response, ApiError> {
     let display_name = sanitize_display_name(&body.display_name).map_err(ApiError::bad)?;
@@ -295,11 +304,12 @@ async fn register_password(
     let online = state.hub.online_ids();
     let users = state.db.list_users(&online).map_err(ApiError::db)?;
     state.hub.broadcast(ServerMessage::Directory { users });
-    cookie_response(&state, user)
+    cookie_response(&state, user, device_name(&headers))
 }
 
 async fn login(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(body): Json<LoginBody>,
 ) -> Result<Response, ApiError> {
     if let Some(access_key) = body.access_key {
@@ -310,7 +320,7 @@ async fn login(
             .user_by_access_key_hash(&access_key_hash)
             .map_err(ApiError::db)?
             .ok_or_else(|| ApiError::unauthorized("invalid access key"))?;
-        return cookie_response(&state, user);
+        return cookie_response(&state, user, device_name(&headers));
     }
     let email = sanitize_email(
         body.email
@@ -337,7 +347,187 @@ async fn login(
     if !ok {
         return Err(ApiError::unauthorized("invalid email or password"));
     }
-    cookie_response(&state, user)
+    cookie_response(&state, user, device_name(&headers))
+}
+
+fn device_name(headers: &HeaderMap) -> String {
+    let ua = headers
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("Web browser");
+    let name = if ua.contains("Firefox") {
+        "Firefox"
+    } else if ua.contains("Edg/") {
+        "Edge"
+    } else if ua.contains("Chrome") {
+        "Chrome"
+    } else if ua.contains("Safari") {
+        "Safari"
+    } else if ua.contains("Electron") {
+        "Larptrix desktop"
+    } else {
+        "Web browser"
+    };
+    let platform = if ua.contains("Android") {
+        "Android"
+    } else if ua.contains("iPhone") || ua.contains("iPad") {
+        "iOS"
+    } else if ua.contains("Windows") {
+        "Windows"
+    } else if ua.contains("Mac OS") {
+        "macOS"
+    } else if ua.contains("Linux") {
+        "Linux"
+    } else {
+        "Unknown"
+    };
+    format!("{name} · {platform}")
+}
+
+fn public_origin(headers: &HeaderMap) -> String {
+    if let Ok(value) = std::env::var("LARPTRIX_PUBLIC_URL") {
+        return value.trim_end_matches('/').to_string();
+    }
+    let host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("localhost");
+    let proto = headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("https");
+    format!("{proto}://{host}").trim_end_matches('/').to_string()
+}
+
+async fn create_qr_login(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let token = new_qr_login_token();
+    let created_at = now_ms();
+    let expires_at = created_at + QR_LOGIN_MS;
+    state.db.create_qr_login(&token, &user.id, expires_at, created_at).map_err(ApiError::db)?;
+    let login_url = format!("{}#qr_login={token}", public_origin(&headers));
+    Ok(Json(serde_json::json!({
+        "token": token,
+        "login_url": login_url,
+        "expires_at": expires_at
+    })))
+}
+
+async fn my_qr_login_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(token): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let Some((state_name, owner_id, expires_at)) =
+        state.db.qr_login_state(&token, now_ms()).map_err(ApiError::db)?
+    else {
+        return Err(ApiError::not_found("QR login request not found"));
+    };
+    if owner_id != user.id {
+        return Err(ApiError::unauthorized("QR login request belongs to another account"));
+    }
+    if expires_at <= now_ms() {
+        return Ok(Json(serde_json::json!({ "state": "expired" })));
+    }
+    Ok(Json(serde_json::json!({ "state": state_name, "expires_at": expires_at })))
+}
+
+async fn approve_qr_login(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(token): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let approved = state.db.approve_qr_login(&token, &user.id, now_ms()).map_err(ApiError::db)?;
+    if !approved {
+        return Err(ApiError::bad("QR login request is not ready to approve"));
+    }
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn claim_qr_login(
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = headers;
+    let user_id = state.db.claim_qr_login(&token, now_ms()).map_err(ApiError::db)?;
+    if user_id.is_none() {
+        return Err(ApiError::unauthorized("invalid or expired QR login code"));
+    }
+    Ok(Json(serde_json::json!({ "state": "scanned" })))
+}
+
+async fn qr_login_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(token): Path<String>,
+) -> Result<Response, ApiError> {
+    let _ = headers;
+    let Some((state_name, _, expires_at)) = state.db.qr_login_state(&token, now_ms()).map_err(ApiError::db)? else {
+        return Err(ApiError::not_found("QR login request not found"));
+    };
+    if expires_at <= now_ms() {
+        return Ok(Json(serde_json::json!({ "state": "expired" })).into_response());
+    }
+    if state_name != "approved" {
+        return Ok(Json(serde_json::json!({ "state": state_name })).into_response());
+    }
+    let user_id = state.db.consume_qr_login(&token, now_ms()).map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::unauthorized("QR login is no longer available"))?;
+    let user = state.db.user_by_id(&user_id).map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::unauthorized("account no longer exists"))?;
+    let response = Json(public_me(&user)).into_response();
+    session_response(&state, &user, device_name(&headers), response)
+}
+
+async fn list_sessions(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let current_token = session_token(&headers);
+    let current_id = current_token
+        .as_deref()
+        .and_then(|token| state.db.session_id_for_token(token).ok().flatten());
+    let sessions = state.db.list_sessions(&user.id, now_ms()).map_err(ApiError::db)?;
+    Ok(Json(serde_json::json!({
+        "sessions": sessions.into_iter().map(|(id, created_at, expires_at, device_name)| {
+            serde_json::json!({
+                "id": id,
+                "created_at": created_at,
+                "expires_at": expires_at,
+                "device_name": device_name,
+                "current": current_id.as_deref() == Some(id.as_str())
+            })
+        }).collect::<Vec<_>>()
+    })))
+}
+
+async fn delete_session(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(session_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    if !state.db.delete_session_by_id(&user.id, &session_id).map_err(ApiError::db)? {
+        return Err(ApiError::not_found("session not found"));
+    }
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn delete_other_sessions(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let current = session_token(&headers)
+        .ok_or_else(|| ApiError::unauthorized("not signed in"))?;
+    let removed = state.db.delete_other_sessions(&user.id, &current).map_err(ApiError::db)?;
+    Ok(Json(serde_json::json!({ "ok": true, "removed": removed })))
 }
 
 async fn logout(
@@ -2568,25 +2758,32 @@ pub fn session_token(headers: &HeaderMap) -> Option<String> {
     })
 }
 
-fn cookie_response(state: &AppState, user: UserRow) -> Result<Response, ApiError> {
+fn cookie_response(
+    state: &AppState,
+    user: UserRow,
+    device_name: String,
+) -> Result<Response, ApiError> {
     let mut info = public_me(&user);
     if let Some((_, username, _, _)) = state.db.profile_fields(&user.id).map_err(ApiError::db)? {
         info.username = username;
     }
     let response = Json(info).into_response();
-    session_response(state, &user, response)
+    session_response(state, &user, device_name, response)
 }
 
 fn session_response(
     state: &AppState,
     user: &UserRow,
+    device_name: String,
     mut response: Response,
 ) -> Result<Response, ApiError> {
     let token = new_session_token();
-    let expires_at = now_ms() + SESSION_MS;
+    let session_id = Uuid::new_v4().to_string();
+    let created_at = now_ms();
+    let expires_at = created_at + SESSION_MS;
     state
         .db
-        .create_session(&token, &user.id, expires_at)
+        .create_session(&token, &user.id, expires_at, &session_id, created_at, &device_name)
         .map_err(ApiError::db)?;
     let secure = std::env::var("LARPTRIX_COOKIE_SECURE")
         .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "yes"));
