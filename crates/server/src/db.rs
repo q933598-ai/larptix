@@ -1822,13 +1822,141 @@ impl Database {
         token: &str,
         user_id: &str,
         expires_at: i64,
+        session_id: &str,
+        created_at: i64,
+        device_name: &str,
     ) -> rusqlite::Result<()> {
         let conn = self.conn.lock().expect("db lock");
         conn.execute(
-            "INSERT INTO sessions (token, user_id, expires_at) VALUES (?1, ?2, ?3)",
-            params![token, user_id, expires_at],
+            "INSERT INTO sessions
+             (token, user_id, expires_at, session_id, created_at, device_name)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![token, user_id, expires_at, session_id, created_at, device_name],
         )?;
         Ok(())
+    }
+
+    pub fn list_sessions(
+        &self,
+        user_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<Vec<(String, i64, i64, String)>> {
+        let conn = self.conn.lock().expect("db lock");
+        let mut stmt = conn.prepare(
+            "SELECT session_id, created_at, expires_at, COALESCE(device_name, 'Web browser')
+             FROM sessions
+             WHERE user_id = ?1 AND expires_at > ?2
+             ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map(params![user_id, now], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+        rows.collect()
+    }
+
+    pub fn delete_session_by_id(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("db lock");
+        Ok(conn.execute(
+            "DELETE FROM sessions WHERE user_id = ?1 AND session_id = ?2",
+            params![user_id, session_id],
+        )? > 0)
+    }
+
+    pub fn create_qr_login(
+        &self,
+        token: &str,
+        user_id: &str,
+        expires_at: i64,
+        created_at: i64,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "INSERT INTO qr_login_requests (token, user_id, expires_at, created_at, state)
+             VALUES (?1, ?2, ?3, ?4, 'pending')",
+            params![token, user_id, expires_at, created_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn qr_login_state(
+        &self,
+        token: &str,
+        now: i64,
+    ) -> rusqlite::Result<Option<(String, String, i64)>> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.query_row(
+            "SELECT state, user_id, expires_at
+             FROM qr_login_requests
+             WHERE token = ?1",
+            [token],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+    }
+
+    pub fn claim_qr_login(
+        &self,
+        token: &str,
+        now: i64,
+    ) -> rusqlite::Result<Option<String>> {
+        let conn = self.conn.lock().expect("db lock");
+        let changed = conn.execute(
+            "UPDATE qr_login_requests
+             SET state = 'scanned'
+             WHERE token = ?1 AND expires_at > ?2 AND state = 'pending'",
+            params![token, now],
+        )?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        conn.query_row(
+            "SELECT user_id FROM qr_login_requests WHERE token = ?1",
+            [token],
+            |row| row.get(0),
+        )
+        .optional()
+    }
+
+    pub fn approve_qr_login(
+        &self,
+        token: &str,
+        user_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<bool> {
+        Ok(self.conn.lock().expect("db lock").execute(
+            "UPDATE qr_login_requests
+             SET state = 'approved'
+             WHERE token = ?1 AND user_id = ?2
+               AND expires_at > ?3 AND state = 'scanned'",
+            params![token, user_id, now],
+        )? > 0)
+    }
+
+    pub fn consume_qr_login(
+        &self,
+        token: &str,
+        now: i64,
+    ) -> rusqlite::Result<Option<String>> {
+        let conn = self.conn.lock().expect("db lock");
+        let tx = conn.unchecked_transaction()?;
+        let user_id: Option<String> = tx
+            .query_row(
+                "SELECT user_id FROM qr_login_requests
+                 WHERE token = ?1 AND expires_at > ?2 AND state = 'approved'",
+                params![token, now],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(user_id) = user_id else {
+            return Ok(None);
+        };
+        tx.execute("DELETE FROM qr_login_requests WHERE token = ?1", [token])?;
+        tx.commit()?;
+        Ok(Some(user_id))
     }
 
     pub fn user_by_session(&self, token: &str, now: i64) -> rusqlite::Result<Option<UserRow>> {
@@ -2688,8 +2816,21 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             token TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
             expires_at INTEGER NOT NULL,
+            session_id TEXT,
+            created_at INTEGER,
+            device_name TEXT,
             FOREIGN KEY (user_id) REFERENCES users(id)
         );
+        CREATE TABLE IF NOT EXISTS qr_login_requests (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            state TEXT NOT NULL DEFAULT 'pending',
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_qr_login_user
+            ON qr_login_requests(user_id, created_at);
         CREATE TABLE IF NOT EXISTS crypto_devices (
             device_id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -2905,6 +3046,30 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             ON message_views(message_id);
         "#,
     )?;
+    for (column, definition) in [
+        ("session_id", "TEXT"),
+        ("created_at", "INTEGER"),
+        ("device_name", "TEXT NOT NULL DEFAULT 'Web browser'"),
+    ] {
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = ?1",
+            [column],
+            |row| row.get(0),
+        )?;
+        if exists == 0 {
+            conn.execute_batch(&format!(
+                "ALTER TABLE sessions ADD COLUMN {column} {definition};"
+            ))?;
+        }
+    }
+    conn.execute(
+        "UPDATE sessions
+         SET session_id = lower(hex(randomblob(16))),
+             created_at = expires_at - 2592000000
+         WHERE session_id IS NULL",
+        [],
+    )?;
+
     for (column, definition) in [
         ("is_channel", "INTEGER NOT NULL DEFAULT 0"),
         ("post_policy", "TEXT NOT NULL DEFAULT 'members'"),
