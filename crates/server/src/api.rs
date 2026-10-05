@@ -3043,7 +3043,14 @@ mod tests {
             .unwrap();
         state
             .db
-            .create_session("e2e-session", &user.id, crate::now_ms() + 60_000)
+            .create_session(
+                "e2e-session",
+                &user.id,
+                crate::now_ms() + 60_000,
+                "e2e-test-session",
+                crate::now_ms(),
+                "Test browser",
+            )
             .unwrap();
         let mut headers = HeaderMap::new();
         headers.insert(
