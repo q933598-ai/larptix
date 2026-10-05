@@ -7860,13 +7860,23 @@ async function renderEncryptedAttachment(attachment, metadata, container, { vide
           ? "circle"
           : null;
     video.className = "chat-video" + (resolvedShape
-      ? " video-message-media video-message-" + resolvedShape
+      ? " video-message-media video-message-" + resolvedShape + " video-message-no-controls"
       : "");
-    video.controls = true;
+    video.controls = !resolvedShape;
     video.playsInline = true;
     video.preload = "metadata";
     video.src = url;
     video.title = metadata.name;
+    if (resolvedShape) {
+      video.addEventListener("click", () => {
+        if (video.paused) {
+          video.play().catch(() => {});
+        } else {
+          video.pause();
+        }
+      });
+      video.setAttribute("aria-label", "Video message");
+    }
     video.addEventListener("dblclick", () => openVideoViewer(url, metadata.name));
     container.append(video);
   } else if (metadata.mime.startsWith("audio/")) {
