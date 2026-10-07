@@ -2700,6 +2700,16 @@ fn session_response(
         .db
         .create_session(&token, &user.id, device_name, user_agent, created_at, expires_at)
         .map_err(ApiError::db)?;
+    let secure = std::env::var("LARPTRIX_COOKIE_SECURE")
+        .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "yes"));
+    let cookie = session_cookie(&token, SESSION_MS / 1000, secure);
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&cookie).map_err(|_| ApiError::internal("cookie"))?,
+    );
+    Ok(response)
+}
+
 fn session_cookie(token: &str, max_age: i64, secure: bool) -> String {
     let secure_flag = if secure { "; Secure" } else { "" };
     format!("{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}{secure_flag}")
