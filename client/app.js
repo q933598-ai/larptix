@@ -1552,12 +1552,12 @@ function renderSavedChatHistory() {
   logEl.replaceChildren();
   void getSavedMessages().then((items) => {
     if (peerId !== SAVED_MESSAGES_ID) return;
-    items.forEach(appendSavedMessage);
+    for (const item of items) await appendSavedMessage(item);
     logEl.scrollTop = logEl.scrollHeight;
   });
 }
 
-function appendSavedMessage(item) {
+async function appendSavedMessage(item) {
   const li = document.createElement("li");
   li.dataset.messageId = item.id;
   li.classList.add("me");
@@ -1572,6 +1572,55 @@ function appendSavedMessage(item) {
   body.textContent = item.text || "";
   renderMessageDecorations(li, item);
   li.append(savedAvatar, meta, body);
+
+  if (Array.isArray(item.attachments)) {
+    const media = document.createElement("div");
+    media.className = "message-media-stack saved-local-media";
+    for (let index = 0; index < item.attachments.length; index += 1) {
+      const descriptor = item.attachments[index];
+      const record = await readSavedAttachmentBlob(item.id, index);
+      const blob = record?.blob instanceof Blob ? record.blob : null;
+      if (!blob) {
+        const missing = document.createElement("span");
+        missing.className = "settings-help";
+        missing.textContent = "Attachment unavailable on this device: " + (descriptor.name || "file");
+        media.append(missing);
+        continue;
+      }
+      const url = URL.createObjectURL(blob);
+      if ((descriptor.mime || blob.type).startsWith("image/")) {
+        const image = document.createElement("img");
+        image.className = "photo";
+        image.src = url;
+        image.alt = descriptor.name || "Saved image";
+        image.addEventListener("click", () => openImageViewer(url, descriptor.name || "Saved image"));
+        media.append(image);
+      } else if ((descriptor.mime || blob.type).startsWith("video/")) {
+        const video = document.createElement("video");
+        video.className = "chat-video";
+        video.controls = true;
+        video.playsInline = true;
+        video.preload = "metadata";
+        video.src = url;
+        media.append(video);
+      } else if ((descriptor.mime || blob.type).startsWith("audio/")) {
+        const audio = document.createElement("audio");
+        audio.controls = true;
+        audio.preload = "metadata";
+        audio.dataset.larptrixAudioKind = /^voice-message\./i.test(descriptor.name || "") ? "voice" : "audio";
+        audio.src = url;
+        media.append(audio);
+      } else {
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = descriptor.name || "attachment";
+        link.textContent = (descriptor.name || "attachment") + " (" + formatSize(descriptor.size || blob.size) + ")";
+        media.append(link);
+      }
+    }
+    if (media.childElementCount) li.append(media);
+  }
+
   const actions = document.createElement("div");
   actions.className = "message-actions";
 
@@ -1586,6 +1635,7 @@ function appendSavedMessage(item) {
   remove.textContent = "Remove";
   remove.addEventListener("click", async () => {
     const next = (await getSavedMessages()).filter((entry) => entry.id !== item.id);
+    await deleteSavedAttachmentBlobs(item);
     await setSavedMessages(next);
     renderSavedChatHistory();
   });
