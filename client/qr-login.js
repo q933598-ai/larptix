@@ -127,7 +127,7 @@
           return;
         }
         const script = document.createElement("script");
-        script.src = "https://cdn.jsdelivr.net/npm/qr-scanner@1.4.2/qr-scanner.umd.min.js";
+        script.src = "/qr-scanner.umd.min.js";
         script.async = true;
         script.dataset.larptrixQrEngine = "1";
         script.onload = () => globalThis.QrScanner
