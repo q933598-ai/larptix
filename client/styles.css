@@ -6379,3 +6379,187 @@ html[data-theme="catppuccin-mocha"] .call-stage .call-dock-heading > .ghost {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
+
+
+/* Larptrix-native chat media players. */
+.larptrix-media-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: min(100%, 420px);
+  padding: 0.72rem 0.8rem;
+  margin-top: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--panel-2) 88%, var(--me));
+  box-sizing: border-box;
+}
+.larptrix-media-play,
+.larptrix-video-play {
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 800;
+  cursor: pointer;
+}
+.larptrix-media-main {
+  min-width: 0;
+  flex: 1;
+}
+.larptrix-media-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+.larptrix-media-top strong {
+  font-size: 0.82rem;
+}
+.larptrix-media-time,
+.larptrix-video-time {
+  color: var(--muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+.larptrix-waveform {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 28px;
+  margin: 0.15rem 0;
+  overflow: hidden;
+  opacity: 0.85;
+  -webkit-mask-image: linear-gradient(90deg, #000 0 100%);
+  mask-image: linear-gradient(90deg, #000 0 100%);
+}
+.larptrix-waveform span {
+  flex: 1 1 0;
+  min-width: 2px;
+  max-width: 5px;
+  height: 40%;
+  border-radius: 99px;
+  background: var(--muted);
+  transform-origin: center;
+}
+.larptrix-media-progress,
+.larptrix-video-progress {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.larptrix-video-card {
+  position: relative;
+  width: min(100%, 520px);
+  margin-top: 0.4rem;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #000;
+}
+.larptrix-video-card .chat-video {
+  display: block;
+  width: 100%;
+  max-height: 520px;
+  margin: 0;
+  object-fit: contain;
+  background: #000;
+}
+.larptrix-video-card:has(.video-message-circle) {
+  width: 220px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+}
+.larptrix-video-card:has(.video-message-square) {
+  width: 260px;
+  aspect-ratio: 1;
+  border-radius: 22px;
+}
+.larptrix-video-controls {
+  position: absolute;
+  inset: auto 0 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1.9rem 0.65rem 0.6rem;
+  background: linear-gradient(transparent, rgb(0 0 0 / 0.86));
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+.larptrix-video-card:hover .larptrix-video-controls,
+.larptrix-video-card:focus-within .larptrix-video-controls {
+  opacity: 1;
+}
+.larptrix-video-controls button {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  font-size: 1rem;
+  cursor: pointer;
+}
+.larptrix-video-progress {
+  flex: 1;
+  min-width: 80px;
+}
+.larptrix-video-time {
+  color: #fff;
+}
+@media (max-width: 700px) {
+  .larptrix-media-card { width: 100%; }
+  .larptrix-video-card { width: min(100%, 420px); }
+  .larptrix-video-controls { opacity: 1; }
+}
+
+/* Registered encrypted devices in account settings. */
+.settings-section-heading,
+.settings-device-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.settings-section-heading {
+  justify-content: space-between;
+  margin-bottom: 0.65rem;
+}
+.settings-section-heading h3 {
+  margin-bottom: 0.15rem;
+}
+.settings-device-list {
+  display: grid;
+  gap: 0.55rem;
+}
+.settings-device-row {
+  padding: 0.72rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel-2);
+}
+.settings-device-icon {
+  flex: 0 0 auto;
+  width: 30px;
+  text-align: center;
+  color: var(--accent);
+}
+.settings-device-info {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 0.15rem;
+}
+.settings-device-info strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-device-info span {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+.settings-device-actions {
+  flex: 0 0 auto;
+}
