@@ -117,23 +117,26 @@
       return (browser + " on " + os).slice(0, 80);
     }
 
-    function loadFallbackScanner() {
-      if (globalThis.QrScanner) return Promise.resolve(globalThis.QrScanner);
+    async function loadFallbackDecoder() {
+      if (typeof globalThis.jsQR === "function") return globalThis.jsQR;
       return new Promise((resolve, reject) => {
-        const existing = document.querySelector("script[data-larptrix-qr-engine]");
+        const existing = document.querySelector("script[data-larptrix-qr-decoder]");
         if (existing) {
-          existing.addEventListener("load", () => resolve(globalThis.QrScanner), { once: true });
-          existing.addEventListener("error", () => reject(new Error("QR engine failed to load")), { once: true });
+          existing.addEventListener("load", () => {
+            if (typeof globalThis.jsQR === "function") resolve(globalThis.jsQR);
+            else reject(new Error("QR decoder failed to initialize"));
+          }, { once: true });
+          existing.addEventListener("error", () => reject(new Error("QR decoder failed to load")), { once: true });
           return;
         }
         const script = document.createElement("script");
-        script.src = "/qr-scanner.umd.min.js";
+        script.src = "/jsQR.js?v=1";
         script.async = true;
-        script.dataset.larptrixQrEngine = "1";
-        script.onload = () => globalThis.QrScanner
-          ? resolve(globalThis.QrScanner)
-          : reject(new Error("QR engine failed to initialize"));
-        script.onerror = () => reject(new Error("QR engine is unavailable"));
+        script.dataset.larptrixQrDecoder = "1";
+        script.onload = () => typeof globalThis.jsQR === "function"
+          ? resolve(globalThis.jsQR)
+          : reject(new Error("QR decoder failed to initialize"));
+        script.onerror = () => reject(new Error("QR decoder is unavailable"));
         document.head.appendChild(script);
       });
     }
@@ -238,26 +241,35 @@
           }
         }
 
-        const QrScanner = await loadFallbackScanner();
+        const jsQR = await loadFallbackDecoder();
         if (generation !== scannerGeneration) return;
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        if (!context) throw new Error("Could not create QR camera decoder.");
         status.textContent = "Point the camera at the sign-in QR…";
-        scanner = new QrScanner(
-          video,
-          async (result) => {
-            if (generation !== scannerGeneration) return;
-            const raw = typeof result === "string" ? result : result?.data;
-            const key = extractAccessKey(raw);
-            if (key) await confirmKey(key);
-          },
-          {
-            preferredCamera: "environment",
-            maxScansPerSecond: 8,
-            highlightScanRegion: false,
-            highlightCodeOutline: false,
-            returnDetailedScanResult: true,
-          },
-        );
-        await scanner.start();
+
+        const scanFrame = async () => {
+          if (generation !== scannerGeneration || !stream) return;
+          if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth && video.videoHeight) {
+            const scale = Math.min(1, 720 / video.videoWidth);
+            canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+            canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            try {
+              const image = context.getImageData(0, 0, canvas.width, canvas.height);
+              const result = jsQR(image.data, image.width, image.height, {
+                inversionAttempts: "attemptBoth",
+              });
+              const key = extractAccessKey(result?.data);
+              if (key) {
+                await confirmKey(key);
+                return;
+              }
+            } catch {}
+          }
+          if (generation === scannerGeneration) timer = setTimeout(scanFrame, 160);
+        };
+        timer = setTimeout(scanFrame, 160);
       } catch (err) {
         stopCamera();
         if (err?.name === "NotAllowedError") {
