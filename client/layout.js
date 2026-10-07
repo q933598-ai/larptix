@@ -61,18 +61,3 @@
     localStorage.setItem(storageKey, String(clamp(width)));
   });
 })();
-
-
-// Small client enhancements stay separate so the main app bootstrap remains focused.
-(() => {
-  for (const [src] of [
-    ["/qr-login.js?v=2"],
-    ["/media-ui.js?v=1"],
-    ["/device-settings.js?v=1"],
-  ]) {
-    const script = document.createElement("script");
-    script.src = src;
-    script.async = false;
-    document.head.appendChild(script);
-  }
-})();
