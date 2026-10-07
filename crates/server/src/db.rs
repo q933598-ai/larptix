@@ -3010,16 +3010,24 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             ))?;
         }
     }
-    let has_file_name: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM pragma_table_info('attachments') WHERE name = 'file_name'",
-        [],
-        |row| row.get(0),
-    )?;
-    if has_file_name == 0 {
-        conn.execute(
-            "ALTER TABLE attachments ADD COLUMN file_name TEXT NOT NULL DEFAULT 'attachment'",
-            [],
+    for (column, definition) in [
+        ("owner_id", "TEXT NOT NULL DEFAULT ''"),
+        ("mime", "TEXT NOT NULL DEFAULT 'application/octet-stream'"),
+        ("ext", "TEXT NOT NULL DEFAULT 'bin'"),
+        ("file_name", "TEXT NOT NULL DEFAULT 'attachment'"),
+        ("byte_size", "INTEGER NOT NULL DEFAULT 0"),
+        ("created_at", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('attachments') WHERE name = ?1",
+            [column],
+            |row| row.get(0),
         )?;
+        if exists == 0 {
+            conn.execute_batch(&format!(
+                "ALTER TABLE attachments ADD COLUMN {column} {definition};"
+            ))?;
+        }
     }
     let has_access_key_hash: i64 = conn.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'access_key_hash'",
