@@ -82,15 +82,60 @@
     let stream = null;
     let timer = null;
     let detector = null;
+    let scanner = null;
     let pendingKey = "";
+    let scannerGeneration = 0;
 
     function stopCamera() {
+      scannerGeneration += 1;
       if (timer) clearInterval(timer);
       timer = null;
       detector = null;
+      if (scanner) {
+        try { scanner.stop(); } catch {}
+        try { scanner.destroy(); } catch {}
+        scanner = null;
+      }
       if (stream) stream.getTracks().forEach((track) => track.stop());
       stream = null;
       if (video) video.srcObject = null;
+    }
+
+    function deviceLoginName() {
+      const ua = navigator.userAgent || "";
+      const browser = /Firefox\//.test(ua) ? "Firefox"
+        : /Edg\//.test(ua) ? "Edge"
+        : /Chrome\//.test(ua) ? "Chrome"
+        : /Safari\//.test(ua) ? "Safari"
+        : "Browser";
+      const os = /Android/i.test(ua) ? "Android"
+        : /iPhone|iPad|iPod/i.test(ua) ? "iOS"
+        : /Windows/i.test(ua) ? "Windows"
+        : /Mac OS X/i.test(ua) ? "macOS"
+        : /Linux/i.test(ua) ? "Linux"
+        : "device";
+      return (browser + " on " + os).slice(0, 80);
+    }
+
+    function loadFallbackScanner() {
+      if (globalThis.QrScanner) return Promise.resolve(globalThis.QrScanner);
+      return new Promise((resolve, reject) => {
+        const existing = document.querySelector("script[data-larptrix-qr-engine]");
+        if (existing) {
+          existing.addEventListener("load", () => resolve(globalThis.QrScanner), { once: true });
+          existing.addEventListener("error", () => reject(new Error("QR engine failed to load")), { once: true });
+          return;
+        }
+        const script = document.createElement("script");
+        script.src = "https://cdn.jsdelivr.net/npm/qr-scanner@1.4.2/qr-scanner.umd.min.js";
+        script.async = true;
+        script.dataset.larptrixQrEngine = "1";
+        script.onload = () => globalThis.QrScanner
+          ? resolve(globalThis.QrScanner)
+          : reject(new Error("QR engine failed to initialize"));
+        script.onerror = () => reject(new Error("QR engine is unavailable"));
+        document.head.appendChild(script);
+      });
     }
 
     function showScanError(message) {
@@ -136,7 +181,7 @@
       try {
         await jsonRequest("/api/login", {
           method: "POST",
-          body: JSON.stringify({ access_key: pendingKey }),
+          body: JSON.stringify({ access_key: pendingKey, device_name: deviceLoginName() }),
         });
         dialog.close();
         location.reload();
@@ -149,9 +194,10 @@
     }
 
     async function startScanner() {
+      const generation = ++scannerGeneration;
       error.hidden = true;
       status.hidden = false;
-      status.textContent = "Starting camera…";
+      status.textContent = "Starting QR scanner…";
 
       if (!window.isSecureContext) {
         showScanError("Camera access requires HTTPS. Use the normal HTTPS Larptrix address.");
@@ -161,48 +207,68 @@
         showScanError("This browser does not provide camera access.");
         return;
       }
-      if (!("BarcodeDetector" in window)) {
-        showScanError("This browser cannot scan QR codes inside the app. On Android, try Chrome or another browser with QR camera support, or use the phone camera.");
-        return;
-      }
 
       try {
-        const formats = await BarcodeDetector.getSupportedFormats();
-        if (!formats.includes("qr_code")) {
-          showScanError("This browser has a camera scanner, but QR codes are not supported.");
-          return;
+        if ("BarcodeDetector" in window) {
+          const formats = await BarcodeDetector.getSupportedFormats();
+          if (formats.includes("qr_code")) {
+            detector = new BarcodeDetector({ formats: ["qr_code"] });
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: { facingMode: { ideal: "environment" } },
+              audio: false,
+            });
+            video.srcObject = stream;
+            await video.play();
+            status.textContent = "Point the camera at the sign-in QR…";
+
+            timer = setInterval(async () => {
+              if (generation !== scannerGeneration || !detector || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+              try {
+                const results = await detector.detect(video);
+                for (const result of results) {
+                  const key = extractAccessKey(result.rawValue);
+                  if (key) {
+                    await confirmKey(key);
+                    return;
+                  }
+                }
+              } catch {}
+            }, 250);
+            return;
+          }
         }
 
-        detector = new BarcodeDetector({ formats: ["qr_code"] });
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } },
-          audio: false,
-        });
-        video.srcObject = stream;
-        await video.play();
+        const QrScanner = await loadFallbackScanner();
+        if (generation !== scannerGeneration) return;
         status.textContent = "Point the camera at the sign-in QR…";
-
-        timer = setInterval(async () => {
-          if (!detector || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
-          try {
-            const results = await detector.detect(video);
-            for (const result of results) {
-              const key = extractAccessKey(result.rawValue);
-              if (key) {
-                await confirmKey(key);
-                return;
-              }
-            }
-          } catch {}
-        }, 250);
+        scanner = new QrScanner(
+          video,
+          async (result) => {
+            if (generation !== scannerGeneration) return;
+            const raw = typeof result === "string" ? result : result?.data;
+            const key = extractAccessKey(raw);
+            if (key) await confirmKey(key);
+          },
+          {
+            preferredCamera: "environment",
+            maxScansPerSecond: 8,
+            highlightScanRegion: false,
+            highlightCodeOutline: false,
+            returnDetailedScanResult: true,
+          },
+        );
+        await scanner.start();
       } catch (err) {
         stopCamera();
-        if (err?.name === "NotAllowedError") showScanError("Camera permission was denied. Allow camera access and try again.");
-        else if (err?.name === "NotFoundError") showScanError("No camera was found on this device.");
-        else showScanError("Could not start the camera.");
+        if (err?.name === "NotAllowedError") {
+          showScanError("Camera permission was denied. Allow camera access and try again.");
+        } else if (err?.name === "NotFoundError" || /camera not found/i.test(err?.message || "")) {
+          showScanError("No camera was found on this device.");
+        } else {
+          showScanError("Could not start QR scanning. Check camera permission and network access for the QR scanner engine.");
+        }
       }
     }
-
     button.addEventListener("click", () => {
       resetDialog();
       dialog.showModal();
