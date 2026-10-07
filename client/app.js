@@ -129,6 +129,7 @@ const enableCallAudio = document.getElementById("enable-call-audio");
 const incomingCallDialog = document.getElementById("incoming-call-dialog");
 const incomingCallTitle = document.getElementById("incoming-call-title");
 const incomingCallKind = document.getElementById("incoming-call-kind");
+const incomingCallAvatar = document.getElementById("incoming-call-avatar");
 const screenResolution = document.getElementById("screen-resolution");
 const screenFrameRate = document.getElementById("screen-framerate");
 const chatBackgroundInput = document.getElementById("chat-background");
@@ -620,7 +621,7 @@ function persistDirectCallState() {
     }));
   } catch {}
 }
-function persistJoinableDirectCall(peerIdValue, sessionId, kind) {
+function persistJoinableDirectCall(peerIdValue, sessionId, kind, startedAt = 0) {
   if (!me || !peerIdValue || !sessionId) return;
   try {
     localStorage.setItem(activeDirectCallStorageKey(), JSON.stringify({
@@ -628,7 +629,7 @@ function persistJoinableDirectCall(peerIdValue, sessionId, kind) {
       peer_id: peerIdValue,
       call_id: sessionId,
       kind: kind === "video" ? "video" : "audio",
-      started_at: Date.now(),
+      started_at: Number(startedAt) || Date.now(),
       saved_at: Date.now(),
     }));
   } catch {}
@@ -3147,7 +3148,7 @@ groupCallStart?.addEventListener("click", () => {
 groupCallJoin?.addEventListener("click", () => void joinActiveGroupCall());
 document.getElementById("accept-call").addEventListener("click", acceptIncomingCall);
 document.getElementById("reject-call").addEventListener("click", rejectIncomingCall);
-endCallButton?.addEventListener("click", () => endCall(true));
+endCallButton?.addEventListener("click", () => endCall(true, { preserveDirectJoin: true }));
 endGroupCallButton?.addEventListener("click", endGroupCallForEveryone);
 const savedCallVolume = Number(localStorage.getItem("larptrix_call_audio_volume"));
 if (Number.isFinite(savedCallVolume)) {
@@ -3912,6 +3913,12 @@ function registrationE2eKey(userId) {
 
 function signedIn(user, options = {}) {
   me = user;
+  const savedDirectCall = readPersistedDirectCallState();
+  if (savedDirectCall?.peer_id && savedDirectCall?.call_id) {
+    lastDirectCallJoinPeerId = savedDirectCall.peer_id;
+    lastDirectCallJoinSessionId = savedDirectCall.call_id;
+    lastDirectCallJoinKind = savedDirectCall.kind === "video" ? "video" : "audio";
+  }
   registrationE2eRequired = Boolean(
     options.registrationE2eRequired
       || localStorage.getItem(registrationE2eKey(user.user_id)) === "1",
@@ -4265,7 +4272,11 @@ function connect() {
       socketHeartbeatTimer = null;
     }
     setStatus("offline");
-    endCall(false);
+    if (directCallSessionId || peerConnection || lastDirectCallJoinSessionId) {
+      endCall(false, { preserveDirectJoin: true });
+    } else {
+      endCall(false);
+    }
     if (reconnect) setTimeout(connect, 1500);
   });
 }
@@ -4574,7 +4585,7 @@ function getDirectCallUser(id) {
   return id === me?.user_id
     ? me
     : users.find((item) => item.user_id === id)
-      || { user_id: id, display_name: "Larptrix user" };
+      || { user_id: id, display_name: "Unknown contact" };
 }
 
 function renderDirectCallTopbar(id = peerId) {
@@ -4587,6 +4598,7 @@ function renderDirectCallTopbar(id = peerId) {
       || pendingIncomingCall
       || peerConnection
       || directCallOutgoing
+      || lastDirectCallJoinSessionId
   );
   if (!hasLiveDirectCall) {
     directCallJoin.hidden = true;
@@ -4600,7 +4612,11 @@ function renderDirectCallTopbar(id = peerId) {
     || pendingIncomingCall?.sender_id
     || lastDirectCallJoinPeerId
     || null;
-  const hasCallSession = Boolean(directCallSessionId || pendingIncomingCall);
+  const hasCallSession = Boolean(
+    directCallSessionId
+      || pendingIncomingCall
+      || (lastDirectCallJoinSessionId && lastDirectCallJoinPeerId === remoteId)
+  );
   const active = Boolean(
     hasCallSession
       && remoteId
@@ -4615,7 +4631,13 @@ function renderDirectCallTopbar(id = peerId) {
       && !peerConnection
       && id === remoteId
   );
-  const joinable = false;
+  const joinable = Boolean(
+    lastDirectCallJoinSessionId
+      && lastDirectCallJoinPeerId === remoteId
+      && !peerConnection
+      && !pendingIncomingCall
+      && id === remoteId
+  );
   const isDirect = Boolean(
     remoteId
       && id === remoteId
@@ -5158,7 +5180,7 @@ function removeGroupPeer(remoteId) {
   }
 }
 
-async function startCall(kind) {
+async function startCall(kind, resumeSessionId = null, resumeStartedAt = 0) {
   if (!peerId || !socket || socket.readyState !== WebSocket.OPEN) return;
   const selectedGroup = groups.find((item) => item.user_id === peerId && item.is_group);
   if (selectedGroup) {
@@ -5183,11 +5205,20 @@ async function startCall(kind) {
   directCallNoticeTimeout = null;
   lastDirectCallPeerId = null;
   lastDirectCallAvatarPeerId = null;
+  const savedJoinPeerId = lastDirectCallJoinPeerId;
+  const savedJoinSessionId = lastDirectCallJoinSessionId;
+  const requestedSessionId = resumeSessionId || savedJoinSessionId || null;
+  const requestedStartedAt = Number(resumeStartedAt || 0);
   lastDirectCallJoinPeerId = null;
+  lastDirectCallJoinSessionId = null;
   lastDirectCallJoinKind = kind;
-  directCallSessionId = crypto.randomUUID();
+  directCallSessionId = requestedSessionId || crypto.randomUUID();
   directCallOutgoing = true;
-  directCallStartedAt = Date.now();
+  directCallStartedAt = requestedStartedAt || directCallStartedAt || Date.now();
+  if (requestedSessionId && savedJoinPeerId && savedJoinPeerId !== peerId) {
+    directCallSessionId = crypto.randomUUID();
+    directCallStartedAt = Date.now();
+  }
   directCallAnsweredAt = 0;
   directCallAnswered = false;
   directCallOfferSent = false;
@@ -5195,6 +5226,7 @@ async function startCall(kind) {
   callPeerId = peerId;
   callMediaKind = kind;
   callNoAnswer = false;
+  persistDirectCallState();
   updateDirectCallButtons(peerId);
   renderDirectCallAvatarStack();
   updateCallPlaceholder({ force: true });
@@ -5403,7 +5435,9 @@ async function handleCallSignal(signal) {
     iceCandidatesBeforeOffer.delete(signal.sender_id);
     callMediaKind = signal.payload.media === "video" ? "video" : "audio";
     const caller = users.find((user) => user.user_id === signal.sender_id);
-    incomingCallTitle.textContent = `Call from ${caller?.display_name || "Larptrix user"}`;
+    const callUser = caller || { user_id: signal.sender_id, display_name: "Unknown contact" };
+    incomingCallTitle.textContent = `Call from ${callUser.display_name}`;
+    paintAvatar(incomingCallAvatar, callUser);
     const requestedKind = callMediaKind === "video" ? "Video call" : "Voice call";
     callWindowTitle.textContent = "call.exe";
     incomingCallKind.textContent = typeof globalThis.RTCPeerConnection === "function"
@@ -5414,6 +5448,7 @@ async function handleCallSignal(signal) {
       : "Open browser";
     startCallRingtone();
     renderDirectCallTopbar(signal.sender_id);
+    if (incomingCallDialog && !incomingCallDialog.open) incomingCallDialog.showModal();
     clearTimeout(incomingCallTimeout);
     incomingCallTimeout = setTimeout(() => {
       if (!pendingIncomingCall || pendingIncomingCall.sender_id !== signal.sender_id) return;
@@ -5438,6 +5473,8 @@ async function handleCallSignal(signal) {
     callPeerId = null;
     directCallSessionId = null;
     directCallRemoteVisible = true;
+    lastDirectCallJoinSessionId = null;
+    clearPersistedDirectCallState();
     lastDirectCallJoinPeerId = null;
     lastDirectCallJoinKind = "audio";
     renderDirectCallTopbar(peerId || missedPeerId);
@@ -5530,7 +5567,9 @@ async function acceptIncomingCall() {
   directCallRemoteVisible = true;
   directCallOutgoing = false;
   lastDirectCallJoinPeerId = null;
+  lastDirectCallJoinSessionId = null;
   lastDirectCallJoinKind = callMediaKind || "audio";
+  persistDirectCallState();
   updateCallPlaceholder({ force: true });
   renderDirectCallAvatarStack();
   renderUsers();
@@ -5964,7 +6003,7 @@ async function stopScreenShare() {
 }
 
 
-function endCall(notifyPeer) {
+function endCall(notifyPeer, { preserveDirectJoin = false } = {}) {
   const endedDirectPeerId = callPeerId;
   const endedDirectCallKind = callMediaKind || "audio";
   clearTimeout(outgoingCallTimeout);
@@ -5989,7 +6028,8 @@ function endCall(notifyPeer) {
   const endedDirectAnswered = directCallAnswered;
   const endedDirectOutgoing = directCallOutgoing;
   if (
-    endedDirectPeerId
+    !preserveDirectJoin
+    && endedDirectPeerId
     && endedDirectSessionId
     && endedDirectOfferSent
     && endedDirectOutgoing
@@ -6033,7 +6073,23 @@ function endCall(notifyPeer) {
     groupCallInitiatorId = null;
     renderGroupCallBanner();
   } else if (notifyPeer && callPeerId) {
-    sendCallSignal("hangup", {});
+    sendCallSignal("hangup", { reason: preserveDirectJoin ? "leave" : "hangup" });
+  }
+
+  if (preserveDirectJoin && endedDirectPeerId && endedDirectSessionId) {
+    lastDirectCallJoinPeerId = endedDirectPeerId;
+    lastDirectCallJoinKind = endedDirectCallKind;
+    lastDirectCallJoinSessionId = endedDirectSessionId;
+    persistJoinableDirectCall(
+      endedDirectPeerId,
+      endedDirectSessionId,
+      endedDirectCallKind,
+      endedDirectStartedAt,
+    );
+  } else {
+    lastDirectCallJoinPeerId = null;
+    lastDirectCallJoinSessionId = null;
+    clearPersistedDirectCallState();
   }
 
   if (callSettingsPanel) callSettingsPanel.hidden = true;
@@ -6072,8 +6128,11 @@ function endCall(notifyPeer) {
   lastDirectCallAvatarTimeout = null;
   lastDirectCallPeerId = null;
   lastDirectCallAvatarPeerId = null;
-  lastDirectCallJoinPeerId = null;
-  lastDirectCallJoinKind = "audio";
+  if (!preserveDirectJoin) {
+    lastDirectCallJoinPeerId = null;
+    lastDirectCallJoinKind = "audio";
+    lastDirectCallJoinSessionId = null;
+  }
 
 
   updateDirectCallButtons(peerId);
@@ -8611,7 +8670,9 @@ directCallJoin?.addEventListener("click", () => {
     return;
   }
   const kind = callMediaKind || lastDirectCallJoinKind || "audio";
-  void startCall(kind);
+  const sessionId = lastDirectCallJoinSessionId;
+  const startedAt = readPersistedDirectCallState()?.started_at || 0;
+  void startCall(kind, sessionId, startedAt);
 });
 
 videoRecordingCancel?.addEventListener("click", cancelVideoRecording);
