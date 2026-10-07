@@ -3339,6 +3339,7 @@ async function persistCryptoState() {
 
   const encryptedState = cryptoDevice.encrypted_state_json();
   const deviceId = cryptoDevice.device_id();
+  document.documentElement.dataset.larptrixCryptoDeviceId = deviceId;
 
   if (!cryptoStoredState) {
     const created = await api("POST", "/api/me/crypto-devices", {
