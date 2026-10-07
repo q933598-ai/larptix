@@ -243,6 +243,21 @@
 
         const jsQR = await loadFallbackDecoder();
         if (generation !== scannerGeneration) return;
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          audio: false,
+        });
+        if (generation !== scannerGeneration) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        video.srcObject = stream;
+        await video.play();
+        status.textContent = "Point the camera at the sign-in QR…";
         const canvas = document.createElement("canvas");
         const context = canvas.getContext("2d", { willReadFrequently: true });
         if (!context) throw new Error("Could not create QR camera decoder.");
