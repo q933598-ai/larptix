@@ -3076,24 +3076,37 @@ function renderSignInQr(accessKey) {
   signInQr.replaceChildren();
   signInQr.hidden = true;
   signInQrHelp.hidden = true;
-  try {
-    if (typeof globalThis.qrcode !== "function") return;
-    const loginUrl = new URL(location.href);
-    loginUrl.search = "";
-    loginUrl.hash = "access_key=" + accessKey;
-    const qr = globalThis.qrcode(0, "M");
-    qr.addData(loginUrl.toString(), "Byte");
-    qr.make();
-    signInQr.innerHTML = qr.createSvgTag({
-      cellSize: 4,
-      margin: 12,
-      scalable: true,
-    });
-    signInQr.hidden = false;
-    signInQrHelp.hidden = false;
-  } catch (err) {
-    console.warn("[QR] Could not generate sign-in QR:", err);
-  }
+
+  const generate = () => {
+    try {
+      if (typeof globalThis.qrcode !== "function") {
+        throw new Error("QR generator is not loaded");
+      }
+      const loginUrl = new URL(location.href);
+      loginUrl.search = "";
+      loginUrl.hash = "access_key=" + encodeURIComponent(accessKey);
+      const qr = globalThis.qrcode(0, "M");
+      qr.addData(loginUrl.toString(), "Byte");
+      qr.make();
+      signInQr.innerHTML = qr.createSvgTag({
+        cellSize: 4,
+        margin: 12,
+        scalable: true,
+      });
+      signInQr.hidden = false;
+      signInQrHelp.hidden = false;
+      return true;
+    } catch (err) {
+      console.warn("[QR] Could not generate sign-in QR:", err);
+      return false;
+    }
+  };
+
+  if (generate()) return;
+  requestAnimationFrame(() => {
+    if (!signInQr.hidden) return;
+    generate();
+  });
 }
 
 function showKeyDialog(accessKey, user) {
