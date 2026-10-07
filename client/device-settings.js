@@ -2,7 +2,7 @@
   "use strict";
 
   function formatDate(value) {
-    if (!Number.isFinite(Number(value))) return "Unknown time";
+    if (!Number.isFinite(Number(value)) || Number(value) <= 0) return "Unknown";
     try {
       return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(Number(value)));
     } catch {
@@ -12,15 +12,15 @@
 
   function init() {
     const dialog = document.getElementById("settings-dialog");
-    if (!dialog || dialog.dataset.devicesSectionReady === "1") return;
-    dialog.dataset.devicesSectionReady = "1";
+    if (!dialog || dialog.dataset.sessionsSectionReady === "1") return;
+    dialog.dataset.sessionsSectionReady = "1";
 
     const footer = dialog.querySelector(".settings-footer");
     const section = document.createElement("section");
     section.className = "settings-section settings-devices-section";
     section.innerHTML =
       "<div class=\"settings-section-heading\">" +
-        "<div><h3>Devices</h3><p class=\"settings-help\">Larptrix devices with encrypted chat keys for this account.</p></div>" +
+        "<div><h3>Logged-in devices</h3><p class=\"settings-help\">Devices that currently have an active Larptrix sign-in session.</p></div>" +
         "<button type=\"button\" class=\"ghost settings-devices-refresh\">Refresh</button>" +
       "</div>" +
       "<div class=\"settings-device-list\" aria-live=\"polite\"><p class=\"settings-help\">Loading devices…</p></div>";
@@ -32,63 +32,82 @@
     async function load() {
       list.innerHTML = "<p class=\"settings-help\">Loading devices…</p>";
       try {
-        const response = await fetch("/api/me/crypto-devices", { credentials: "same-origin", headers: { Accept: "application/json" } });
-        if (!response.ok) throw new Error("Could not load devices.");
-        const data = await response.json();
-        const devices = Array.isArray(data.devices) ? data.devices : [];
-        const meResponse = await fetch("/api/me", { credentials: "same-origin", headers: { Accept: "application/json" } });
-        const me = meResponse.ok ? await meResponse.json() : null;
-        const activeId = me?.user_id ? currentDeviceId(me.user_id) : "";
+        const response = await fetch("/api/me/sessions", {
+          credentials: "same-origin",
+          headers: { Accept: "application/json" },
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Could not load logged-in devices.");
+        const sessions = Array.isArray(data.sessions) ? data.sessions : [];
 
         list.replaceChildren();
-        if (!devices.length) {
+        if (!sessions.length) {
           const empty = document.createElement("p");
           empty.className = "settings-help";
-          empty.textContent = "No encrypted devices are registered yet.";
+          empty.textContent = "No active Larptrix sessions.";
           list.append(empty);
           return;
         }
 
-        for (const device of devices) {
+        for (const session of sessions) {
           const row = document.createElement("div");
-          row.className = "settings-device-row";
+          row.className = "settings-device-row" + (session.current ? " is-current" : "");
 
           const icon = document.createElement("div");
           icon.className = "settings-device-icon";
-          icon.textContent = device.device_id === activeId ? "●" : "○";
+          icon.textContent = session.current ? "●" : "○";
 
           const info = document.createElement("div");
           info.className = "settings-device-info";
+
           const name = document.createElement("strong");
-          const current = device.device_id === activeId;
-          name.textContent = current ? "This device" : "Encrypted device " + String(device.device_id || "").slice(0, 10);
+          name.textContent = session.current ? "This device" : (session.device_name || "Larptrix device");
+
           const meta = document.createElement("span");
-          meta.textContent = current
-            ? "Active here · updated " + formatDate(device.updated_at)
-            : "Added " + formatDate(device.created_at) + " · updated " + formatDate(device.updated_at);
-          info.append(name, meta);
+          const lastSeen = Number(session.last_seen_at) > 0 ? formatDate(session.last_seen_at) : "unknown";
+          const created = Number(session.created_at) > 0 ? formatDate(session.created_at) : "unknown";
+          meta.textContent = session.current
+            ? "Active now · last seen " + lastSeen
+            : "Added " + created + " · last seen " + lastSeen;
+
+          const agent = document.createElement("small");
+          agent.className = "settings-device-agent";
+          agent.textContent = session.user_agent || "Browser information unavailable";
+
+          info.append(name, meta, agent);
 
           const actions = document.createElement("div");
           actions.className = "settings-device-actions";
-          if (!current) {
+
+          if (session.current) {
+            const current = document.createElement("span");
+            current.className = "settings-device-current";
+            current.textContent = "Current";
+            actions.append(current);
+          } else {
             const revoke = document.createElement("button");
             revoke.type = "button";
             revoke.className = "ghost danger-item";
-            revoke.textContent = "Revoke";
+            revoke.textContent = "Log out";
             revoke.addEventListener("click", async () => {
-              if (!confirm("Revoke this encrypted device? It will need to set up E2E again.")) return;
+              if (!confirm("Log out this device?")) return;
               revoke.disabled = true;
               try {
-                const response = await fetch("/api/me/crypto-devices/" + encodeURIComponent(device.device_id), { method: "DELETE", credentials: "same-origin" });
-                if (!response.ok) throw new Error("Could not revoke device.");
+                const response = await fetch("/api/me/sessions/" + encodeURIComponent(session.session_id), {
+                  method: "DELETE",
+                  credentials: "same-origin",
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(data.error || "Could not close this session.");
                 await load();
               } catch (error) {
                 revoke.disabled = false;
-                alert(error.message || "Could not revoke device.");
+                alert(error.message || "Could not close this session.");
               }
             });
             actions.append(revoke);
           }
+
           row.append(icon, info, actions);
           list.append(row);
         }
@@ -96,7 +115,7 @@
         list.innerHTML = "";
         const message = document.createElement("p");
         message.className = "error";
-        message.textContent = error.message || "Could not load devices.";
+        message.textContent = error.message || "Could not load logged-in devices.";
         list.append(message);
       }
     }
