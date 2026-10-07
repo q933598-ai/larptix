@@ -6563,3 +6563,68 @@ html[data-theme="catppuccin-mocha"] .call-stage .call-dock-heading > .ghost {
 .settings-device-actions {
   flex: 0 0 auto;
 }
+
+
+/* In-app QR sign-in flow. */
+.qr-login-dialog {
+  width: min(94vw, 540px);
+  max-width: 540px;
+}
+.qr-login-dialog form {
+  margin: 0;
+}
+.qr-login-camera {
+  position: relative;
+  width: min(100%, 420px);
+  aspect-ratio: 1;
+  margin: 1rem auto;
+  overflow: hidden;
+  border: 1px solid var(--line-bright);
+  border-radius: 22px;
+  background: #000;
+}
+.qr-login-camera video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+.qr-login-frame {
+  position: absolute;
+  inset: 16%;
+  border: 2px solid var(--accent);
+  border-radius: 22px;
+  box-shadow: 0 0 0 999px rgb(0 0 0 / 0.16);
+  pointer-events: none;
+}
+.qr-login-account-card {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 1rem;
+  margin: 1rem 0;
+  border: 1px solid var(--line-bright);
+  border-radius: 18px;
+  background: var(--panel-2);
+}
+.qr-login-account-card > div:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+.qr-login-account-card span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.qr-login-avatar {
+  width: 52px;
+  height: 52px;
+  flex: 0 0 52px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--me);
+  color: var(--accent);
+  font-size: 1.25rem;
+  font-weight: 800;
+}
