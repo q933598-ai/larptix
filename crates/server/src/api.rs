@@ -2201,7 +2201,12 @@ async fn get_group_media(
     };
     let attachment_id =
         attachment_id.ok_or_else(|| ApiError::not_found("group media not found"))?;
-    file_response(state, &attachment_id)
+    let mut response = file_response(state, &attachment_id)?;
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store, must-revalidate"),
+    );
+    Ok(response)
 }
 
 async fn update_channel_settings(
