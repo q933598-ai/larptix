@@ -265,7 +265,7 @@
         } else if (err?.name === "NotFoundError" || /camera not found/i.test(err?.message || "")) {
           showScanError("No camera was found on this device.");
         } else {
-          showScanError("Could not start QR scanning. Check camera permission and network access for the QR scanner engine.");
+          showScanError("Could not start QR scanning. Check camera permission and reload the page.");
         }
       }
     }
