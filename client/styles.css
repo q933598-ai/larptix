@@ -6704,3 +6704,45 @@ html[data-theme="catppuccin-mocha"] .call-stage .call-dock-heading > .ghost {
     max-width: 34vw;
   }
 }
+
+
+.settings-devices-section {
+  min-width: 0;
+}
+.settings-device-row {
+  min-width: 0;
+}
+.settings-device-row.is-current {
+  border-color: var(--line-bright);
+}
+.settings-device-agent {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-device-current {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line-bright);
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+@media (max-width: 520px) {
+  .settings-device-row {
+    align-items: flex-start;
+  }
+  .settings-device-actions {
+    margin-left: auto;
+  }
+  .settings-device-row .danger-item {
+    padding: 6px 8px;
+    font-size: 0.76rem;
+  }
+}
