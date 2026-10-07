@@ -1,10 +1,6 @@
 (() => {
   "use strict";
 
-  function currentDeviceId(userId) {
-    return localStorage.getItem("larptrix_matrix_device_id:" + userId) || "";
-  }
-
   function formatDate(value) {
     if (!Number.isFinite(Number(value))) return "Unknown time";
     try {
