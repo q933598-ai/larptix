@@ -526,6 +526,7 @@ let lastDirectCallPeerId = null;
 let lastDirectCallAvatarPeerId = null;
 let lastDirectCallJoinPeerId = null;
 let lastDirectCallJoinKind = "audio";
+let lastDirectCallJoinSessionId = null;
 let directCallNoticeTimeout = null;
 let callNoAnswer = false;
 let voiceRecordingTimer = null;
@@ -559,8 +560,96 @@ const CALL_CAMERA_KEY = "larptrix_call_camera";
 const CALL_SPEAKERS_KEY = "larptrix_call_speakers";
 const SAVED_MESSAGES_KEY = "larptrix_saved_messages_v1";
 const SAVED_MESSAGES_LOCAL_KEY_ID = "saved-messages-local-key";
+const SAVED_MESSAGES_FALLBACK_KEY = "larptrix_saved_messages_fallback_v2";
+const UNREAD_COUNTS_KEY = "larptrix_unread_counts_v1";
+const DIRECT_CALL_STATE_KEY = "larptrix_active_direct_call_v2";
+
 function savedMessagesKey() {
   return me ? SAVED_MESSAGES_KEY + "_" + me.user_id : SAVED_MESSAGES_KEY;
+}
+function savedMessagesFallbackKey() {
+  return me ? SAVED_MESSAGES_FALLBACK_KEY + "_" + me.user_id : SAVED_MESSAGES_FALLBACK_KEY;
+}
+function unreadCountsKey() {
+  return me ? UNREAD_COUNTS_KEY + "_" + me.user_id : UNREAD_COUNTS_KEY;
+}
+function readUnreadCounts() {
+  try {
+    const value = JSON.parse(localStorage.getItem(unreadCountsKey()) || "{}");
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+function getUnreadCount(chatId) {
+  if (!chatId || chatId === SAVED_MESSAGES_ID) return 0;
+  const value = Number(readUnreadCounts()[chatId] || 0);
+  return Number.isFinite(value) && value > 0 ? Math.min(999, Math.floor(value)) : 0;
+}
+function setUnreadCount(chatId, count) {
+  if (!chatId || chatId === SAVED_MESSAGES_ID) return;
+  const counts = readUnreadCounts();
+  if (count > 0) counts[chatId] = Math.min(999, Math.floor(count));
+  else delete counts[chatId];
+  try {
+    localStorage.setItem(unreadCountsKey(), JSON.stringify(counts));
+  } catch {}
+}
+function incrementUnread(chatId) {
+  if (!chatId || chatId === SAVED_MESSAGES_ID || chatId === me?.user_id) return;
+  setUnreadCount(chatId, getUnreadCount(chatId) + 1);
+}
+function clearUnread(chatId) {
+  if (!chatId) return;
+  setUnreadCount(chatId, 0);
+}
+function activeDirectCallStorageKey() {
+  return me ? DIRECT_CALL_STATE_KEY + "_" + me.user_id : DIRECT_CALL_STATE_KEY;
+}
+function persistDirectCallState() {
+  if (!me || !callPeerId || !directCallSessionId) return;
+  try {
+    localStorage.setItem(activeDirectCallStorageKey(), JSON.stringify({
+      mode: "active",
+      peer_id: callPeerId,
+      call_id: directCallSessionId,
+      kind: callMediaKind === "video" ? "video" : "audio",
+      started_at: directCallStartedAt || Date.now(),
+      role: directCallOutgoing ? "outgoing" : "incoming",
+      saved_at: Date.now(),
+    }));
+  } catch {}
+}
+function persistJoinableDirectCall(peerIdValue, sessionId, kind) {
+  if (!me || !peerIdValue || !sessionId) return;
+  try {
+    localStorage.setItem(activeDirectCallStorageKey(), JSON.stringify({
+      mode: "joinable",
+      peer_id: peerIdValue,
+      call_id: sessionId,
+      kind: kind === "video" ? "video" : "audio",
+      started_at: Date.now(),
+      saved_at: Date.now(),
+    }));
+  } catch {}
+}
+function readPersistedDirectCallState() {
+  try {
+    const value = JSON.parse(localStorage.getItem(activeDirectCallStorageKey()) || "null");
+    if (!value || typeof value !== "object" || !value.peer_id || !value.call_id) return null;
+    if (Date.now() - Number(value.saved_at || 0) > 2 * 60 * 60 * 1000) {
+      localStorage.removeItem(activeDirectCallStorageKey());
+      return null;
+    }
+    return value;
+  } catch {
+    return null;
+  }
+}
+function clearPersistedDirectCallState() {
+  try {
+    localStorage.removeItem(activeDirectCallStorageKey());
+  } catch {}
 }
 
 const TAG_LIBRARY_KEY = "larptrix_tag_library_v1";
@@ -1224,6 +1313,40 @@ async function toggleCallNoiseSuppression() {
   }
 }
 
+async function saveSavedAttachmentBlob(itemId, index, file) {
+  if (!me?.user_id || !file) return;
+  await writeLocalCryptoRecord({
+    id: `saved-attachment:${me.user_id}:${itemId}:${index}`,
+    blob: file,
+    name: file.name || "attachment",
+    mime: file.type || "application/octet-stream",
+    size: file.size || 0,
+  });
+}
+async function readSavedAttachmentBlob(itemId, index) {
+  if (!me?.user_id) return null;
+  try {
+    return await readLocalCryptoRecord(`saved-attachment:${me.user_id}:${itemId}:${index}`);
+  } catch {
+    return null;
+  }
+}
+async function deleteSavedAttachmentBlobs(item) {
+  if (!me?.user_id || !Array.isArray(item?.attachments) || typeof indexedDB === "undefined") return;
+  try {
+    const db = await openLocalCryptoDb();
+    const tx = db.transaction("items", "readwrite");
+    for (let index = 0; index < item.attachments.length; index += 1) {
+      tx.objectStore("items").delete(`saved-attachment:${me.user_id}:${item.id}:${index}`);
+    }
+    await new Promise((resolve, reject) => {
+      tx.addEventListener("complete", resolve, { once: true });
+      tx.addEventListener("error", () => reject(tx.error), { once: true });
+      tx.addEventListener("abort", () => reject(tx.error), { once: true });
+    });
+    db.close();
+  } catch {}
+}
 async function getSavedMessages() {
   if (!me?.user_id) return [];
   try {
@@ -1236,57 +1359,59 @@ async function getSavedMessages() {
         new Uint8Array(localRecord.ciphertext),
       );
       const parsed = JSON.parse(new TextDecoder().decode(plaintext));
-      return Array.isArray(parsed) ? parsed : [];
-    }
-
-    const legacy = await readLegacySavedMessages();
-    if (legacy) {
-      await setSavedMessages(legacy);
-      return legacy;
+      if (Array.isArray(parsed)) return parsed;
     }
   } catch {}
+  try {
+    const fallback = JSON.parse(localStorage.getItem(savedMessagesFallbackKey()) || "[]");
+    if (Array.isArray(fallback)) return fallback;
+  } catch {}
+  const legacy = await readLegacySavedMessages();
+  if (legacy) {
+    await setSavedMessages(legacy);
+    return legacy;
+  }
   return [];
 }
-
 async function setSavedMessages(items) {
   if (!me?.user_id) return;
-  const key = await savedMessagesLocalKey();
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encrypted = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    key,
-    new TextEncoder().encode(JSON.stringify(items)),
-  );
-  await writeLocalCryptoRecord({
-    id: `saved-messages:${me.user_id}`,
-    iv: Array.from(iv),
-    ciphertext: Array.from(new Uint8Array(encrypted)),
-  });
-
-  // Keep the old encrypted localStorage copy for one release so existing
-  // installations can recover it during migration.
+  const serialized = JSON.stringify(items);
+  try {
+    const key = await savedMessagesLocalKey();
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encrypted = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      key,
+      new TextEncoder().encode(serialized),
+    );
+    await writeLocalCryptoRecord({
+      id: `saved-messages:${me.user_id}`,
+      iv: Array.from(iv),
+      ciphertext: Array.from(new Uint8Array(encrypted)),
+    });
+  } catch {}
+  try {
+    localStorage.setItem(savedMessagesFallbackKey(), serialized);
+  } catch {}
   if (cryptoRecoveryKey) {
-    const legacyKey = await sentPlaintextCacheKey();
-    if (legacyKey) {
-      const legacyIv = crypto.getRandomValues(new Uint8Array(12));
-      const legacyEncrypted = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv: legacyIv },
-        legacyKey,
-        new TextEncoder().encode(JSON.stringify(items)),
-      );
-      localStorage.setItem(savedMessagesKey(), JSON.stringify({
-        iv: Array.from(legacyIv),
-        ciphertext: Array.from(new Uint8Array(legacyEncrypted)),
-      }));
-    }
+    try {
+      const legacyKey = await sentPlaintextCacheKey();
+      if (legacyKey) {
+        const legacyIv = crypto.getRandomValues(new Uint8Array(12));
+        const legacyEncrypted = await crypto.subtle.encrypt(
+          { name: "AES-GCM", iv: legacyIv },
+          legacyKey,
+          new TextEncoder().encode(serialized),
+        );
+        localStorage.setItem(savedMessagesKey(), JSON.stringify({
+          iv: Array.from(legacyIv),
+          ciphertext: Array.from(new Uint8Array(legacyEncrypted)),
+        }));
+      }
+    } catch {}
   }
 }
-
 async function toggleSavedMessage(message, textValue) {
-  if (!cryptoRecoveryKey) {
-    appendSystem("Unlock E2E before saving messages.");
-    return;
-  }
   if (!textValue || textValue === "Encrypted message" || textValue.startsWith("Could not decrypt")) {
     appendSystem("Wait for the message to decrypt before saving it.");
     return;
@@ -1294,7 +1419,8 @@ async function toggleSavedMessage(message, textValue) {
   const items = await getSavedMessages();
   const index = items.findIndex((item) => item.id === message.id);
   if (index >= 0) {
-    items.splice(index, 1);
+    const removed = items.splice(index, 1)[0];
+    await deleteSavedAttachmentBlobs(removed);
   } else {
     const peer = message.sender_id === me?.user_id ? message.recipient_id : message.sender_id;
     items.unshift({
@@ -1468,23 +1594,40 @@ function appendSavedMessage(item) {
   logEl.append(li);
 }
 
-async function saveManualSavedMessage(text, extras = {}) {
-  const items = await getSavedMessages();
-  items.unshift({
-    id: crypto.randomUUID(),
+async function saveManualSavedMessage(text, extras = {}, files = []) {
+  const itemId = crypto.randomUUID();
+  const item = {
+    id: itemId,
     peer_id: SAVED_MESSAGES_ID,
     sender_id: me.user_id,
     sender_name: me.display_name,
-    text,
+    text: text || "",
     created_at: Date.now(),
     ...extras,
-  });
+    attachments: [],
+  };
+  for (const [index, file] of files.filter(Boolean).entries()) {
+    const descriptor = {
+      name: file.name || "attachment",
+      mime: file.type || "application/octet-stream",
+      size: file.size || 0,
+    };
+    try {
+      await saveSavedAttachmentBlob(itemId, index, file);
+      item.attachments.push(descriptor);
+    } catch (err) {
+      appendSystem("Could not store " + descriptor.name + " in Saved Messages: " + (err.message || err));
+    }
+  }
+  if (!item.attachments.length) delete item.attachments;
+  const items = await getSavedMessages();
+  items.unshift(item);
   await setSavedMessages(items.slice(0, 500));
   clearReplyComposer();
   bodyInput.value = "";
+  renderAttachmentPreview();
   renderSavedChatHistory();
 }
-
 function openSavedMessagesChat() {
   channelViewObserver?.disconnect();
   viewedChannelMessages.clear();
@@ -2797,11 +2940,16 @@ composer.addEventListener("submit", async (event) => {
   const files = [...pendingAttachments];
   if (peerId === SAVED_MESSAGES_ID) {
     if (!body && !files.length) return;
-    if (files.length) {
-      appendSystem("Attachments in Saved Messages are not supported yet.");
-      return;
+    try {
+      await saveManualSavedMessage(
+        body,
+        replyingToMessage ? { reply_to: replyingToMessage } : {},
+        files,
+      );
+      clearAttachment();
+    } catch (err) {
+      appendSystem("Could not save this message: " + (err.message || err));
     }
-    await saveManualSavedMessage(body, replyingToMessage ? { reply_to: replyingToMessage } : {});
     return;
   }
   if (!cryptoEnabled) {
@@ -3968,6 +4116,13 @@ function connect() {
       case "message":
         if (isForOpenChat(msg.message)) appendMessage(msg.message);
         if (msg.message?.sender_id !== me?.user_id) {
+          if (!isForOpenChat(msg.message)) {
+            const groupTarget = groups.find(
+              (group) => group.is_group && group.user_id === msg.message?.recipient_id,
+            );
+            incrementUnread(groupTarget ? groupTarget.user_id : msg.message.sender_id);
+            renderUsers();
+          }
           playIncomingMessageSound();
           const sender = users.find((user) => user.user_id === msg.message.sender_id);
           showBrowserNotification(
@@ -4501,9 +4656,11 @@ function openOrJoinDirectCall(kind) {
 
 function openChat(id) {
   if (id === SAVED_MESSAGES_ID) {
+    clearUnread(id);
     openSavedMessagesChat();
     return;
   }
+  clearUnread(id);
   // Switching chats must not terminate an active call.
   // Calls live independently from the currently opened chat.
   peerId = id;
@@ -6022,7 +6179,16 @@ function renderUsers() {
     if (!user.is_saved_chat && !user.is_group) {
       renderActivityEntries(name, user, { compact: true, limit: 2 });
     }
-    button.append(avatar, name, dot);
+    const unread = getUnreadCount(user.user_id);
+    if (unread > 0) {
+      const badge = document.createElement("span");
+      badge.className = "unread-badge";
+      badge.textContent = unread > 99 ? "99+" : String(unread);
+      badge.title = unread + " unread message" + (unread === 1 ? "" : "s");
+      button.append(avatar, name, badge, dot);
+    } else {
+      button.append(avatar, name, dot);
+    }
 
     if (!query || user.is_saved_chat || user.is_group || user.friend_status === "accepted") {
       button.addEventListener("click", () => openChat(user.user_id));
