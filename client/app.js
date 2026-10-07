@@ -6498,6 +6498,9 @@ function appendMessage(message) {
       audio.controls = true;
       audio.preload = "metadata";
       audio.src = message.attachment.url;
+      audio.dataset.larptrixAudioKind = /^voice-message\./i.test(message.attachment.name || "")
+        ? "voice"
+        : "audio";
       li.append(audio);
     } else {
       const link = document.createElement("a");
@@ -7999,6 +8002,9 @@ function renderAttachmentPreview() {
       const audio = document.createElement("audio");
       audio.controls = true;
       audio.src = url;
+      audio.dataset.larptrixAudioKind = /^voice-message\./i.test(file.name || "")
+        ? "voice"
+        : "audio";
       item.append(audio);
     } else {
       const fileIcon = document.createElement("span");
