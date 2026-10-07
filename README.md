@@ -29,11 +29,10 @@ browser --WS /ws-->  Axum (cookie required) --SQLite--> users, sessions, DMs
 WebSocket upgrades require a matching `Origin` host and scheme. A TLS-terminating
 reverse proxy must overwrite `X-Forwarded-Proto` with the external scheme.
 
-A message is no longer “post to the room”. It is “deliver to this user”.
-The Hub sends only to the two participants. History is loaded with `open`.
+A message is no longer “post to the room”. It is “deliver to this user”. The Hub sends only to the two participants. History is loaded with `open`.
 Message bodies use Olm E2E encryption. File bytes, including GIFs, are encrypted in
-the browser with AES-GCM; their decryption key and original metadata travel inside
-the encrypted message. The server stores opaque attachment ciphertext. Groups use
+the browser with AES-GCM; their decryption key and original metadata travel inside the
+encrypted message. The server stores opaque attachment ciphertext. Groups use
 an individual Olm ciphertext for each member. Usernames and profile descriptions
 are public. Chat backgrounds are compressed and stored locally in the browser,
 separately for each chat. Accounts can be created with either an access key or an
@@ -44,8 +43,8 @@ SHA-256 hash is stored on the server. Keep the key in a password manager or anot
 secure place: losing it means losing access to that account. The key is a login
 credential, not proof that an email address belongs to you. Existing email/password
 accounts remain available through the legacy login option. After signing in, an old
-account can create a key from its profile; its existing password remains available
-as a fallback. Sessions are random tokens in an HttpOnly cookie.
+account can create a key from its profile; its existing password remains available as
+a fallback. Sessions are random tokens in an HttpOnly cookie.
 Attachments are stored on disk, not in SQLite; the DB keeps metadata. Images and
 supported audio formats are detected from their bytes; other files are served as
 downloads. Uploads are limited to 25 MiB.
@@ -107,7 +106,9 @@ cd /opt/larptrix && sudo docker compose logs -f
 
 To deploy a newer source version, copy it to the VPS again and run
 `sudo systemctl restart larptrix`; the unit rebuilds the image before starting.
-GIFs are sent as regular E2E-encrypted attachments; the built-in client does not require an external GIF API.\n\nThe named Docker volume `larptrix_larptrix-data` keeps SQLite and uploaded files
+GIFs are sent as regular E2E-encrypted attachments; the built-in client does not require an external GIF API.
+
+The named Docker volume `larptrix_larptrix-data` keeps SQLite and uploaded files
 across restarts/rebuilds. Back it up regularly and store backups off the VPS.
 
 For calls between users behind different NATs, configure reachable STUN/TURN in
@@ -118,7 +119,7 @@ do not put a permanent shared secret in this browser-readable setting.
 ## Desktop clients
 
 `desktop/` contains a Linux desktop client using Electron's Chromium runtime, so
-WebRTC calls work inside the app window. It connects to an existing Larptrix server;
+WebRTC calls work inside the app window. It connects to an existing Larptix server;
 the server and desktop window are separate processes. Start the server with
 `cargo run -p larptrix-server` from the repository root, then launch the desktop
 client. The desktop window loads its UI and WebAssembly crypto bundle from that
@@ -133,14 +134,50 @@ npm run dev
 
 To build the Linux AppImage, run `npm run build` from `desktop/`.
 Electron packages Chromium with the app. To build a portable Windows x64 package,
-run `npm run build:windows`; extract `dist/Larptrix-0.4.0-win-x64.zip` and launch
-`Larptrix.exe`. The Windows ZIP can be built from Linux without Wine. Tauri remains
-available as the optional `npm run dev:tauri` / `npm run build:tauri` WebKitGTK
-variant. On Arch-based systems install the media libraries needed for desktop
-capture and playback:
+run `npm run build:windows`; extract the resulting package and launch Larptrix.
+The Windows package can be built from Linux without Wine. Tauri remains available
+as the optional `npm run dev:tauri` / `npm run build:tauri` WebKitGTK variant.
 
-To build the portable Windows x64 ZIP from Linux or Windows, run `npm run build:windows`
-from `desktop/`. Extract the ZIP and run `larptrix-linux.exe`.
+### NixOS / Nix
+
+The repository now includes a Nix flake for the Linux Electron desktop client.
+It uses the Electron runtime supplied by nixpkgs, so NixOS does not need a separate
+npm-installed Electron binary and the Nix package does not use the upstream
+self-updater.
+
+Run directly from the repository:
+
+```bash
+nix run
+```
+
+Install it into your user profile:
+
+```bash
+nix profile install
+```
+
+Or install straight from GitHub:
+
+```bash
+nix profile install github:q933598-ai/larptix
+```
+
+For development:
+
+```bash
+nix develop
+```
+
+The package currently targets Linux x86_64 and aarch64. The app still asks for the
+Larptrix server URL on first launch unless `LARPTRIX_SERVER_URL` is supplied.
+
+On NixOS this is the recommended way to run Larptrix instead of installing the
+Arch `.pkg.tar.zst` package.
+
+### Arch-based systems
+
+Install the media libraries needed for desktop capture and playback:
 
 ```bash
 sudo pacman -S --needed webkit2gtk-4.1 gst-plugins-base gst-plugins-good gst-plugins-bad libnice base-devel curl file openssl librsvg
@@ -148,9 +185,7 @@ sudo pacman -S --needed webkit2gtk-4.1 gst-plugins-base gst-plugins-good gst-plu
 
 `gst-plugins-good` provides the `autoaudiosink` element reported by WebKit. On Wayland
 the optional Tauri client disables WebKit's DMA-BUF renderer to avoid a compositor
-protocol error; GTK still uses the native Wayland backend. Set
-`LARPTRIX_SERVER_URL` to connect to another server; it defaults to
-`http://127.0.0.1:8080`.
+protocol error; GTK still uses the native Wayland backend.
 
 ### Environment
 
@@ -182,4 +217,3 @@ Larptrix device-verified E2E keys. A server that controls signaling could potent
 mediate a connection. Authenticated media transforms remain future work. Screen
 sharing starts adaptively (up to 1080p/30); the high preset requests up
 to 4K/144 fps, but the browser, device, and network may negotiate less.
-
