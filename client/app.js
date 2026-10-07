@@ -3130,6 +3130,7 @@ groupProfileForm?.addEventListener("submit", async (event) => {
       peerMeta.textContent = refreshed.is_channel
         ? `${refreshed.subscriber_count || refreshed.group_member_ids.length} subscriber(s)`
         : `${refreshed.group_member_ids.length} member(s)`;
+      paintAvatar(peerAvatar, refreshed);
       renderGroupMembersDialog(refreshed);
     }
   } catch (err) {
@@ -4098,6 +4099,15 @@ function connect() {
           }
         } else if (peerId) {
           openChat(peerId);
+        } else {
+          const restored = readPersistedDirectCallState();
+          if (
+            restored?.peer_id
+            && restored?.call_id
+            && users.some((user) => user.user_id === restored.peer_id)
+          ) {
+            openChat(restored.peer_id);
+          }
         }
         break;
       case "directory":
@@ -4985,8 +4995,10 @@ async function handleGroupCallSignal(signal) {
     pendingIncomingCall = signal;
     callPeerId = groupId;
     callMediaKind = payload.media === "video" ? "video" : "audio";
-    const caller = users.find((user) => user.user_id === signal.sender_id);
-    incomingCallTitle.textContent = (caller?.display_name || "Larptrix user") + " invited you";
+    const caller = users.find((user) => user.user_id === signal.sender_id)
+      || { user_id: signal.sender_id, display_name: "Unknown contact" };
+    paintAvatar(incomingCallAvatar, group);
+    incomingCallTitle.textContent = caller.display_name + " invited you";
     incomingCallKind.textContent = (callMediaKind === "video" ? "Group video" : "Group") + " call · " + group.display_name;
     document.getElementById("accept-call").textContent = "Join";
     startCallRingtone();
@@ -6110,7 +6122,7 @@ function endCall(notifyPeer, { preserveDirectJoin = false } = {}) {
   pendingIncomingCall = null;
   pendingIceCandidates = [];
   if (endedDirectPeerId) iceCandidatesBeforeOffer.delete(endedDirectPeerId);
-  if (directCallSessionId) {
+  if (directCallSessionId && !preserveDirectJoin) {
     staleDirectCallSessions.set(directCallSessionId, Date.now() + 30000);
   }
   callPeerId = null;
