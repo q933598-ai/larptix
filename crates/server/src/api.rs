@@ -33,6 +33,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/login", post(login))
         .route("/api/login/preview", post(login_preview))
         .route("/api/logout", post(logout))
+        .route("/api/me/sessions", get(list_sessions))
+        .route("/api/me/sessions/{session_id}", delete(revoke_session))
         .route("/api/me", get(me))
         .route("/api/me", patch(update_profile))
         .route("/api/me/activity", post(update_activity))
@@ -162,6 +164,8 @@ pub struct LoginBody {
     pub access_key: Option<String>,
     pub email: Option<String>,
     pub password: Option<String>,
+    #[serde(default)]
+    pub device_name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -301,8 +305,16 @@ async fn register_password(
 
 async fn login(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(body): Json<LoginBody>,
 ) -> Result<Response, ApiError> {
+    let device_name = body.device_name.clone().unwrap_or_default();
+    let user_agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
     if let Some(access_key) = body.access_key {
         let access_key_hash = access_key_hash(&access_key)
             .ok_or_else(|| ApiError::bad("access key must be 64 hexadecimal characters"))?;
@@ -311,7 +323,7 @@ async fn login(
             .user_by_access_key_hash(&access_key_hash)
             .map_err(ApiError::db)?
             .ok_or_else(|| ApiError::unauthorized("invalid access key"))?;
-        return cookie_response(&state, user);
+        return cookie_response_with_metadata(&state, user, &device_name, &user_agent);
     }
     let email = sanitize_email(
         body.email
@@ -338,7 +350,7 @@ async fn login(
     if !ok {
         return Err(ApiError::unauthorized("invalid email or password"));
     }
-    cookie_response(&state, user)
+    cookie_response_with_metadata(&state, user, &device_name, &user_agent)
 }
 
 async fn login_preview(
@@ -361,6 +373,62 @@ async fn login_preview(
         "display_name": user.display_name,
         "avatar_url": user.avatar_id.as_ref().map(|_| avatar_url(&user.id))
     })))
+}
+
+async fn list_sessions(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let current_token = session_token(&headers).unwrap_or_default();
+    let sessions = state
+        .db
+        .list_sessions_for_user(&user.id, now_ms())
+        .map_err(ApiError::db)?;
+
+    Ok(Json(serde_json::json!({
+        "sessions": sessions.into_iter().map(|session| {
+            let current = session.token == current_token;
+            let device_name = if session.device_name.trim().is_empty() {
+                session.user_agent.clone()
+            } else {
+                session.device_name.clone()
+            };
+            serde_json::json!({
+                "session_id": session.session_id,
+                "device_name": device_name,
+                "user_agent": session.user_agent,
+                "created_at": session.created_at,
+                "last_seen_at": session.last_seen_at,
+                "expires_at": session.expires_at,
+                "current": current
+            })
+        }).collect::<Vec<_>>()
+    })))
+}
+
+async fn revoke_session(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(session_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let current = session_token(&headers)
+        .and_then(|token| state.db.session_by_token(&token).ok().flatten())
+        .map(|session| session.session_id);
+
+    if current.as_deref() == Some(session_id.as_str()) {
+        return Err(ApiError::bad("use Log out to close the current device session"));
+    }
+
+    if !state
+        .db
+        .delete_session_by_id(&user.id, &session_id)
+        .map_err(ApiError::db)?
+    {
+        return Err(ApiError::not_found("session not found"));
+    }
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 async fn logout(
@@ -2576,11 +2644,13 @@ async fn save_audio(
 
 pub fn require_user(state: &AppState, headers: &HeaderMap) -> Result<UserRow, ApiError> {
     let token = session_token(headers).ok_or_else(|| ApiError::unauthorized("not signed in"))?;
-    state
+    let user = state
         .db
         .user_by_session(&token, now_ms())
         .map_err(ApiError::db)?
-        .ok_or_else(|| ApiError::unauthorized("not signed in"))
+        .ok_or_else(|| ApiError::unauthorized("not signed in"))?;
+    state.db.touch_session(&token, now_ms()).map_err(ApiError::db)?;
+    Ok(user)
 }
 
 pub fn session_token(headers: &HeaderMap) -> Option<String> {
