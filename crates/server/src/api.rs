@@ -31,6 +31,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/register", post(register))
         .route("/api/register/password", post(register_password))
         .route("/api/login", post(login))
+        .route("/api/login/preview", post(login_preview))
         .route("/api/logout", post(logout))
         .route("/api/me", get(me))
         .route("/api/me", patch(update_profile))
@@ -338,6 +339,28 @@ async fn login(
         return Err(ApiError::unauthorized("invalid email or password"));
     }
     cookie_response(&state, user)
+}
+
+async fn login_preview(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<LoginBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let access_key = body
+        .access_key
+        .ok_or_else(|| ApiError::bad("access key is required"))?;
+    let hash = access_key_hash(&access_key)
+        .ok_or_else(|| ApiError::bad("access key must be 64 hexadecimal characters"))?;
+    let user = state
+        .db
+        .user_by_access_key_hash(&hash)
+        .map_err(ApiError::db)?
+        .ok_or_else(|| ApiError::unauthorized("invalid access key"))?;
+
+    Ok(Json(serde_json::json!({
+        "user_id": user.id,
+        "display_name": user.display_name,
+        "avatar_url": user.avatar_id.as_ref().map(|_| avatar_url(&user.id))
+    })))
 }
 
 async fn logout(
