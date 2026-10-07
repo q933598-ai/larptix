@@ -3104,11 +3104,6 @@ groupProfileForm?.addEventListener("submit", async (event) => {
     const endpoint = group.is_channel
       ? "/api/channels/" + encodeURIComponent(group.user_id) + "/settings"
       : "/api/groups/" + encodeURIComponent(group.user_id) + "/settings";
-    const updated = await api("PATCH", endpoint, {
-      name: groupProfileName.value.trim(),
-      description: groupProfileDescription.value.trim(),
-      ...(group.is_channel ? { post_policy: group.post_policy || "admins" } : {}),
-    });
 
     if (groupProfileAvatar.files[0]) {
       await uploadFile(
@@ -3122,6 +3117,12 @@ groupProfileForm?.addEventListener("submit", async (event) => {
         groupProfileBanner.files[0],
       );
     }
+
+    await api("PATCH", endpoint, {
+      name: groupProfileName.value.trim(),
+      description: groupProfileDescription.value.trim(),
+      ...(group.is_channel ? { post_policy: group.post_policy || "admins" } : {}),
+    });
 
     await loadGroups();
     const refreshed = groups.find((item) => item.user_id === group.user_id);
