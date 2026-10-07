@@ -2649,7 +2649,14 @@ pub fn require_user(state: &AppState, headers: &HeaderMap) -> Result<UserRow, Ap
         .user_by_session(&token, now_ms())
         .map_err(ApiError::db)?
         .ok_or_else(|| ApiError::unauthorized("not signed in"))?;
-    state.db.touch_session(&token, now_ms()).map_err(ApiError::db)?;
+    let user_agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    state
+        .db
+        .touch_session(&token, now_ms(), user_agent)
+        .map_err(ApiError::db)?;
     Ok(user)
 }
 
