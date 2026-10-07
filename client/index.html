@@ -186,7 +186,7 @@
             <button id="toggle-screen-share" type="button" class="ghost">Share screen</button>
             <button id="group-call-invite" type="button" class="ghost" hidden>＋ Invite</button>
             <button id="end-group-call" type="button" class="ghost" hidden>End for everyone</button>
-            <button id="end-call" type="button">End call</button>
+            <button id="end-call" type="button" class="call-exit-button">Exit call</button>
           </div>
           <div id="call-settings-panel" class="call-settings-panel" hidden>
             <div class="call-settings-title">Call settings</div>
@@ -777,11 +777,15 @@
     </dialog>
 
     <dialog id="incoming-call-dialog" class="incoming-call-dialog">
-      <h2 id="incoming-call-title">Incoming call</h2>
-      <p id="incoming-call-kind">Voice call</p>
-      <div class="call-controls">
-        <button id="accept-call" type="button">Accept</button>
-        <button id="reject-call" type="button" class="ghost">Decline</button>
+      <div class="incoming-call-card">
+        <span id="incoming-call-avatar" class="avatar incoming-call-avatar" aria-hidden="true"></span>
+        <p class="eyebrow">INCOMING CALL</p>
+        <h2 id="incoming-call-title">Incoming call</h2>
+        <p id="incoming-call-kind">Voice call</p>
+        <div class="call-controls incoming-call-actions">
+          <button id="accept-call" type="button">Accept</button>
+          <button id="reject-call" type="button" class="ghost">Decline</button>
+        </div>
       </div>
     </dialog>
 
