@@ -63,10 +63,16 @@
 })();
 
 
-// QR sign-in scanner is kept separate so the auth client stays untouched.
+// Small client enhancements stay separate so the main app bootstrap remains focused.
 (() => {
-  const script = document.createElement("script");
-  script.src = "/qr-login.js?v=1";
-  script.async = false;
-  document.head.appendChild(script);
+  for (const [src] of [
+    ["/qr-login.js?v=2"],
+    ["/media-ui.js?v=1"],
+    ["/device-settings.js?v=1"],
+  ]) {
+    const script = document.createElement("script");
+    script.src = src;
+    script.async = false;
+    document.head.appendChild(script);
+  }
 })();
