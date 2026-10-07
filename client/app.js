@@ -1550,7 +1550,7 @@ function renderMessageDecorations(parent, payload) {
 function renderSavedChatHistory() {
   if (peerId !== SAVED_MESSAGES_ID) return;
   logEl.replaceChildren();
-  void getSavedMessages().then((items) => {
+  void getSavedMessages().then(async (items) => {
     if (peerId !== SAVED_MESSAGES_ID) return;
     for (const item of items) await appendSavedMessage(item);
     logEl.scrollTop = logEl.scrollHeight;
