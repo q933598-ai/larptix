@@ -61,3 +61,12 @@
     localStorage.setItem(storageKey, String(clamp(width)));
   });
 })();
+
+
+// QR sign-in scanner is kept separate so the auth client stays untouched.
+(() => {
+  const script = document.createElement("script");
+  script.src = "/qr-login.js?v=1";
+  script.async = false;
+  document.head.appendChild(script);
+})();
