@@ -6628,3 +6628,79 @@ html[data-theme="catppuccin-mocha"] .call-stage .call-dock-heading > .ghost {
   font-size: 1.25rem;
   font-weight: 800;
 }
+
+
+/* Composer recording must occupy its own row so voice/video controls never overlap. */
+#composer {
+  grid-template-rows: auto 44px auto;
+}
+#composer > .voice-recording,
+#composer > .video-recording {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  min-width: 0;
+}
+.voice-recording {
+  min-height: 54px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.voice-recording-status {
+  flex: 1 1 auto;
+}
+.voice-recording-time {
+  min-width: 40px;
+  font-variant-numeric: tabular-nums;
+}
+.voice-wave {
+  flex: 0 0 auto;
+  min-width: 72px;
+  justify-content: center;
+}
+.voice-recording .ghost {
+  flex: 0 0 auto;
+}
+
+/* Voice/media messages are cards, not browser download controls. */
+.larptrix-media-card {
+  border-radius: 16px;
+  max-width: min(430px, 100%);
+}
+.attachment-preview .larptrix-media-card {
+  margin: 0;
+  max-width: min(430px, 100%);
+}
+.larptrix-audio-card .larptrix-media-top strong {
+  font-weight: 700;
+}
+.larptrix-media-progress,
+.larptrix-video-progress {
+  cursor: pointer;
+}
+.larptrix-video-card {
+  isolation: isolate;
+}
+.larptrix-video-controls {
+  z-index: 2;
+}
+.larptrix-video-card .chat-video {
+  cursor: pointer;
+}
+@media (max-width: 760px) {
+  #composer {
+    grid-template-rows: auto 44px auto;
+  }
+  #composer > .voice-recording,
+  #composer > .video-recording {
+    grid-row: 3;
+  }
+  .voice-recording {
+    flex-wrap: nowrap;
+  }
+  .voice-recording-status {
+    max-width: 34vw;
+  }
+}
