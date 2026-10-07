@@ -1868,11 +1868,19 @@ impl Database {
         ).optional()
     }
 
-    pub fn touch_session(&self, token: &str, now: i64) -> rusqlite::Result<()> {
+    pub fn touch_session(
+        &self,
+        token: &str,
+        now: i64,
+        user_agent: &str,
+    ) -> rusqlite::Result<()> {
         let conn = self.conn.lock().expect("db lock");
         conn.execute(
-            "UPDATE sessions SET last_seen_at=?1 WHERE token=?2",
-            params![now, token],
+            "UPDATE sessions
+             SET last_seen_at=?1,
+                 user_agent=CASE WHEN user_agent='' THEN ?2 ELSE user_agent END
+             WHERE token=?3",
+            params![now, user_agent, token],
         )?;
         Ok(())
     }
