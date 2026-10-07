@@ -19,6 +19,18 @@ pub struct UserRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct SessionRow {
+    pub session_id: String,
+    pub token: String,
+    pub user_id: String,
+    pub device_name: String,
+    pub user_agent: String,
+    pub created_at: i64,
+    pub last_seen_at: i64,
+    pub expires_at: i64,
+}
+
+#[derive(Debug, Clone)]
 pub struct CryptoDeviceRow {
     pub device_id: String,
     pub user_id: String,
@@ -1821,14 +1833,76 @@ impl Database {
         &self,
         token: &str,
         user_id: &str,
+        device_name: &str,
+        user_agent: &str,
+        created_at: i64,
         expires_at: i64,
-    ) -> rusqlite::Result<()> {
+    ) -> rusqlite::Result<String> {
+        let session_id = Uuid::new_v4().to_string();
         let conn = self.conn.lock().expect("db lock");
         conn.execute(
-            "INSERT INTO sessions (token, user_id, expires_at) VALUES (?1, ?2, ?3)",
-            params![token, user_id, expires_at],
+            "INSERT INTO sessions
+             (token, session_id, user_id, device_name, user_agent, created_at, last_seen_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)",
+            params![token, session_id, user_id, device_name, user_agent, created_at, expires_at],
+        )?;
+        Ok(session_id)
+    }
+
+    pub fn session_by_token(&self, token: &str) -> rusqlite::Result<Option<SessionRow>> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.query_row(
+            "SELECT session_id, token, user_id, device_name, user_agent, created_at, last_seen_at, expires_at
+             FROM sessions WHERE token=?1",
+            [token],
+            |row| Ok(SessionRow {
+                session_id: row.get(0)?,
+                token: row.get(1)?,
+                user_id: row.get(2)?,
+                device_name: row.get(3)?,
+                user_agent: row.get(4)?,
+                created_at: row.get(5)?,
+                last_seen_at: row.get(6)?,
+                expires_at: row.get(7)?,
+            })
+        ).optional()
+    }
+
+    pub fn touch_session(&self, token: &str, now: i64) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "UPDATE sessions SET last_seen_at=?1 WHERE token=?2",
+            params![now, token],
         )?;
         Ok(())
+    }
+
+    pub fn list_sessions_for_user(&self, user_id: &str, now: i64) -> rusqlite::Result<Vec<SessionRow>> {
+        let conn = self.conn.lock().expect("db lock");
+        let mut stmt = conn.prepare(
+            "SELECT session_id, token, user_id, device_name, user_agent, created_at, last_seen_at, expires_at
+             FROM sessions WHERE user_id=?1 AND expires_at>?2 ORDER BY last_seen_at DESC, created_at DESC"
+        )?;
+        let rows = stmt.query_map(params![user_id, now], |row| Ok(SessionRow {
+            session_id: row.get(0)?,
+            token: row.get(1)?,
+            user_id: row.get(2)?,
+            device_name: row.get(3)?,
+            user_agent: row.get(4)?,
+            created_at: row.get(5)?,
+            last_seen_at: row.get(6)?,
+            expires_at: row.get(7)?,
+        }))?;
+        rows.collect()
+    }
+
+    pub fn delete_session_by_id(&self, user_id: &str, session_id: &str) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("db lock");
+        let changed = conn.execute(
+            "DELETE FROM sessions WHERE user_id=?1 AND session_id=?2",
+            params![user_id, session_id],
+        )?;
+        Ok(changed == 1)
     }
 
     pub fn user_by_session(&self, token: &str, now: i64) -> rusqlite::Result<Option<UserRow>> {
@@ -2686,7 +2760,12 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
 
         CREATE TABLE IF NOT EXISTS sessions (
             token TEXT PRIMARY KEY,
+            session_id TEXT,
             user_id TEXT NOT NULL,
+            device_name TEXT NOT NULL DEFAULT '',
+            user_agent TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL DEFAULT 0,
+            last_seen_at INTEGER NOT NULL DEFAULT 0,
             expires_at INTEGER NOT NULL,
             FOREIGN KEY (user_id) REFERENCES users(id)
         );
@@ -2964,6 +3043,46 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS users_access_key_hash
          ON users(access_key_hash) WHERE access_key_hash IS NOT NULL",
+        [],
+    )?;
+    for (column, definition) in [
+        ("session_id", "TEXT"),
+        ("device_name", "TEXT NOT NULL DEFAULT ''"),
+        ("user_agent", "TEXT NOT NULL DEFAULT ''"),
+        ("created_at", "INTEGER NOT NULL DEFAULT 0"),
+        ("last_seen_at", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = ?1",
+            [column],
+            |row| row.get(0),
+        )?;
+        if exists == 0 {
+            conn.execute_batch(&format!(
+                "ALTER TABLE sessions ADD COLUMN {column} {definition};"
+            ))?;
+        }
+    }
+    let old_sessions: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT token FROM sessions WHERE session_id IS NULL OR session_id = ''"
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    for token in old_sessions {
+        let id = Uuid::new_v4().to_string();
+        conn.execute(
+            "UPDATE sessions SET session_id=?1 WHERE token=?2 AND (session_id IS NULL OR session_id='')",
+            params![id, token],
+        )?;
+    }
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS sessions_session_id ON sessions(session_id)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS sessions_user_expires ON sessions(user_id, expires_at)",
         [],
     )?;
     conn.execute(
