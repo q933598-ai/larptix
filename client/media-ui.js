@@ -47,7 +47,7 @@
     const top = document.createElement("div");
     top.className = "larptrix-media-top";
     const title = document.createElement("strong");
-    title.textContent = "Voice message";
+    title.textContent = audio.dataset.larptrixAudioKind === "audio" ? "Audio" : "Voice message";
     const time = document.createElement("span");
     time.className = "larptrix-media-time";
     time.textContent = "0:00 / 0:00";
@@ -165,7 +165,8 @@
   }
 
   function enhance(root = document) {
-    root.querySelectorAll("audio:not(." + ENHANCED + ")").forEach(enhanceAudio);
+    root.querySelectorAll("li audio:not(." + ENHANCED + "), .attachment-preview audio:not(." + ENHANCED + ")")
+      .forEach(enhanceAudio);
     root.querySelectorAll("video.chat-video:not(." + ENHANCED + ")").forEach(enhanceVideo);
   }
 
