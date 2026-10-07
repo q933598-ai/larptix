@@ -2291,6 +2291,7 @@ keyContinue.addEventListener("click", async () => {
   try {
     const user = await api("POST", "/api/login", {
       access_key: generatedKey.textContent,
+      device_name: loginDeviceName(),
     });
     const alreadyConnected = socket?.readyState === WebSocket.OPEN && me?.user_id === user.user_id;
     keyDialog.close();
@@ -2748,8 +2749,8 @@ authForm.addEventListener("submit", async (event) => {
       return;
     }
     const payload = legacyLogin
-      ? { email: emailInput.value.trim(), password: passwordInput.value }
-      : { access_key: accessKeyInput.value.trim() };
+      ? { email: emailInput.value.trim(), password: passwordInput.value, device_name: loginDeviceName() }
+      : { access_key: accessKeyInput.value.trim(), device_name: loginDeviceName() };
     const user = await api("POST", "/api/login", payload);
     signedIn(user);
   } catch (err) {
@@ -8033,6 +8034,28 @@ function queueAttachment(file) {
   queueAttachments(file ? [file] : []);
 }
 
+
+function loginDeviceName() {
+  try {
+    const ua = navigator.userAgent || "";
+    const platform = navigator.userAgentData?.platform || navigator.platform || "";
+    let browser = "Browser";
+    if (/Edg\//.test(ua)) browser = "Edge";
+    else if (/Firefox\//.test(ua)) browser = "Firefox";
+    else if (/Chrome\//.test(ua) && !/Edg\//.test(ua)) browser = "Chrome";
+    else if (/Safari\//.test(ua) && !/Chrome\//.test(ua)) browser = "Safari";
+    else if (/AppleWebKit/i.test(ua)) browser = "Web browser";
+    const os = /Android/i.test(ua) ? "Android"
+      : /iPhone|iPad|iPod/i.test(ua) ? "iOS"
+      : /Windows/i.test(ua) ? "Windows"
+      : /Mac OS X/i.test(ua) ? "macOS"
+      : /Linux/i.test(ua) ? "Linux"
+      : platform || "Unknown OS";
+    return (browser + " on " + os).slice(0, 80);
+  } catch {
+    return "Larptrix device";
+  }
+}
 
 function browserLocale() {
   const locale = (navigator.language || "en-US").replace("-", "_").trim();
