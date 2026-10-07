@@ -5544,10 +5544,14 @@ async function handleCallSignal(signal) {
       call_id: directCallSessionId,
       description: peerConnection.localDescription,
     });
-  } else if (signal.kind === "reject" || signal.kind === "hangup") {
+  } else if (signal.kind === "reject") {
     clearTimeout(outgoingCallTimeout);
     outgoingCallTimeout = null;
     endCall(false);
+  } else if (signal.kind === "hangup") {
+    clearTimeout(outgoingCallTimeout);
+    outgoingCallTimeout = null;
+    endCall(false, { preserveDirectJoin: true });
   }
 }
 
