@@ -5465,6 +5465,7 @@ async function handleCallSignal(signal) {
     incomingCallTimeout = setTimeout(() => {
       if (!pendingIncomingCall || pendingIncomingCall.sender_id !== signal.sender_id) return;
       stopCallRingtone();
+      if (incomingCallDialog?.open) incomingCallDialog.close();
       renderDirectCallTopbar(signal.sender_id);
     }, 15000);
     // Direct calls are handled from the chat header so the normal chat stays visible.
@@ -5481,6 +5482,7 @@ async function handleCallSignal(signal) {
     const missedKind = callMediaKind || "audio";
     const wasNoAnswer = signal.kind === "hangup" && signal.payload?.reason === "no_answer";
     stopCallRingtone();
+    if (incomingCallDialog?.open) incomingCallDialog.close();
     pendingIncomingCall = null;
     callPeerId = null;
     directCallSessionId = null;
