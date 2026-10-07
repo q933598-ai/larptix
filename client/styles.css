@@ -486,11 +486,85 @@ h1 {
 }
 
 .incoming-call-dialog {
-  width: min(360px, 92vw);
+  width: min(390px, 94vw);
+  max-width: 390px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-bright);
+  border-radius: 20px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 55%);
 }
 
-.incoming-call-dialog p {
+.incoming-call-card {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 28px 24px 24px;
+  text-align: center;
+}
+
+.incoming-call-avatar {
+  width: 76px;
+  height: 76px;
+  margin-bottom: 4px;
+  font-size: 1.5rem;
+  border: 2px solid var(--line-bright);
+}
+
+.incoming-call-card h2 {
+  margin: 0;
+  color: var(--text);
+}
+
+.incoming-call-card p {
+  margin: 0;
   color: var(--muted);
+}
+
+.incoming-call-actions {
+  width: 100%;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+.call-stage {
+  color: var(--text);
+}
+
+.call-stage .call-dock-heading,
+.call-stage .call-heading-copy,
+.call-stage .call-heading-copy *,
+.call-stage .call-controls,
+.call-stage .call-controls label,
+.call-stage .call-controls span,
+.call-stage .call-settings-panel,
+.call-stage .call-settings-panel *,
+.call-stage .group-call-count {
+  color: var(--text);
+}
+
+.call-stage .call-dock-heading p,
+.call-stage .call-security-note,
+.call-stage .call-select > span {
+  color: var(--muted);
+}
+
+.group-call-count {
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--text) !important;
+}
+
+.call-exit-button {
+  border-color: rgb(191 97 106 / 70%);
+}
+
+.call-exit-button:hover {
+  border-color: var(--danger);
 }
 
 .empty {
