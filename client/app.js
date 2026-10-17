@@ -110,6 +110,18 @@ const peerAvatar = document.getElementById("peer-avatar");
 const peerMeta = document.getElementById("peer-meta");
 const peerVerified = document.getElementById("peer-verified");
 const chatTitlebar = document.getElementById("chat-titlebar");
+const chatDetailsPanel = document.getElementById("chat-details-panel");
+const chatDetailsToggle = document.getElementById("chat-details-toggle");
+const chatDetailsAvatar = document.getElementById("chat-details-avatar");
+const chatDetailsName = document.getElementById("chat-details-name");
+const chatDetailsSubtitle = document.getElementById("chat-details-subtitle");
+const chatDetailsProfile = document.getElementById("chat-details-profile");
+const chatDetailsAudio = document.getElementById("chat-details-audio");
+const chatDetailsVideo = document.getElementById("chat-details-video");
+const chatDetailsMembers = document.getElementById("chat-details-members");
+const chatDetailsMembersSection = document.getElementById("chat-details-members-section");
+const chatDetailsMembersCount = document.getElementById("chat-details-members-count");
+const chatDetailsMemberList = document.getElementById("chat-details-member-list");
 const callStage = document.getElementById("call-stage");
 const callStatus = document.getElementById("call-status");
 const localVideo = document.getElementById("local-video");
@@ -2144,8 +2156,131 @@ function openSettings() {
   void checkForClientUpdate({ silent: true });
 
   settingsLayoutStatus.textContent = "";
+  setSettingsView("account");
   settingsDialog.showModal();
   closeAppMenu();
+}
+
+function setSettingsView(view) {
+  const allowed = new Set(["account", "appearance", "voice", "notifications", "privacy", "server"]);
+  const activeView = allowed.has(view) ? view : "account";
+  const titles = {
+    account: "My Account",
+    appearance: "Appearance",
+    voice: "Voice & Video",
+    notifications: "Notifications",
+    privacy: "Privacy & Security",
+    server: "Server & Updates",
+  };
+  settingsDialog.querySelectorAll("[data-settings-target]").forEach((button) => {
+    const active = button.dataset.settingsTarget === activeView;
+    button.classList.toggle("active", active);
+    if (active) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
+  settingsDialog.querySelectorAll("[data-settings-view]").forEach((page) => {
+    const active = page.dataset.settingsView === activeView;
+    page.hidden = !active;
+    page.classList.toggle("active", active);
+  });
+  const title = document.getElementById("settings-current-title");
+  if (title) title.textContent = titles[activeView];
+  const content = settingsDialog.querySelector(".settings-content");
+  if (content) content.scrollTop = 0;
+}
+
+function setChatDetailsOpen(open) {
+  const shell = document.querySelector(".shell");
+  if (!shell || !chatDetailsPanel || !chatDetailsToggle) return;
+  const visible = Boolean(open);
+  chatDetailsPanel.hidden = !visible;
+  shell.classList.toggle("details-open", visible);
+  chatDetailsToggle.setAttribute("aria-expanded", String(visible));
+  if (visible) renderChatDetailsPanel();
+}
+
+function renderChatDetailsPanel() {
+  if (!chatDetailsPanel) return;
+  const selected = getChatEntries().find((item) => item.user_id === peerId);
+  if (!selected) {
+    chatDetailsName.textContent = "Choose a conversation";
+    chatDetailsSubtitle.textContent = "People, groups and channel information will appear here.";
+    chatDetailsAvatar.textContent = "?";
+    chatDetailsProfile.hidden = true;
+    chatDetailsAudio.hidden = true;
+    chatDetailsVideo.hidden = true;
+    chatDetailsMembers.hidden = true;
+    chatDetailsMembersSection.hidden = true;
+    chatDetailsMemberList.replaceChildren();
+    return;
+  }
+
+  const isGroup = Boolean(selected.is_group);
+  const isChannel = Boolean(selected.is_channel);
+  const isMultiUser = isGroup || isChannel;
+  const memberIds = Array.isArray(selected.group_member_ids)
+    ? selected.group_member_ids.map((item) => typeof item === "string" ? item : item?.user_id).filter(Boolean)
+    : [];
+  chatDetailsName.textContent = selected.display_name || selected.name || "Conversation";
+  chatDetailsSubtitle.textContent = isChannel
+    ? (selected.description || ((selected.subscriber_count || memberIds.length || 0) + " subscribers"))
+    : isGroup
+      ? (selected.description || ((memberIds.length || 0) + " members"))
+      : (selected.username ? "@" + selected.username : "Direct message");
+  paintAvatar(chatDetailsAvatar, selected);
+  chatDetailsProfile.hidden = isMultiUser;
+  chatDetailsAudio.hidden = isMultiUser;
+  chatDetailsVideo.hidden = isMultiUser;
+  chatDetailsMembers.hidden = !isGroup || isChannel;
+  chatDetailsMembersSection.hidden = !isMultiUser;
+  chatDetailsMembersCount.textContent = memberIds.length
+    ? memberIds.length + (isChannel ? " subscribers" : " members")
+    : "Member list unavailable";
+
+  chatDetailsMemberList.replaceChildren();
+  if (isMultiUser) {
+    const seen = new Set();
+    for (const memberId of memberIds) {
+      if (seen.has(memberId)) continue;
+      seen.add(memberId);
+      const member = memberId === me?.user_id
+        ? me
+        : users.find((item) => item.user_id === memberId)
+          || friendRequests.friends.find((item) => item.user_id === memberId)
+          || null;
+      const row = document.createElement("li");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "details-member-button";
+      const avatar = document.createElement("span");
+      avatar.className = "avatar";
+      paintAvatar(avatar, member || { user_id: memberId, display_name: "Member" });
+      const copy = document.createElement("span");
+      copy.className = "details-member-copy";
+      const name = document.createElement("strong");
+      name.textContent = member?.display_name || "Member";
+      const presence = document.createElement("small");
+      const onlineState = presenceByUserId.get(memberId);
+      presence.textContent = memberId === me?.user_id
+        ? "You"
+        : (onlineState === "online" ? "Online" : onlineState === "dnd" ? "Do not disturb" : "Member");
+      copy.append(name, presence);
+      button.append(avatar, copy);
+      if (memberId !== me?.user_id && member) {
+        button.addEventListener("click", () => openChat(memberId));
+      } else {
+        button.disabled = true;
+      }
+      row.append(button);
+      chatDetailsMemberList.append(row);
+    }
+    if (!memberIds.length) {
+      const empty = document.createElement("li");
+      empty.className = "settings-help";
+      empty.textContent = "No member list was provided by the server.";
+      chatDetailsMemberList.append(empty);
+    }
+  }
 }
 
 function resetChatListWidth() {
@@ -2225,6 +2360,15 @@ profileOpen.addEventListener("click", async () => {
   }
 });
 menuSettings.addEventListener("click", openSettings);
+settingsDialog.querySelectorAll("[data-settings-target]").forEach((button) => {
+  button.addEventListener("click", () => setSettingsView(button.dataset.settingsTarget));
+});
+chatDetailsToggle?.addEventListener("click", () => setChatDetailsOpen(chatDetailsPanel.hidden));
+document.getElementById("chat-details-close")?.addEventListener("click", () => setChatDetailsOpen(false));
+chatDetailsProfile?.addEventListener("click", () => document.getElementById("peer-profile-open")?.click());
+chatDetailsAudio?.addEventListener("click", () => document.getElementById("start-audio-call")?.click());
+chatDetailsVideo?.addEventListener("click", () => document.getElementById("start-video-call")?.click());
+chatDetailsMembers?.addEventListener("click", () => groupMembersOpen?.click());
 document.getElementById("settings-close").addEventListener("click", () => settingsDialog.close());
 settingsAvatarShape?.addEventListener("change", () => applyAvatarShape(settingsAvatarShape.value));
 settingsCheckUpdates?.addEventListener("click", () => {
@@ -4769,6 +4913,7 @@ function openChat(id) {
   applyChatWallpaper(id);
   chatTitlebar.hidden = false;
   renderUsers();
+  renderChatDetailsPanel();
   renderDirectCallAvatarStack();
   renderGroupCallBanner();
   updateGroupCallControls();
@@ -5195,7 +5340,8 @@ function removeGroupPeer(remoteId) {
 
 async function startCall(kind, resumeSessionId = null, resumeStartedAt = 0) {
   if (!peerId || !socket || socket.readyState !== WebSocket.OPEN) return;
-  const selectedGroup = groups.find((item) => item.user_id === peerId && item.is_group);
+  const targetPeerId = peerId;
+  const selectedGroup = groups.find((item) => item.user_id === targetPeerId && item.is_group);
   if (selectedGroup) {
     await startGroupCall(kind);
     return;
@@ -5203,7 +5349,7 @@ async function startCall(kind, resumeSessionId = null, resumeStartedAt = 0) {
   if (groupCallId) endCall(true);
   callWindowTitle.textContent = "call.exe";
   if (typeof globalThis.RTCPeerConnection !== "function") {
-    const handoff = await openCallInSystemBrowser(peerId, kind);
+    const handoff = await openCallInSystemBrowser(targetPeerId, kind);
     if (handoff.opened) {
       appendSystem("This desktop WebKit has no WebRTC support. The chat opened in your browser; sign in there if asked, then retry the call.");
       return;
@@ -5228,7 +5374,7 @@ async function startCall(kind, resumeSessionId = null, resumeStartedAt = 0) {
   directCallSessionId = requestedSessionId || crypto.randomUUID();
   directCallOutgoing = true;
   directCallStartedAt = requestedStartedAt || directCallStartedAt || Date.now();
-  if (requestedSessionId && savedJoinPeerId && savedJoinPeerId !== peerId) {
+  if (requestedSessionId && savedJoinPeerId && savedJoinPeerId !== targetPeerId) {
     directCallSessionId = crypto.randomUUID();
     directCallStartedAt = Date.now();
   }
@@ -5236,11 +5382,11 @@ async function startCall(kind, resumeSessionId = null, resumeStartedAt = 0) {
   directCallAnswered = false;
   directCallOfferSent = false;
   directCallRemoteVisible = true;
-  callPeerId = peerId;
+  callPeerId = targetPeerId;
   callMediaKind = kind;
   callNoAnswer = false;
   persistDirectCallState();
-  updateDirectCallButtons(peerId);
+  updateDirectCallButtons(targetPeerId);
   renderDirectCallAvatarStack();
   updateCallPlaceholder({ force: true });
   startOutgoingCallRingtone();
@@ -5267,17 +5413,31 @@ async function startCall(kind, resumeSessionId = null, resumeStartedAt = 0) {
       started_at: directCallStartedAt,
     });
     directCallOfferSent = true;
-    renderDirectCallTopbar(peerId);
+    renderDirectCallTopbar(targetPeerId);
     clearTimeout(outgoingCallTimeout);
     outgoingCallTimeout = setTimeout(() => {
-      if (!peerConnection || callPeerId !== peerId || directCallAnswered) return;
+      if (!peerConnection || callPeerId !== targetPeerId || directCallAnswered) return;
+      outgoingCallTimeout = null;
       stopCallRingtone();
       callNoAnswer = true;
       directCallRemoteVisible = false;
-      callStatus.textContent = "No answer · waiting for them to join" + callMediaNotice;
+      const missedCallSessionId = directCallSessionId;
+      callStatus.textContent = "No answer · call ended" + callMediaNotice;
+      appendSystem("No answer. The call was ended.");
       updateCallPlaceholder({ force: true });
       renderDirectCallAvatarStack();
-      renderDirectCallTopbar(peerId);
+      renderDirectCallTopbar(targetPeerId);
+      clearTimeout(noAnswerCleanupTimeout);
+      noAnswerCleanupTimeout = setTimeout(() => {
+        noAnswerCleanupTimeout = null;
+        if (
+          peerConnection
+          && directCallSessionId === missedCallSessionId
+          && callPeerId === targetPeerId
+          && callNoAnswer
+          && !directCallAnswered
+        ) endCall(true);
+      }, 2200);
     }, 15000);
   } catch (err) {
     appendSystem(`Call setup failed: ${err.message || "Check camera and microphone permissions."}`);
@@ -5370,20 +5530,23 @@ async function createPeerConnection() {
     updateDirectCallButtons(peerId);
     callStatus.textContent = `${baseStatus}${callMediaNotice}`;
     if (connection.connectionState === "failed" || connection.connectionState === "closed") {
-      if (directCallOutgoing && callPeerId && !callNoAnswer) {
+      if (directCallOutgoing && callPeerId && !directCallAnswered && !callNoAnswer) {
         clearTimeout(outgoingCallTimeout);
         outgoingCallTimeout = null;
-        clearTimeout(noAnswerCleanupTimeout);
-        noAnswerCleanupTimeout = null;
         callNoAnswer = true;
         directCallRemoteVisible = false;
-        callStatus.textContent = "Waiting for answer…";
+        callStatus.textContent = (connection.connectionState === "failed" ? "Could not connect" : "Call ended") + callMediaNotice;
         updateCallPlaceholder({ force: true });
         renderDirectCallAvatarStack();
         renderDirectCallTopbar(peerId);
+        clearTimeout(noAnswerCleanupTimeout);
+        noAnswerCleanupTimeout = setTimeout(() => {
+          noAnswerCleanupTimeout = null;
+          if (peerConnection === connection && callNoAnswer && !directCallAnswered) endCall(true);
+        }, 2200);
         return;
       }
-      endCall(false);
+      endCall(true);
     }
   });
   connection.addEventListener("iceconnectionstatechange", () => {
@@ -5509,6 +5672,19 @@ async function handleCallSignal(signal) {
 
     // Ignore ICE candidates that arrive without a pending offer.
     // They may belong to a previous/ended ICE generation.
+    return;
+  }
+
+  if (
+    (signal.kind === "hangup" || signal.kind === "reject")
+    && pendingIncomingCall?.sender_id === signal.sender_id
+    && (!incomingCallId || !pendingIncomingCall.payload?.call_id || incomingCallId === pendingIncomingCall.payload.call_id)
+  ) {
+    clearTimeout(incomingCallTimeout);
+    incomingCallTimeout = null;
+    stopCallRingtone();
+    endCall(false);
+    appendSystem("The caller cancelled the call.");
     return;
   }
 
