@@ -5421,6 +5421,7 @@ async function startCall(kind, resumeSessionId = null, resumeStartedAt = 0) {
       stopCallRingtone();
       callNoAnswer = true;
       directCallRemoteVisible = false;
+      const missedCallSessionId = directCallSessionId;
       callStatus.textContent = "No answer · call ended" + callMediaNotice;
       appendSystem("No answer. The call was ended.");
       updateCallPlaceholder({ force: true });
@@ -5429,7 +5430,13 @@ async function startCall(kind, resumeSessionId = null, resumeStartedAt = 0) {
       clearTimeout(noAnswerCleanupTimeout);
       noAnswerCleanupTimeout = setTimeout(() => {
         noAnswerCleanupTimeout = null;
-        if (peerConnection && callPeerId && callNoAnswer && !directCallAnswered) endCall(true);
+        if (
+          peerConnection
+          && directCallSessionId === missedCallSessionId
+          && callPeerId === targetPeerId
+          && callNoAnswer
+          && !directCallAnswered
+        ) endCall(true);
       }, 2200);
     }, 15000);
   } catch (err) {
