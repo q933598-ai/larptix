@@ -5340,7 +5340,8 @@ function removeGroupPeer(remoteId) {
 
 async function startCall(kind, resumeSessionId = null, resumeStartedAt = 0) {
   if (!peerId || !socket || socket.readyState !== WebSocket.OPEN) return;
-  const selectedGroup = groups.find((item) => item.user_id === peerId && item.is_group);
+  const targetPeerId = peerId;
+  const selectedGroup = groups.find((item) => item.user_id === targetPeerId && item.is_group);
   if (selectedGroup) {
     await startGroupCall(kind);
     return;
@@ -5348,7 +5349,7 @@ async function startCall(kind, resumeSessionId = null, resumeStartedAt = 0) {
   if (groupCallId) endCall(true);
   callWindowTitle.textContent = "call.exe";
   if (typeof globalThis.RTCPeerConnection !== "function") {
-    const handoff = await openCallInSystemBrowser(peerId, kind);
+    const handoff = await openCallInSystemBrowser(targetPeerId, kind);
     if (handoff.opened) {
       appendSystem("This desktop WebKit has no WebRTC support. The chat opened in your browser; sign in there if asked, then retry the call.");
       return;
@@ -5373,7 +5374,7 @@ async function startCall(kind, resumeSessionId = null, resumeStartedAt = 0) {
   directCallSessionId = requestedSessionId || crypto.randomUUID();
   directCallOutgoing = true;
   directCallStartedAt = requestedStartedAt || directCallStartedAt || Date.now();
-  if (requestedSessionId && savedJoinPeerId && savedJoinPeerId !== peerId) {
+  if (requestedSessionId && savedJoinPeerId && savedJoinPeerId !== targetPeerId) {
     directCallSessionId = crypto.randomUUID();
     directCallStartedAt = Date.now();
   }
@@ -5381,11 +5382,11 @@ async function startCall(kind, resumeSessionId = null, resumeStartedAt = 0) {
   directCallAnswered = false;
   directCallOfferSent = false;
   directCallRemoteVisible = true;
-  callPeerId = peerId;
+  callPeerId = targetPeerId;
   callMediaKind = kind;
   callNoAnswer = false;
   persistDirectCallState();
-  updateDirectCallButtons(peerId);
+  updateDirectCallButtons(targetPeerId);
   renderDirectCallAvatarStack();
   updateCallPlaceholder({ force: true });
   startOutgoingCallRingtone();
@@ -5412,10 +5413,10 @@ async function startCall(kind, resumeSessionId = null, resumeStartedAt = 0) {
       started_at: directCallStartedAt,
     });
     directCallOfferSent = true;
-    renderDirectCallTopbar(peerId);
+    renderDirectCallTopbar(targetPeerId);
     clearTimeout(outgoingCallTimeout);
     outgoingCallTimeout = setTimeout(() => {
-      if (!peerConnection || callPeerId !== peerId || directCallAnswered) return;
+      if (!peerConnection || callPeerId !== targetPeerId || directCallAnswered) return;
       outgoingCallTimeout = null;
       stopCallRingtone();
       callNoAnswer = true;
@@ -5424,7 +5425,7 @@ async function startCall(kind, resumeSessionId = null, resumeStartedAt = 0) {
       appendSystem("No answer. The call was ended.");
       updateCallPlaceholder({ force: true });
       renderDirectCallAvatarStack();
-      renderDirectCallTopbar(peerId);
+      renderDirectCallTopbar(targetPeerId);
       clearTimeout(noAnswerCleanupTimeout);
       noAnswerCleanupTimeout = setTimeout(() => {
         noAnswerCleanupTimeout = null;
