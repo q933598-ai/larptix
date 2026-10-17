@@ -65,35 +65,44 @@ The VPS runs the server for everyone; users open the same HTTPS hostname from
 their browsers or desktop clients. Do not use the temporary `/tmp` demo database
 for a real deployment.
 
-### Automated Debian Install
+### Automated server install (Debian / Ubuntu)
 
 The project is published at
-https://github.com/q933598-ai/larptix. The repository must remain public so the
-VPS can download the installer and source without GitHub credentials.
+https://github.com/q933598-ai/larptix. Keep the repository public so the VPS can
+download the installer and source without GitHub credentials.
 
-Point a DNS `A` record such as `chat.example.com` to the VPS public IPv4 address.
-Allow inbound TCP ports 80 and 443 in the VPS and provider firewalls. Then run this
-single command from your computer, replacing `VPS_IP` and `chat.example.com` with
-yours:
+Before running the installer:
+
+1. Point a DNS `A` record (for example, `chat.example.com`) to the VPS public IPv4.
+2. Allow inbound TCP ports `80` and `443` in the VPS provider firewall.
+3. Make sure you can SSH into the VPS using an account with `sudo` access.
+
+From your computer, replace `admin`, `VPS_IP`, and `chat.example.com` with your own values.
+This one command also works from shells such as fish; it downloads the installer on
+the VPS so no process-substitution syntax is needed locally:
 
 ```bash
-ssh admin@VPS_IP 'sudo bash -s -- chat.example.com https://github.com/q933598-ai/larptix.git' \
-     < <(curl -fsSL https://raw.githubusercontent.com/q933598-ai/larptix/main/deploy/install-debian.sh)
+ssh -t admin@VPS_IP 'curl -fsSL https://raw.githubusercontent.com/q933598-ai/larptix/main/deploy/install-debian.sh | sudo bash -s -- chat.example.com https://github.com/q933598-ai/larptix.git'
 ```
 
-Or log into the VPS first and run:
+Or first log in to the VPS, then run the install command there:
 
 ```bash
+ssh admin@VPS_IP
 curl -fsSL https://raw.githubusercontent.com/q933598-ai/larptix/main/deploy/install-debian.sh \
-     | sudo bash -s -- chat.example.com https://github.com/q933598-ai/larptix.git
+  | sudo bash -s -- chat.example.com https://github.com/q933598-ai/larptix.git
 ```
 
-The script installs Docker Engine and Compose from Docker's Debian repository,
-clones the project, copies it to `/opt/larptrix`, builds the server image,
-configures Caddy for automatic HTTPS, and installs/enables the systemd unit
-`larptrix.service`. Visit
-`https://chat.example.com` after Caddy obtains its certificate and create user
-accounts. Every user should save their E2E recovery key during first sign-in.
+The installer supports Debian and Ubuntu with systemd. It checks the hostname
+before installing packages, selects the correct Docker APT repository for the OS,
+installs Docker Engine and Compose, copies the project to `/opt/larptrix`,
+configures Caddy for automatic HTTPS, and enables `larptrix.service`. It leaves
+your existing `.env` settings and persistent Docker volumes in place, updating
+only `DOMAIN` in the environment file. Re-running the installer refreshes the
+source and restarts/rebuilds the service.
+
+Visit `https://chat.example.com` after Caddy obtains its certificate and create
+user accounts. Every user should save their E2E recovery key during first sign-in.
 
 Manage the running service with:
 
@@ -103,10 +112,6 @@ sudo systemctl restart larptrix
 sudo journalctl -u larptrix -f
 cd /opt/larptrix && sudo docker compose logs -f
 ```
-
-To deploy a newer source version, copy it to the VPS again and run
-`sudo systemctl restart larptrix`; the unit rebuilds the image before starting.
-GIFs are sent as regular E2E-encrypted attachments; the built-in client does not require an external GIF API.
 
 The named Docker volume `larptrix_larptrix-data` keeps SQLite and uploaded files
 across restarts/rebuilds. Back it up regularly and store backups off the VPS.
