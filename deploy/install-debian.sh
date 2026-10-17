@@ -72,7 +72,7 @@ for required in Dockerfile compose.yaml deploy/Caddyfile Cargo.lock; do
 done
 
 install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+curl -fsSL "https://download.docker.com/linux/$docker_repo_os/gpg" -o /etc/apt/keyrings/docker.asc
 chmod a+r /etc/apt/keyrings/docker.asc
 architecture=$(dpkg --print-architecture)
 codename=${VERSION_CODENAME:-}
