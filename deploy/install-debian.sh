@@ -16,9 +16,23 @@ fi
 DOMAIN=${1:-}
 SOURCE_REPO=${2:-${LARPTRIX_REPO:-}}
 [[ -n "$DOMAIN" ]] || fail "usage: $0 <domain> [git-repository-url]"
-[[ "$DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
-  || fail "domain must contain only hostname characters"
-[[ "$DOMAIN" != *..* ]] || fail "domain cannot contain consecutive dots"
+[[ ${#DOMAIN} -le 253 ]] || fail "domain is too long (maximum 253 characters)"
+[[ "$DOMAIN" == *.* ]] || fail "use a public DNS hostname such as chat.example.com, not localhost"
+[[ "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || fail "domain must contain only hostname characters"
+domain_labels=()
+IFS='.' read -r -a domain_labels <<< "$DOMAIN"
+for label in "${domain_labels[@]}"; do
+  [[ -n "$label" && ${#label} -le 63 ]] || fail "domain labels must be 1–63 characters long"
+  [[ "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] || fail "each domain label must start and end with a letter or number"
+done
+
+SOURCE_DIR=
+cleanup() {
+  if [[ -n "${SOURCE_DIR:-}" && -d "$SOURCE_DIR" ]]; then
+    rm -rf -- "$SOURCE_DIR" || true
+  fi
+}
+trap cleanup EXIT
 
 SCRIPT_PATH=${BASH_SOURCE[0]:-}
 if [[ -n "$SCRIPT_PATH" && -f "$SCRIPT_PATH" ]]; then
@@ -33,15 +47,22 @@ if [[ ! -r /etc/os-release ]]; then
 fi
 # shellcheck disable=SC1091
 source /etc/os-release
-[[ ${ID:-} == debian || ${ID_LIKE:-} == *debian* ]] \
-  || fail "this installer supports Debian and Debian-derived distributions"
+case "${ID:-}" in
+  debian) docker_repo_os=debian ;;
+  ubuntu) docker_repo_os=ubuntu ;;
+  *) fail "supported systems are Debian and Ubuntu; detected ${ID:-unknown}" ;;
+esac
+
+command -v apt-get >/dev/null 2>&1 || fail "apt-get is required"
+command -v dpkg >/dev/null 2>&1 || fail "dpkg is required"
+command -v systemctl >/dev/null 2>&1 || fail "systemd is required"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends ca-certificates curl git gnupg rsync
 
 if [[ -n "$SOURCE_REPO" ]]; then
-  SOURCE_DIR="/tmp/larptrix-source-$$"
+  SOURCE_DIR=$(mktemp -d /tmp/larptrix-source.XXXXXX)
   git clone --depth 1 "$SOURCE_REPO" "$SOURCE_DIR"
   PROJECT_ROOT=$SOURCE_DIR
 fi
@@ -56,8 +77,7 @@ chmod a+r /etc/apt/keyrings/docker.asc
 architecture=$(dpkg --print-architecture)
 codename=${VERSION_CODENAME:-}
 [[ -n "$codename" ]] || fail "VERSION_CODENAME is missing from /etc/os-release"
-printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian %s stable\n' \
-  "$architecture" "$codename" > /etc/apt/sources.list.d/docker.list
+printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/%s %s stable\n' "$architecture" "$docker_repo_os" "$codename" > /etc/apt/sources.list.d/docker.list
 
 apt-get update
 apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
@@ -104,7 +124,12 @@ WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable --now "$UNIT_NAME"
+systemctl enable "$UNIT_NAME"
+if systemctl is-active --quiet "$UNIT_NAME"; then
+  systemctl restart "$UNIT_NAME"
+else
+  systemctl start "$UNIT_NAME"
+fi
 
 printf '\nLarptrix is starting for https://%s\n' "$DOMAIN"
 printf 'Check status:  systemctl status %s\n' "$UNIT_NAME"
