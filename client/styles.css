@@ -7268,7 +7268,6 @@ html[data-theme="catppuccin-mocha"] .call-stage .call-dock-heading > .ghost {
   .settings-brand .eyebrow,
   .settings-brand h2,
   .settings-nav-heading,
-  .settings-nav-item:not(.active),
   .settings-sidebar-footer > span:last-child {
     display: none;
   }
@@ -7277,9 +7276,12 @@ html[data-theme="catppuccin-mocha"] .call-stage .call-dock-heading > .ghost {
     padding: 8px 0;
     font-size: 0;
   }
-  .settings-nav-item > span {
+  .settings-nav-item > span[aria-hidden="true"] {
     width: auto;
     font-size: 1.1rem;
+  }
+  .settings-nav-label {
+    display: none;
   }
   .settings-sidebar-footer {
     justify-content: center;
