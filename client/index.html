@@ -84,6 +84,7 @@
             <h2 id="peer-name" class="peer-name"></h2>
           </div>
           <span id="peer-verified" class="verified-badge" title="Device verified" aria-label="Device verified" hidden>Verified ✓</span>
+          <button id="chat-details-toggle" type="button" class="ghost chat-details-toggle" aria-label="Toggle conversation details" aria-controls="chat-details-panel" aria-expanded="false" title="Conversation details">☷</button>
           <div class="call-actions">
             <button id="peer-profile-open" type="button" class="ghost">Profile</button>
             <button id="group-members-open" type="button" class="ghost" hidden>Members</button>
@@ -353,6 +354,39 @@
         </section>
       </main>
 
+      <aside id="chat-details-panel" class="chat-details-panel" aria-label="Conversation details" hidden>
+        <header class="details-header">
+          <div>
+            <p class="eyebrow">LARPTRIX</p>
+            <h2>Details</h2>
+          </div>
+          <button id="chat-details-close" type="button" class="ghost" aria-label="Close conversation details">×</button>
+        </header>
+        <div class="details-content">
+          <section class="details-summary">
+            <span id="chat-details-avatar" class="avatar details-avatar" aria-hidden="true">?</span>
+            <h3 id="chat-details-name">Choose a conversation</h3>
+            <p id="chat-details-subtitle">People, groups and channel information will appear here.</p>
+            <button id="chat-details-profile" type="button" class="ghost" hidden>Open profile</button>
+          </section>
+          <section class="details-section">
+            <h3>Quick actions</h3>
+            <button id="chat-details-audio" type="button" class="ghost">Start voice call</button>
+            <button id="chat-details-video" type="button" class="ghost">Start video call</button>
+            <button id="chat-details-members" type="button" class="ghost" hidden>Manage members</button>
+          </section>
+          <section id="chat-details-members-section" class="details-section" hidden>
+            <h3>Members</h3>
+            <p id="chat-details-members-count" class="settings-help"></p>
+            <ul id="chat-details-member-list" class="details-member-list"></ul>
+          </section>
+          <section class="details-section details-about">
+            <h3>About Larptrix</h3>
+            <p>Private conversations, friend-based access and end-to-end encryption tools.</p>
+          </section>
+        </div>
+      </aside>
+
 
     </div>
 
@@ -455,22 +489,38 @@
     </dialog>
 
     <dialog id="settings-dialog" class="settings-dialog">
-      <header class="settings-header">
-        <div>
-          <p class="eyebrow">LARPTRIX</p>
-          <h2>Settings</h2>
-        </div>
-        <button id="settings-close" type="button" class="ghost" aria-label="Close settings">×</button>
-      </header>
+      <div class="settings-shell">
+        <aside class="settings-sidebar" aria-label="Settings categories">
+          <div class="settings-brand">
+            <p class="eyebrow">LARPTRIX</p>
+            <h2>Settings</h2>
+          </div>
+          <p class="settings-nav-heading">USER SETTINGS</p>
+          <nav class="settings-nav">
+            <button type="button" class="settings-nav-item active" data-settings-target="account" aria-current="page"><span aria-hidden="true">◉</span> My Account</button>
+            <button type="button" class="settings-nav-item" data-settings-target="appearance"><span aria-hidden="true">◐</span> Appearance</button>
+            <button type="button" class="settings-nav-item" data-settings-target="voice"><span aria-hidden="true">♫</span> Voice &amp; Video</button>
+            <button type="button" class="settings-nav-item" data-settings-target="notifications"><span aria-hidden="true">♧</span> Notifications</button>
+            <button type="button" class="settings-nav-item" data-settings-target="privacy"><span aria-hidden="true">◇</span> Privacy &amp; Security</button>
+            <button type="button" class="settings-nav-item" data-settings-target="server"><span aria-hidden="true">⌘</span> Server &amp; Updates</button>
+          </nav>
+          <div class="settings-sidebar-footer">
+            <span class="settings-sidebar-mark" aria-hidden="true">L</span>
+            <span><strong>Larptrix</strong><small>Private by design</small></span>
+          </div>
+        </aside>
+        <div class="settings-main">
+          <header class="settings-header">
+            <div>
+              <p class="eyebrow">USER SETTINGS</p>
+              <h2 id="settings-current-title">My Account</h2>
+            </div>
+            <button id="settings-close" type="button" class="ghost" aria-label="Close settings">×</button>
+          </header>
+          <div class="settings-content">
 
-      <section class="settings-section">
-        <h3>Server</h3>
-        <label for="settings-server">Connected server</label>
-        <input id="settings-server" type="text" readonly />
-        <p class="settings-help">Your account belongs to this independent Larptrix server.</p>
-      </section>
-
-      <section class="settings-section">
+      <div class="settings-page active" data-settings-view="account">
+<section class="settings-section">
         <h3>Account</h3>
         <dl class="settings-list">
           <div><dt>Display name</dt><dd id="settings-name"></dd></div>
@@ -478,27 +528,20 @@
         </dl>
         <button id="settings-open-profile" type="button" class="ghost">Open profile</button>
       </section>
-
       <section class="settings-section">
-        <h3>Updates</h3>
-        <p id="settings-update-status" class="settings-help">Updates are checked automatically from the official Larptrix release channel.</p>
-        <div class="settings-update-actions">
-          <button id="settings-check-updates" type="button" class="ghost">Check for updates</button>
-          <button id="settings-install-update" type="button" class="ghost" hidden>Install update</button>
-          <button id="settings-open-releases" type="button" class="ghost">Open releases</button>
-        </div>
+        <h3>Presence</h3>
+        <label for="settings-presence">Presence</label>
+        <select id="settings-presence">
+          <option value="online">Online</option>
+          <option value="dnd">Do Not Disturb</option>
+          <option value="invisible">Invisible</option>
+        </select>
       </section>
+      </div>
 
+      <div class="settings-page" data-settings-view="appearance" hidden>
       <section class="settings-section">
-        <h3>End-to-end encryption</h3>
-        <p id="settings-e2e-status" class="settings-value"></p>
-        <code id="settings-e2e-fingerprint" class="crypto-fingerprint" hidden></code>
-        <p class="settings-help">Encrypted chat keys stay on your device and are protected by your separate E2E recovery key.</p>
-        <button id="settings-open-profile-e2e" type="button" class="ghost">Open E2E settings</button>
-      </section>
-
-      <section class="settings-section">
-        <h3>Interface</h3>
+        <h3>Theme & layout</h3>
         <label for="settings-theme">Theme</label>
         <select id="settings-theme">
           <option value="larptix">Larptix Green</option>
@@ -525,17 +568,24 @@
             <button id="theme-delete-saved" type="button" class="ghost">Delete</button>
           </div>
         </div>
-        <label for="settings-avatar-shape">Avatar shape</label>
+<label for="settings-avatar-shape">Avatar shape</label>
         <select id="settings-avatar-shape">
           <option value="circle">Circle</option>
           <option value="square">Square</option>
         </select>
-        <label for="settings-presence">Presence</label>
-        <select id="settings-presence">
-          <option value="online">Online</option>
-          <option value="dnd">Do Not Disturb</option>
-          <option value="invisible">Invisible</option>
+<label for="settings-wallpaper-tint">Chat wallpaper tint</label>
+        <select id="settings-wallpaper-tint">
+          <option value="theme">Theme color</option>
+          <option value="none">Original colors</option>
         </select>
+        <button id="settings-reset-layout" type="button" class="ghost">Reset chat list width</button>
+        <p id="settings-layout-status" class="settings-help" aria-live="polite"></p>
+      </section>
+      </div>
+
+      <div class="settings-page" data-settings-view="voice" hidden>
+      <section class="settings-section">
+        <h3>Voice & video</h3>
         <label class="key-saved-label">
           <input id="settings-call-sounds" type="checkbox" checked />
           Play incoming call sound
@@ -554,34 +604,70 @@
           <button id="settings-call-ringtone-reset" type="button" class="ghost">Use default ringtone</button>
           <span id="settings-call-ringtone-status" class="settings-help">Default ringtone</span>
         </div>
+<p class="settings-help">Noise suppression is configured inside an active call.</p>
+      </section>
+      </div>
+
+      <div class="settings-page" data-settings-view="notifications" hidden>
+      <section class="settings-section">
+        <h3>Message sounds</h3>
         <label class="key-saved-label">
           <input id="settings-message-sounds" type="checkbox" checked />
           Play incoming message sound
         </label>
-        <label for="settings-message-policy">Who can message me</label>
-        <select id="settings-message-policy">
-          <option value="everyone">Everyone</option>
-          <option value="friends">Friends only</option>
-        </select>
-        <p class="settings-help">Friends only blocks direct messages from people who are not on your friends list.</p>
+      </section>
+      <section class="settings-section">
+        <h3>Browser notifications</h3>
         <label class="key-saved-label">
           <input id="settings-browser-notifications" type="checkbox" />
           Browser notifications
         </label>
         <button id="settings-enable-notifications" type="button" class="ghost">Allow browser notifications</button>
         <p id="settings-notifications-status" class="settings-help"></p>
-        <p class="settings-help">Noise suppression is configured inside an active call.</p>
-        <label for="settings-wallpaper-tint">Chat wallpaper tint</label>
-        <select id="settings-wallpaper-tint">
-          <option value="theme">Theme color</option>
-          <option value="none">Original colors</option>
-        </select>
-        <button id="settings-reset-layout" type="button" class="ghost">Reset chat list width</button>
-        <p id="settings-layout-status" class="settings-help" aria-live="polite"></p>
       </section>
+      </div>
 
-      <div class="profile-actions settings-footer">
-        <button id="settings-done" type="button">Done</button>
+      <div class="settings-page" data-settings-view="privacy" hidden>
+<section class="settings-section">
+        <h3>End-to-end encryption</h3>
+        <p id="settings-e2e-status" class="settings-value"></p>
+        <code id="settings-e2e-fingerprint" class="crypto-fingerprint" hidden></code>
+        <p class="settings-help">Encrypted chat keys stay on your device and are protected by your separate E2E recovery key.</p>
+        <button id="settings-open-profile-e2e" type="button" class="ghost">Open E2E settings</button>
+      </section>
+      <section class="settings-section">
+        <h3>Message privacy</h3>
+        <label for="settings-message-policy">Who can message me</label>
+        <select id="settings-message-policy">
+          <option value="everyone">Everyone</option>
+          <option value="friends">Friends only</option>
+        </select>
+        <p class="settings-help">Friends only blocks direct messages from people who are not on your friends list.</p>
+      </section>
+      </div>
+
+      <div class="settings-page" data-settings-view="server" hidden>
+<section class="settings-section">
+        <h3>Server</h3>
+        <label for="settings-server">Connected server</label>
+        <input id="settings-server" type="text" readonly />
+        <p class="settings-help">Your account belongs to this independent Larptrix server.</p>
+      </section>
+<section class="settings-section">
+        <h3>Updates</h3>
+        <p id="settings-update-status" class="settings-help">Updates are checked automatically from the official Larptrix release channel.</p>
+        <div class="settings-update-actions">
+          <button id="settings-check-updates" type="button" class="ghost">Check for updates</button>
+          <button id="settings-install-update" type="button" class="ghost" hidden>Install update</button>
+          <button id="settings-open-releases" type="button" class="ghost">Open releases</button>
+        </div>
+      </section>
+      </div>
+          </div>
+          <footer class="profile-actions settings-footer">
+            <button id="settings-done" type="button">Done</button>
+          </footer>
+        </div>
       </div>
     </dialog>
 
