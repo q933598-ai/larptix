@@ -1,0 +1,36 @@
+name: Matrix Migration CI
+
+on:
+  push:
+    branches: ["main", "ci/**"]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Format Rust
+        run: cargo fmt --all
+      - name: Run Rust tests
+        run: cargo test --workspace
+
+  client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check JavaScript syntax
+        run: |
+          node --check client/app.js
+          node --check client/matrix-crypto.js
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build --progress=plain -t larptrix-ci .
