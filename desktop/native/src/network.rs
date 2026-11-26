@@ -27,6 +27,11 @@ pub enum AppEvent {
         attachments: Vec<EncryptedAttachmentMetadata>,
     },
     FilesPicked(Vec<PickedFile>),
+    MessageSendFinished {
+        body: String,
+        success: bool,
+        error: Option<String>,
+    },
     DecryptionFailed {
         peer_id: String,
         message: ChatMessage,
