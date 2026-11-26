@@ -24,10 +24,11 @@ pub struct MediaPlayback {
 
 impl MediaPlayback {
     pub fn open(path: &Path, video: bool) -> Result<Arc<Self>, String> {
-        GSTREAMER_INIT
+        if let Err(error) = GSTREAMER_INIT
             .get_or_init(|| gstreamer::init().map_err(|error| error.to_string()))
-            .as_ref()
-            .map_err(Clone::clone)?;
+        {
+            return Err(error.clone());
+        }
 
         let uri = url::Url::from_file_path(path)
             .map_err(|_| "Could not create a local media URL".to_string())?
@@ -209,6 +210,21 @@ impl MediaPlayback {
         let image = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(width, height, pixels)
             .ok_or_else(|| "Could not construct the GPUI video frame".to_string())?;
         Ok(Some(Arc::new(RenderImage::new(smallvec![Frame::new(image)]))))
+    }
+
+    pub fn poll_bus_error(&self) -> Option<String> {
+        let bus = self.pipeline.bus()?;
+        let message = bus.pop_filtered(&[gstreamer::MessageType::Error])?;
+        match message.view() {
+            gstreamer::MessageView::Error(error) => {
+                let detail = error
+                    .debug()
+                    .map(|debug| format!(" ({debug})"))
+                    .unwrap_or_default();
+                Some(format!("{}{}", error.error(), detail))
+            }
+            _ => None,
+        }
     }
 
     pub fn poll_finished(&self) -> bool {
