@@ -44,3 +44,23 @@ jobs:
 
       - name: Test shared client core
         run: cargo test -p larptrix-client-core
+
+  windows-native:
+    name: Check native GPUI app (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check native desktop
+        run: cargo check --manifest-path desktop/native/Cargo.toml
+
+      - name: Build native desktop
+        run: cargo build --release --manifest-path desktop/native/Cargo.toml
+
+      - name: Test shared client core
+        run: cargo test -p larptrix-client-core
