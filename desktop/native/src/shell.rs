@@ -1,11 +1,13 @@
 use async_channel::Sender;
+use std::collections::HashMap;
 use gpui::{
     div, prelude::*, rgb, px, App, Context, FocusHandle, KeyDownEvent, MouseButton, Window,
 };
 use larptrix_client_core::ClientCore;
-use larptrix_protocol::{ClientMessage, ServerMessage};
+use larptrix_protocol::{ChatMessage, ClientMessage, ServerMessage};
 use tokio::runtime::Handle;
 
+use crate::crypto::NativeMatrixCrypto;
 use crate::network::{self, AppEvent};
 
 const BG: u32 = 0x1b1f2a;
@@ -53,6 +55,8 @@ impl Section {
 enum LoginField {
     Server,
     AccessKey,
+    RecoveryKey,
+    Composer,
 }
 
 pub struct LarptrixShell {
@@ -60,8 +64,12 @@ pub struct LarptrixShell {
     event_tx: Sender<AppEvent>,
     core: ClientCore,
     outgoing: Option<Sender<ClientMessage>>,
+    crypto: Option<Arc<NativeMatrixCrypto>>,
+    decrypted_messages: HashMap<(String, String), String>,
     server_url: String,
     access_key: String,
+    recovery_key: String,
+    composer_text: String,
     input_focus: FocusHandle,
     active_input: Option<LoginField>,
     connecting: bool,
@@ -91,8 +99,12 @@ impl LarptrixShell {
             event_tx,
             core: ClientCore::new(),
             outgoing: None,
+            crypto: None,
+            decrypted_messages: HashMap::new(),
             server_url: std::env::var("LARPTRIX_SERVER_URL").unwrap_or_default(),
             access_key: String::new(),
+            recovery_key: String::new(),
+            composer_text: String::new(),
             input_focus: cx.focus_handle(),
             active_input: Some(LoginField::Server),
             connecting: false,
@@ -104,10 +116,12 @@ impl LarptrixShell {
 
     fn handle_event(&mut self, event: AppEvent, cx: &mut Context<Self>) {
         match event {
-            AppEvent::Authenticated { user, outgoing } => {
+            AppEvent::Authenticated { user, outgoing, crypto } => {
                 self.connecting = false;
                 self.access_key.clear();
+                self.recovery_key.clear();
                 self.outgoing = Some(outgoing);
+                self.crypto = Some(crypto);
                 self.core.apply_server_message(ServerMessage::Welcome {
                     user,
                     users: Vec::new(),
@@ -116,6 +130,25 @@ impl LarptrixShell {
                 self.active_section = Section::Messages;
             }
             AppEvent::Server(message) => {
+                let decrypt_targets: Vec<(String, ChatMessage)> = match &message {
+                    ServerMessage::Chat { peer, history } => history
+                        .iter()
+                        .cloned()
+                        .map(|message| (peer.user_id.clone(), message))
+                        .collect(),
+                    ServerMessage::Message { message } => {
+                        let current_user_id = self.core.state().current_user.as_ref()
+                            .map(|user| user.user_id.as_str())
+                            .unwrap_or_default();
+                        let peer_id = if message.sender_id == current_user_id {
+                            message.recipient_id.clone()
+                        } else {
+                            message.sender_id.clone()
+                        };
+                        vec![(peer_id, message.clone())]
+                    }
+                    _ => Vec::new(),
+                };
                 let is_welcome = matches!(&message, ServerMessage::Welcome { .. });
                 let is_error = matches!(&message, ServerMessage::Error { .. });
                 let suggested_peer = match &message {
@@ -138,6 +171,9 @@ impl LarptrixShell {
                 };
 
                 self.core.apply_server_message(message);
+                for (peer_id, message) in decrypt_targets {
+                    self.queue_decryption(peer_id, message);
+                }
 
                 let peer_to_open = if is_welcome {
                     self.selected_peer.clone().or(suggested_peer)
@@ -153,6 +189,9 @@ impl LarptrixShell {
                 if self.core.state().current_user.is_some() && !is_error {
                     self.connection_status = "Connected".into();
                 }
+            }
+            AppEvent::Decrypted { peer_id, message_id, body } => {
+                self.decrypted_messages.insert((peer_id, message_id), body);
             }
             AppEvent::Status(status) => {
                 self.connection_status = status;
@@ -172,6 +211,7 @@ impl LarptrixShell {
 
         let server_url = self.server_url.trim().to_string();
         let entered_key = self.access_key.trim().to_string();
+        let recovery_key = self.recovery_key.trim().to_string();
         let access_key: String = entered_key
             .chars()
             .filter(|ch| ch.is_ascii_hexdigit())
@@ -191,6 +231,11 @@ impl LarptrixShell {
             cx.notify();
             return;
         }
+        if recovery_key.is_empty() {
+            self.connection_status = "Enter the E2E recovery key from your existing web account".into();
+            cx.notify();
+            return;
+        }
 
         self.connecting = true;
         self.connection_status = "Starting secure session…".into();
@@ -198,7 +243,7 @@ impl LarptrixShell {
 
         let events = self.event_tx.clone();
         self.runtime.spawn(async move {
-            if let Err(error) = network::connect(server_url, access_key, events.clone()).await {
+            if let Err(error) = network::connect(server_url, access_key, recovery_key, events.clone()).await {
                 let _ = events.send(AppEvent::Error(error)).await;
             }
         });
@@ -216,19 +261,21 @@ impl LarptrixShell {
 
         if event.keystroke.key == "backspace" {
             match field {
-                LoginField::Server => {
-                    self.server_url.pop();
-                }
-                LoginField::AccessKey => {
-                    self.access_key.pop();
-                }
+                LoginField::Server => { self.server_url.pop(); }
+                LoginField::AccessKey => { self.access_key.pop(); }
+                LoginField::RecoveryKey => { self.recovery_key.pop(); }
+                LoginField::Composer => { self.composer_text.pop(); }
             }
             cx.notify();
             return;
         }
 
         if event.keystroke.key == "enter" {
-            self.start_connection(cx);
+            if field == LoginField::Composer {
+                self.send_message(cx);
+            } else {
+                self.start_connection(cx);
+            }
             return;
         }
 
@@ -239,26 +286,30 @@ impl LarptrixShell {
                 let current_len = match field {
                     LoginField::Server => self.server_url.len(),
                     LoginField::AccessKey => self.access_key.len(),
+                    LoginField::RecoveryKey => self.recovery_key.len(),
+                    LoginField::Composer => self.composer_text.len(),
                 };
                 let max_len = match field {
                     LoginField::Server => 256usize,
-                    LoginField::AccessKey => 64usize,
+                    LoginField::AccessKey => 80usize,
+                    LoginField::RecoveryKey => 80usize,
+                    LoginField::Composer => 12_000usize,
                 };
                 let remaining = max_len.saturating_sub(current_len);
-                let pasted: String = text
-                    .chars()
+                let pasted: String = text.chars()
                     .filter(|ch| !ch.is_control())
-                    .filter(|ch| {
-                        field != LoginField::AccessKey
-                            || ch.is_ascii_hexdigit()
-                            || *ch == '-'
-                            || ch.is_ascii_whitespace()
+                    .filter(|ch| match field {
+                        LoginField::AccessKey => ch.is_ascii_hexdigit() || *ch == '-' || ch.is_ascii_whitespace(),
+                        LoginField::RecoveryKey => ch.is_ascii_alphanumeric() || matches!(*ch, '+' | '/' | '=' ) || ch.is_ascii_whitespace(),
+                        _ => true,
                     })
                     .take(remaining)
                     .collect();
                 match field {
                     LoginField::Server => self.server_url.push_str(&pasted),
                     LoginField::AccessKey => self.access_key.push_str(&pasted),
+                    LoginField::RecoveryKey => self.recovery_key.push_str(&pasted),
+                    LoginField::Composer => self.composer_text.push_str(&pasted),
                 }
                 cx.notify();
             }
@@ -273,24 +324,27 @@ impl LarptrixShell {
             let (current_len, max_len) = match field {
                 LoginField::Server => (self.server_url.len(), 256usize),
                 LoginField::AccessKey => (self.access_key.len(), 80usize),
+                LoginField::RecoveryKey => (self.recovery_key.len(), 80usize),
+                LoginField::Composer => (self.composer_text.len(), 12_000usize),
             };
-            if current_len + text.len() > max_len {
+            if current_len + text.len() > max_len || text.chars().any(char::is_control) {
                 return;
             }
-            if field == LoginField::AccessKey
-                && !text.chars().all(|ch| {
-                    ch.is_ascii_hexdigit() || ch == '-' || ch.is_ascii_whitespace()
-                })
-            {
+            let valid = match field {
+                LoginField::AccessKey => text.chars().all(|ch| ch.is_ascii_hexdigit() || ch == '-' || ch.is_ascii_whitespace()),
+                LoginField::RecoveryKey => text.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '/' | '=' ) || ch.is_ascii_whitespace()),
+                _ => true,
+            };
+            if !valid {
                 return;
             }
-            if !text.chars().any(char::is_control) {
-                match field {
-                    LoginField::Server => self.server_url.push_str(text),
-                    LoginField::AccessKey => self.access_key.push_str(text),
-                }
-                cx.notify();
+            match field {
+                LoginField::Server => self.server_url.push_str(text),
+                LoginField::AccessKey => self.access_key.push_str(text),
+                LoginField::RecoveryKey => self.recovery_key.push_str(text),
+                LoginField::Composer => self.composer_text.push_str(text),
             }
+            cx.notify();
         }
     }
 
@@ -303,7 +357,7 @@ impl LarptrixShell {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let focused = self.active_input == Some(field);
-        let display_value = if field == LoginField::AccessKey && !value.is_empty() {
+        let display_value = if matches!(field, LoginField::AccessKey | LoginField::RecoveryKey) && !value.is_empty() {
             "•".repeat(value.chars().count())
         } else {
             value.to_string()
@@ -356,6 +410,87 @@ impl LarptrixShell {
                     .on_key_down(cx.listener(Self::handle_input_key))
                     .child(contents),
             )
+    }
+
+    fn send_message(&mut self, cx: &mut Context<Self>) {
+        let body = self.composer_text.trim().to_string();
+        if body.is_empty() || self.connecting {
+            return;
+        }
+        let Some(peer_id) = self.selected_peer.clone() else {
+            return;
+        };
+        let Some(crypto) = self.crypto.clone() else {
+            self.connection_status = "E2E is not unlocked; message was not sent".into();
+            cx.notify();
+            return;
+        };
+        let Some(outgoing) = self.outgoing.clone() else {
+            self.connection_status = "Not connected to the message transport".into();
+            cx.notify();
+            return;
+        };
+
+        self.composer_text.clear();
+        self.connection_status = "Encrypting message…".into();
+        cx.notify();
+
+        let events = self.event_tx.clone();
+        self.runtime.spawn(async move {
+            match crypto.encrypt_dm_text(&peer_id, &body).await {
+                Ok(encrypted_body) => {
+                    match outgoing.send(ClientMessage::Send {
+                        peer_id,
+                        body: encrypted_body,
+                        attachment_id: None,
+                        attachment_ids: Vec::new(),
+                    }).await {
+                        Ok(()) => {
+                            let _ = events.send(AppEvent::Status("Encrypted message sent".into())).await;
+                        }
+                        Err(error) => {
+                            let _ = events.send(AppEvent::Error(format!("Could not queue encrypted message: {error}"))).await;
+                        }
+                    }
+                }
+                Err(error) => {
+                    let _ = events.send(AppEvent::Error(format!("Message encryption failed: {error}"))).await;
+                }
+            }
+        });
+    }
+
+    fn queue_decryption(&self, peer_id: String, message: ChatMessage) {
+        let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&message.body) else {
+            return;
+        };
+        if envelope.get("version").and_then(serde_json::Value::as_i64) != Some(3)
+            || envelope.get("message_type").and_then(serde_json::Value::as_str) != Some("matrix")
+        {
+            return;
+        }
+        let Some(crypto) = self.crypto.clone() else { return; };
+        let events = self.event_tx.clone();
+        let message_id = message.id;
+        let sender_id = message.sender_id;
+        let created_at = message.created_at;
+        self.runtime.spawn(async move {
+            match crypto.decrypt_message(&message_id, &sender_id, created_at, &envelope).await {
+                Ok(payload) => {
+                    let body = payload.get("text").and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| payload.to_string());
+                    let _ = events.send(AppEvent::Decrypted {
+                        peer_id,
+                        message_id,
+                        body,
+                    }).await;
+                }
+                Err(error) => {
+                    let _ = events.send(AppEvent::Status(format!("E2E decryption failed: {error}"))).await;
+                }
+            }
+        });
     }
 
     fn open_chat(&mut self, peer_id: String) {
@@ -702,7 +837,7 @@ impl LarptrixShell {
             ))
     }
 
-    fn conversation(&self) -> impl IntoElement {
+    fn conversation(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(peer_id) = self.selected_peer.as_deref() else {
             return div()
                 .flex_1()
@@ -769,13 +904,17 @@ impl LarptrixShell {
                 } else {
                     message.sender_name.clone()
                 };
-                let looks_encrypted =
-                    serde_json::from_str::<serde_json::Value>(&message.body).is_ok();
-                let body = if looks_encrypted {
-                    "Encrypted message · waiting for native E2E decryption".to_string()
-                } else {
-                    message.body.clone()
-                };
+                let body = self.decrypted_messages
+                    .get(&(peer_id.to_string(), message.id.clone()))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        let looks_encrypted = serde_json::from_str::<serde_json::Value>(&message.body).is_ok();
+                        if looks_encrypted {
+                            "Encrypted message · decrypting…".to_string()
+                        } else {
+                            message.body.clone()
+                        }
+                    });
                 (author, body, mine)
             })
             .collect();
@@ -871,26 +1010,40 @@ impl LarptrixShell {
                     .gap_3()
                     .child(
                         div()
-                            .text_sm()
-                            .text_color(rgb(MUTED))
-                            .child("＋"),
-                    )
-                    .child(
-                        div()
+                            .id("message-composer")
+                            .track_focus(&self.input_focus)
                             .flex_1()
+                            .min_w(px(0.0))
+                            .p_2()
+                            .rounded_md()
+                            .cursor(gpui::CursorStyle::IBeam)
                             .text_sm()
-                            .text_color(rgb(MUTED))
-                            .child("Message composer will unlock after native E2E is connected"),
+                            .text_color(if self.composer_text.is_empty() { rgb(MUTED) } else { rgb(TEXT) })
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                this.active_input = Some(LoginField::Composer);
+                                window.focus(&this.input_focus, cx);
+                                cx.notify();
+                            }))
+                            .on_key_down(cx.listener(Self::handle_input_key))
+                            .child(if self.composer_text.is_empty() {
+                                "Write an encrypted message…".to_string()
+                            } else {
+                                self.composer_text.clone()
+                            }),
                     )
                     .child(
                         div()
+                            .id("send-message-button")
                             .px_3()
                             .py_2()
                             .rounded_md()
-                            .bg(rgb(SURFACE))
+                            .bg(rgb(ACCENT))
+                            .text_color(rgb(RAIL))
                             .text_sm()
-                            .text_color(rgb(MUTED))
-                            .child("E2E"),
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| this.send_message(cx)))
+                            .child("Send"),
                     ),
             )
             .child(
@@ -924,7 +1077,7 @@ impl Render for LarptrixShell {
                 .text_color(rgb(TEXT))
                 .child(self.server_rail(cx))
                 .child(self.sidebar(cx))
-                .child(self.conversation())
+                .child(self.conversation(cx))
                 .into_any_element()
         }
     }
@@ -995,6 +1148,13 @@ impl LarptrixShell {
                         &self.access_key,
                         cx,
                     ))
+                    .child(self.login_field(
+                        LoginField::RecoveryKey,
+                        "E2E RECOVERY KEY",
+                        "Base64 recovery key from web setup",
+                        &self.recovery_key,
+                        cx,
+                    ))
                     .child(
                         div()
                             .id("connect-button")
@@ -1036,7 +1196,7 @@ impl LarptrixShell {
                             .text_xs()
                             .text_color(rgb(MUTED))
                             .child(
-                                "Your access key is used only to create a session. It is not saved to disk.",
+                                "Use the E2E recovery key from your existing web account. It unlocks your encrypted device store and is never saved as plaintext.",
                             ),
                     ),
             )
