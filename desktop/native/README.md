@@ -18,7 +18,17 @@ From the repository root:
 cargo run --manifest-path desktop/native/Cargo.toml
 ```
 
-GPUI's published crate enables its standard platform backends. On Linux, build and test both Wayland and X11 sessions; the intended primary path is Wayland.
+GPUI 0.2.2 is pinned exactly while the native shell is being established. GPUI is pre-1.0, so this avoids silently changing APIs during development. A later version change should be intentional and tested.
+
+On Arch/CachyOS, install the normal Rust/C/C++ toolchain and GPUI's Linux development libraries before building. A starting package set is:
+
+```bash
+sudo pacman -S --needed base-devel cmake clang fontconfig freetype2 glib2 \\
+  wayland libx11 libxcb libxkbcommon libxkbcommon-x11 vulkan-icd-loader \\
+  libva openssl zstd pkgconf
+```
+
+On Linux, test both Wayland and X11 sessions; the intended primary path is Wayland/niri. GPUI's upstream Linux build requirements are documented in the [Zed repository](https://github.com/zed-industries/zed/blob/main/script/linux).
 
 ## Current scope
 
