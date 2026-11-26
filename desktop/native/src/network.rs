@@ -177,8 +177,7 @@ pub async fn connect(
                 let _ = events
                     .send_blocking(AppEvent::Status(format!(
                         "Live connection failed: {error}"
-                    )))
-                    .await;
+                    )));
             }
         }
 
