@@ -63,6 +63,12 @@ impl MediaPlayback {
 
         if let Some(sink) = video_sink.as_ref() {
             pipeline.set_property("video-sink", sink);
+        } else {
+            let sink = gstreamer::ElementFactory::make("fakesink")
+                .name("larptrix-audio-artwork-sink")
+                .build()
+                .map_err(|error| format!("Could not create the audio-only video sink: {error}"))?;
+            pipeline.set_property("video-sink", sink);
         }
         pipeline.set_property("volume", 0.8_f64);
 
