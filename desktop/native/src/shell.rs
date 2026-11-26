@@ -96,7 +96,7 @@ impl LarptrixShell {
                     } else {
                         rgb(SURFACE)
                     })
-                    .text_color(TEXT.into())
+                    .text_color(rgb(TEXT))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -182,10 +182,10 @@ impl LarptrixShell {
         };
 
         let content = match self.active_section {
-            Section::Messages => self.message_list(cx).into_any_element(),
-            Section::Friends => self.friends_list().into_any_element(),
-            Section::Groups => self.groups_list().into_any_element(),
-            Section::Settings => self.settings_list().into_any_element(),
+            Section::Messages => div().flex_1().child(self.message_list(cx)),
+            Section::Friends => div().flex_1().child(self.friends_list()),
+            Section::Groups => div().flex_1().child(self.groups_list()),
+            Section::Settings => div().flex_1().child(self.settings_list()),
         };
 
         div()
@@ -245,9 +245,9 @@ impl LarptrixShell {
                             .text_color(rgb(ACCENT))
                             .child("Y"),
                     )
-                    .flex_1()
                     .child(
                         div()
+                            .flex_1()
                             .flex()
                             .flex_col()
                             .gap_0p5()
