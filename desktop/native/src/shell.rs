@@ -1734,6 +1734,16 @@ fn chat_entry(
         )
 }
 
+fn format_attachment_size(size: u64) -> String {
+    if size < 1024 {
+        format!("{size} B")
+    } else if size < 1024 * 1024 {
+        format!("{:.1} KiB", size as f64 / 1024.0)
+    } else {
+        format!("{:.1} MiB", size as f64 / (1024.0 * 1024.0))
+    }
+}
+
 fn message_bubble(author: String, body: String, mine: bool) -> impl IntoElement {
     div()
         .flex()
