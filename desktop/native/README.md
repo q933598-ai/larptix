@@ -65,15 +65,17 @@ release work and are not implied by the current CI executable.
 - Native server URL and access-key sign-in form with clipboard paste.
 - Cookie-based HTTP login against the existing Larptrix API.
 - Authenticated WebSocket connection and reconnect loop.
-- Real server directory, groups, presence and DM history loading.
-- Shared Rust client core updates from incoming protocol events.
+- Real server directory, groups, channels, presence, and direct/group conversation history.
+- Clickable group and channel entries that open the existing server-side conversation history.
+- Shared Rust client core updates from incoming protocol events, including routing group messages by group ID.
 - Matrix SDK 0.19.0 E2E device initialization, key upload/query/claim and to-device processing.
 - Persistent Matrix SQLite crypto store protected by the E2E recovery key.
 - Restore and refresh of the same encrypted Megolm room-key backup used by the web client.
-- Encryption of outgoing 1:1 text messages before sending; decryption of incoming Matrix-encrypted 1:1 messages.
-- Message reactions with live counts and per-user toggle state.
+- Encryption of outgoing 1:1 and group text messages before sending; decryption of incoming Matrix-encrypted messages.
+- Group room-key sharing with the current group membership before sending a new group message.
+- Message reactions with live counts and per-user toggle state in direct and group conversations.
 - Requests for missing room keys and retry of pending message decryption after key delivery.
-- Shared browser/native golden tests for DM room IDs, JSON message content, encrypted-event envelopes and recovery-key format.
+- Shared browser/native golden tests for direct/group room IDs, JSON message content, encrypted-event envelopes and recovery-key format.
 
 The golden tests validate the wire contract but do not replace live Olm/Megolm testing against a running server. The native E2E implementation is experimental and has not yet completed live browser/native interoperability testing.
 
@@ -90,7 +92,7 @@ Use a test account and a non-sensitive test conversation. Do not share the recov
 
 - Device verification / cross-signing UX and visible trust/fingerprint confirmation.
 - Encrypted attachments and read receipts.
-- Group message composition, group E2E and full conversation UI.
+- Group/channel creation, membership management and richer channel controls.
 - Native audio/video calls, screen sharing and notifications.
 - Signed Windows installer and automatic desktop updates.
 
