@@ -284,11 +284,16 @@ impl NativeMatrixCrypto {
         &self,
         metadata: &EncryptedAttachmentMetadata,
     ) -> Result<Vec<u8>, String> {
-        let url = self.base_url.join(&metadata.url)
-            .map_err(|error| format!("Invalid attachment URL: {error}"))?;
-        if url.origin() != self.base_url.origin() {
-            return Err("Refusing to download an attachment from another server".into());
+        // Do not trust the URL carried inside the peer-authored encrypted payload.
+        // Build the download route from our configured server and the opaque attachment ID.
+        if metadata.id.is_empty() || metadata.id.len() > 128 {
+            return Err("Invalid attachment id".into());
         }
+        let mut url = self.base_url.join("api/attachments/")
+            .map_err(|error| format!("Invalid attachment API URL: {error}"))?;
+        url.path_segments_mut()
+            .map_err(|_| "Attachment API URL cannot accept a path segment".to_string())?
+            .push(&metadata.id);
 
         let mut response = self.http.get(url).send().await
             .map_err(|error| format!("Could not download encrypted attachment: {error}"))?;
