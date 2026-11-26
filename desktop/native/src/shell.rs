@@ -1003,6 +1003,8 @@ impl LarptrixShell {
     ) {
         self.close_media_player();
         self.image_viewer = None;
+        self.media_title = metadata.name.clone();
+        self.media_is_video = metadata.mime.starts_with("video/");
         let Some(crypto) = self.crypto.clone() else {
             self.media_error = Some("E2E is locked; media cannot be decrypted".into());
             cx.notify();
