@@ -98,7 +98,7 @@ The golden tests validate the wire contract but do not replace live Olm/Megolm t
 7. Open an image in native, zoom in/out, and navigate through multiple image attachments in one message.
 8. Open audio and video attachments in native and verify they launch in the system's default media player.
 9. Send an encrypted attachment from the web client; verify the native client can decrypt and save it.
-8. Restart the native client and verify that the existing room-key backup restores readable direct and group history.
+10. Restart the native client and verify that the existing room-key backup restores readable direct and group history.
 
 Use a test account and a non-sensitive test conversation. Do not share the recovery key with anyone or paste it into chat logs. Enter the E2E recovery key created by the web client when signing in; it is not the account access key. The local Matrix store is encrypted with this recovery key. The server receives Matrix public key material, encrypted room-key backup, message ciphertext and opaque attachment bytes; attachment keys, original filenames, MIME types and sizes stay inside the Matrix-encrypted message payload.
 
