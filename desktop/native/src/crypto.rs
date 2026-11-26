@@ -64,6 +64,7 @@ pub struct NativeMatrixCrypto {
     outgoing_lock: Mutex<()>,
     room_lock: Mutex<()>,
     prepared_rooms: Mutex<HashMap<String, Instant>>,
+    backup_lock: Mutex<()>,
 }
 
 impl NativeMatrixCrypto {
@@ -125,6 +126,7 @@ impl NativeMatrixCrypto {
             outgoing_lock: Mutex::new(()),
             room_lock: Mutex::new(()),
             prepared_rooms: Mutex::new(HashMap::new()),
+            backup_lock: Mutex::new(()),
         });
 
         client.restore_room_key_backup().await?;
@@ -345,6 +347,8 @@ impl NativeMatrixCrypto {
     }
 
     async fn sync_room_key_backup(&self) -> Result<(), String> {
+        // Serialize snapshots so an older export cannot overwrite a newer backup.
+        let _guard = self.backup_lock.lock().await;
         let exported = self.machine.store().export_room_keys(|_| true).await
             .map_err(|error| format!("Could not export E2E room keys: {error}"))?;
         if exported.is_empty() {
