@@ -260,7 +260,10 @@ mod tests {
     #[test]
     fn preserves_a_reverse_proxy_path_prefix() {
         let url = normalize_server_url("https://example.test/larptrix").unwrap();
-        assert_eq!(url.join("api/login").unwrap().as_str(), "https://example.test/larptrix/api/login");
+        assert_eq!(
+            url.join("api/login").unwrap().as_str(),
+            "https://example.test/larptrix/api/login"
+        );
     }
 
     #[test]
