@@ -8,6 +8,7 @@ This is the standalone native desktop client for Larptrix. It is a separate Carg
 - GPUI + gpui_platform pinned to Zed commit a0e666ae930a
 - larptrix-client-core (shared application state and protocol state)
 - reqwest + tokio-tungstenite (HTTP session and authenticated WebSocket)
+- AES-256-GCM file encryption and native XDG/Windows/macOS file dialogs
 
 The desktop UI is rendered natively by GPUI. It does not load the web client's HTML and does not embed Electron, Chromium, Tauri, or an OS WebView.
 
@@ -37,7 +38,7 @@ sudo pacman -S --needed base-devel cmake clang fontconfig freetype2 glib2 \
   libva openssl zstd pkgconf
 ```
 
-On Linux, test both Wayland and X11 sessions; the intended primary path is Wayland/niri. GPUI's upstream Linux build requirements are documented in the [Zed repository](https://github.com/zed-industries/zed/blob/main/script/linux).
+On Linux, test both Wayland and X11 sessions; the intended primary path is Wayland/niri. File pickers use the XDG Desktop Portal backend. Install a supported portal backend for your desktop session; Zenity is used as a fallback if the portal is unavailable. GPUI's upstream Linux build requirements are documented in the [Zed repository](https://github.com/zed-industries/zed/blob/main/script/linux).
 
 On Windows 10/11 x64, install the stable Rust toolchain with the MSVC target and
 the Visual Studio 2022 C++ Build Tools (including the Windows 10/11 SDK). Then run
@@ -74,8 +75,12 @@ release work and are not implied by the current CI executable.
 - Encryption of outgoing 1:1 and group text messages before sending; decryption of incoming Matrix-encrypted messages.
 - Group room-key sharing with the current group membership before sending a new group message.
 - Message reactions with live counts and per-user toggle state in direct and group conversations.
+- Multiple file attachments in direct and group messages using AES-256-GCM before upload.
+- Native multi-file selection and decrypted Save As downloads for images, video, audio and documents.
+- Attachment keys, nonces, MIME types and original filenames carried inside the Matrix-encrypted message payload.
+- Download validation, ciphertext authentication, optional gzip decompression and plaintext size verification.
 - Requests for missing room keys and retry of pending message decryption after key delivery.
-- Shared browser/native golden tests for direct/group room IDs, JSON message content, encrypted-event envelopes and recovery-key format.
+- Shared browser/native golden tests for direct/group room IDs, message envelopes, AES-GCM ciphertext and recovery-key format.
 
 The golden tests validate the wire contract but do not replace live Olm/Megolm testing against a running server. The native E2E implementation is experimental and has not yet completed live browser/native interoperability testing.
 
@@ -86,14 +91,16 @@ The golden tests validate the wire contract but do not replace live Olm/Megolm t
 3. Send one message from the browser and verify that the native client decrypts it. Send a reply from native and verify that the browser decrypts it.
 4. Open a group where every member has E2E enabled, send a message from the browser, and verify that native displays it in the group conversation.
 5. Send a group message from native and verify that the browser and another group member can decrypt it.
-6. Restart the native client and verify that the existing room-key backup restores readable direct and group history.
+6. Send an image and a document from the native client; verify the web client can open them.
+7. Send an encrypted attachment from the web client; verify the native client can decrypt and save it.
+8. Restart the native client and verify that the existing room-key backup restores readable direct and group history.
 
 Use a test account and a non-sensitive test conversation. Do not share the recovery key with anyone or paste it into chat logs. Enter the E2E recovery key created by the web client when signing in; it is not the account access key. The local Matrix store is encrypted with this recovery key, and the server only receives Matrix public key material, encrypted room-key backup and opaque message ciphertext.
 
 ## Not implemented yet
 
 - Device verification / cross-signing UX and visible trust/fingerprint confirmation.
-- Encrypted attachments and read receipts.
+- Read receipts and richer attachment previews (native attachments currently use a decrypted Save As flow).
 - Group/channel creation, membership management and richer channel controls.
 - Native audio/video calls, screen sharing and notifications.
 - Signed Windows installer and automatic desktop updates.
