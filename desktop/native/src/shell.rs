@@ -116,6 +116,8 @@ impl LarptrixShell {
                 self.active_section = Section::Messages;
             }
             AppEvent::Server(message) => {
+                let is_welcome = matches!(&message, ServerMessage::Welcome { .. });
+                let is_error = matches!(&message, ServerMessage::Error { .. });
                 let suggested_peer = match &message {
                     ServerMessage::Welcome { user, users } => users
                         .iter()
@@ -137,13 +139,18 @@ impl LarptrixShell {
 
                 self.core.apply_server_message(message);
 
-                if self.selected_peer.is_none() {
-                    if let Some(peer_id) = suggested_peer {
-                        self.open_chat(peer_id);
-                    }
+                let peer_to_open = if is_welcome {
+                    self.selected_peer.clone().or(suggested_peer)
+                } else if self.selected_peer.is_none() {
+                    suggested_peer
+                } else {
+                    None
+                };
+                if let Some(peer_id) = peer_to_open {
+                    self.open_chat(peer_id);
                 }
 
-                if self.core.state().current_user.is_some() {
+                if self.core.state().current_user.is_some() && !is_error {
                     self.connection_status = "Connected".into();
                 }
             }
@@ -747,7 +754,8 @@ impl LarptrixShell {
                 } else {
                     message.sender_name.clone()
                 };
-                let looks_encrypted = serde_json::from_str::<serde_json::Value>(&message.body).is_ok();
+                let looks_encrypted =
+                    serde_json::from_str::<serde_json::Value>(&message.body).is_ok();
                 let body = if looks_encrypted {
                     "Encrypted message · waiting for native E2E decryption".to_string()
                 } else {
@@ -1011,14 +1019,12 @@ impl LarptrixShell {
                         div()
                             .text_xs()
                             .text_color(rgb(MUTED))
-                            .child("Your access key is used only to create a session. It is not saved to disk."),
+                            .child(
+                                "Your access key is used only to create a session. It is not saved to disk.",
+                            ),
                     ),
             )
     }
-}
-
-fn users_is_empty(total_users: usize) -> bool {
-    total_users <= 1
 }
 
 fn rail_button(
