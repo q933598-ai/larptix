@@ -1,9 +1,10 @@
 use std::{
     borrow::Cow,
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     env,
     path::{Path, PathBuf},
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 use base64::{engine::general_purpose::{STANDARD, STANDARD_NO_PAD}, Engine as _};
@@ -62,6 +63,7 @@ pub struct NativeMatrixCrypto {
     decryption_settings: DecryptionSettings,
     outgoing_lock: Mutex<()>,
     room_lock: Mutex<()>,
+    prepared_rooms: Mutex<HashMap<String, Instant>>,
 }
 
 impl NativeMatrixCrypto {
@@ -122,6 +124,7 @@ impl NativeMatrixCrypto {
             },
             outgoing_lock: Mutex::new(()),
             room_lock: Mutex::new(()),
+            prepared_rooms: Mutex::new(HashMap::new()),
         });
 
         client.restore_room_key_backup().await?;
@@ -245,6 +248,17 @@ impl NativeMatrixCrypto {
         peers.sort();
         peers.dedup();
 
+        let cache_key = format!("{}|{}", room_id, peers.join(","));
+        {
+            let prepared_rooms = self.prepared_rooms.lock().await;
+            if prepared_rooms
+                .get(&cache_key)
+                .is_some_and(|prepared_at| prepared_at.elapsed() < Duration::from_secs(30))
+            {
+                return Ok(());
+            }
+        }
+
         let mut users = Vec::<OwnedUserId>::with_capacity(peers.len() + 1);
         users.push(self.matrix_user_id.clone());
         for peer in peers {
@@ -310,6 +324,7 @@ impl NativeMatrixCrypto {
                 .map_err(|error| format!("Could not commit room-key delivery: {error}"))?;
         }
         self.process_outgoing_requests().await?;
+        self.prepared_rooms.lock().await.insert(cache_key, Instant::now());
         let _ = self.sync_room_key_backup().await;
         Ok(())
     }
@@ -354,10 +369,16 @@ impl NativeMatrixCrypto {
         let response = self.api_get("api/matrix/to-device/pending").await?;
         let events = response.get("events").and_then(Value::as_array)
             .cloned().unwrap_or_default();
+        let mut first_error = None;
         for event in events {
-            self.process_to_device_event(&event).await?;
+            if let Err(error) = self.process_to_device_event(&event).await {
+                first_error.get_or_insert(error);
+            }
         }
-        Ok(())
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     pub async fn handle_to_device_event(&self, event: &MatrixToDeviceEvent) -> Result<(), String> {
