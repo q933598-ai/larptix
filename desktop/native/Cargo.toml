@@ -10,6 +10,7 @@ description = "Native Larptrix desktop client built with GPUI"
 [dependencies]
 async-channel = "2.5"
 futures-util = "0.3"
+flate2 = "1"
 http = "1"
 aes-gcm = "0.10"
 base64 = "0.22"
