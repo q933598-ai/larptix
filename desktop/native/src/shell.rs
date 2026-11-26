@@ -885,6 +885,7 @@ impl LarptrixShell {
         attachment_id: String,
         cx: &mut Context<Self>,
     ) {
+        self.close_media_player();
         let images: Vec<_> = self
             .decrypted_attachments
             .get(&(peer_id.clone(), message_id.clone()))
@@ -1001,6 +1002,7 @@ impl LarptrixShell {
         cx: &mut Context<Self>,
     ) {
         self.close_media_player();
+        self.image_viewer = None;
         let Some(crypto) = self.crypto.clone() else {
             self.media_error = Some("E2E is locked; media cannot be decrypted".into());
             cx.notify();
@@ -2195,6 +2197,7 @@ impl LarptrixShell {
         let frame = self.media_frame.clone();
         let has_frame = frame.is_some();
         let is_playing = self.media_playing;
+        let is_finished = self.media_finished;
         let loading = self.media_loading;
         let position = self.media_position_ms;
         let duration = self.media_duration_ms;
@@ -2420,7 +2423,7 @@ impl LarptrixShell {
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.toggle_media_playback(cx);
                                             }))
-                                            .child(if is_playing { "Ⅱ  Pause" } else { "▶  Play" }),
+                                            .child(if is_playing { "Ⅱ  Pause" } else if is_finished { "↺  Replay" } else { "▶  Play" }),
                                     )
                                     .child(
                                         div()
