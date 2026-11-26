@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createCipheriv, createDecipheriv, createHash } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, webcrypto } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
@@ -95,4 +95,24 @@ const browserCompatibleCiphertext = Buffer.concat([
 ]);
 assert.deepEqual(browserCompatibleCiphertext, attachmentCiphertext);
 
-console.log("Matrix and AES-GCM browser/native interoperability fixtures passed.");
+const webCryptoKey = await webcrypto.subtle.importKey(
+  "raw",
+  attachmentKey,
+  { name: "AES-GCM" },
+  false,
+  ["encrypt", "decrypt"],
+);
+const webCryptoPlaintext = await webcrypto.subtle.decrypt(
+  { name: "AES-GCM", iv: attachmentIv },
+  webCryptoKey,
+  attachmentCiphertext,
+);
+assert.equal(Buffer.from(webCryptoPlaintext).toString("utf8"), attachment.plaintext);
+const webCryptoCiphertext = await webcrypto.subtle.encrypt(
+  { name: "AES-GCM", iv: attachmentIv },
+  webCryptoKey,
+  Buffer.from(attachment.plaintext, "utf8"),
+);
+assert.deepEqual(Buffer.from(webCryptoCiphertext), attachmentCiphertext);
+
+console.log("Matrix and WebCrypto/Rust AES-GCM interoperability fixtures passed.");
