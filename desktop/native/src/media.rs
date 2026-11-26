@@ -9,7 +9,6 @@ use std::{
 use gpui::RenderImage;
 use gstreamer::prelude::*;
 use image::{Frame, ImageBuffer, Rgba};
-use smallvec::smallvec;
 
 static GSTREAMER_INIT: OnceLock<Result<(), String>> = OnceLock::new();
 const MAX_VIDEO_FRAME_BYTES: usize = 64 * 1024 * 1024;
@@ -216,7 +215,7 @@ impl MediaPlayback {
         // GPUI's RenderImage stores pixels in BGRA order, matching the requested GStreamer caps.
         let image = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(width, height, pixels)
             .ok_or_else(|| "Could not construct the GPUI video frame".to_string())?;
-        Ok(Some(Arc::new(RenderImage::new(smallvec![Frame::new(image)]))))
+        Ok(Some(Arc::new(RenderImage::new(vec![Frame::new(image)]))))
     }
 
     pub fn poll_bus(&self) -> Result<bool, String> {
