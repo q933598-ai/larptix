@@ -258,19 +258,17 @@ impl NativeMatrixCrypto {
             users.push(UserId::parse(format!("@{}:{}", peer, self.server_name))
                 .map_err(|error| format!("Invalid peer Matrix id: {error}"))?);
         }
-        let tracked_users: Vec<&UserId> = users
-            .iter()
-            .skip(1)
-            .map(|user| user.as_ref())
-            .collect();
+        // Materialize borrowed user IDs before entering SDK async methods.
+        // This avoids an opaque iterator lifetime escaping into the spawned UI task.
+        let user_refs: Vec<&UserId> = users.iter().map(|user| user.as_ref()).collect();
         self.machine
-            .update_tracked_users(tracked_users)
+            .update_tracked_users(user_refs.iter().copied().skip(1))
             .await
             .map_err(|error| format!("Could not track Matrix devices: {error}"))?;
 
-        if users.len() > 1 {
+        if user_refs.len() > 1 {
             let (request_id, request) = self.machine.query_keys_for_users(
-                users.iter().skip(1).map(|user| user.as_ref()),
+                user_refs.iter().copied().skip(1),
             );
             let (status, response_body) = self.api_post_raw("api/matrix/keys/query", json!({
                 "device_keys": request.device_keys,
@@ -283,7 +281,7 @@ impl NativeMatrixCrypto {
 
         self.process_outgoing_requests().await?;
         if let Some((request_id, request)) = self.machine.get_missing_sessions(
-            users.iter().map(|user| user.as_ref()),
+            user_refs.iter().copied(),
         ).await.map_err(|error| format!("Could not find missing Olm sessions: {error}"))? {
             let encoded_request = request
                 .try_into_http_request::<Vec<u8>>(
@@ -302,7 +300,7 @@ impl NativeMatrixCrypto {
 
         let requests = self.machine.share_room_key(
             &room_id,
-            users.iter().map(|user| user.as_ref()),
+            user_refs.iter().copied(),
             EncryptionSettings::default(),
         ).await.map_err(|error| format!("Could not share Megolm room key: {error}"))?;
         for request in requests {
