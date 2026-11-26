@@ -263,7 +263,7 @@ impl LarptrixShell {
         let events: Sender<AppEvent> = Sender::clone(&self.event_tx);
         self.runtime.spawn(async move {
             if let Err(error) = network::connect(server_url, access_key, recovery_key, events.clone()).await {
-                let _ = events.send_blocking(AppEvent::Error(error)).await;
+                let _ = events.send_blocking(AppEvent::Error(error));
             }
         });
     }
@@ -467,15 +467,15 @@ impl LarptrixShell {
                         attachment_ids: Vec::new(),
                     }).await {
                         Ok(()) => {
-                            let _ = events.send_blocking(AppEvent::Status("Encrypted message sent".into())).await;
+                            let _ = events.send_blocking(AppEvent::Status("Encrypted message sent".into()));
                         }
                         Err(error) => {
-                            let _ = events.send_blocking(AppEvent::Error(format!("Could not queue encrypted message: {error}"))).await;
+                            let _ = events.send_blocking(AppEvent::Error(format!("Could not queue encrypted message: {error}")));
                         }
                     }
                 }
                 Err(error) => {
-                    let _ = events.send_blocking(AppEvent::Error(format!("Message encryption failed: {error}"))).await;
+                    let _ = events.send_blocking(AppEvent::Error(format!("Message encryption failed: {error}")));
                 }
             }
         });
@@ -516,14 +516,14 @@ impl LarptrixShell {
                         peer_id,
                         message_id,
                         body,
-                    }).await;
+                    });
                 }
                 Err(error) => {
                     let _ = events.send_blocking(AppEvent::DecryptionFailed {
                         peer_id,
                         message,
                         error,
-                    }).await;
+                    });
                 }
             }
         });
