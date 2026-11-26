@@ -10,6 +10,12 @@ description = "Native Larptrix desktop client built with GPUI"
 [dependencies]
 async-channel = "2.5"
 futures-util = "0.3"
+base64 = "0.22"
+matrix-sdk-crypto = "=0.19.1"
+matrix-sdk-sqlite = { version = "=0.19.1", default-features = false, features = ["crypto-store", "bundled"] }
+ruma = { version = "=0.17.0", features = ["client-api-c"] }
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
 gpui = { git = "https://github.com/zed-industries/zed", rev = "a0e666ae930a85ab38947e2d49222b0ea99f1c2f", default-features = false }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "a0e666ae930a85ab38947e2d49222b0ea99f1c2f", default-features = false, features = ["font-kit", "wayland", "x11"] }
 larptrix-client-core = { path = "../../crates/client-core" }
