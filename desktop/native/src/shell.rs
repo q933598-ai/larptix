@@ -260,7 +260,7 @@ impl LarptrixShell {
         self.connection_status = "Starting secure session…".into();
         cx.notify();
 
-        let events = self.event_tx.clone();
+        let events: Sender<AppEvent> = Sender::clone(&self.event_tx);
         self.runtime.spawn(async move {
             if let Err(error) = network::connect(server_url, access_key, recovery_key, events.clone()).await {
                 let _ = events.send(AppEvent::Error(error)).await;
@@ -456,7 +456,7 @@ impl LarptrixShell {
         self.connection_status = "Encrypting message…".into();
         cx.notify();
 
-        let events = self.event_tx.clone();
+        let events: Sender<AppEvent> = Sender::clone(&self.event_tx);
         self.runtime.spawn(async move {
             match crypto.encrypt_dm_text(&peer_id, &body).await {
                 Ok(encrypted_body) => {
@@ -502,7 +502,7 @@ impl LarptrixShell {
             return;
         };
 
-        let events = self.event_tx.clone();
+        let events: Sender<AppEvent> = Sender::clone(&self.event_tx);
         let message_id = message.id.clone();
         let sender_id = message.sender_id.clone();
         let created_at = message.created_at;
