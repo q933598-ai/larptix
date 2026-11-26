@@ -62,6 +62,7 @@ enum LoginField {
 struct ImageViewer {
     images: Vec<EncryptedAttachmentMetadata>,
     index: usize,
+    zoom: f32,
     loading: bool,
     error: Option<String>,
 }
@@ -830,6 +831,7 @@ impl LarptrixShell {
         self.image_viewer = Some(ImageViewer {
             images,
             index,
+            zoom: 1.0,
             loading: false,
             error: None,
         });
@@ -903,6 +905,13 @@ impl LarptrixShell {
         viewer.error = None;
         self.load_viewer_image(cx);
         cx.notify();
+    }
+
+    fn adjust_image_zoom(&mut self, delta: f32, cx: &mut Context<Self>) {
+        if let Some(viewer) = self.image_viewer.as_mut() {
+            viewer.zoom = (viewer.zoom + delta).clamp(0.5, 3.0);
+            cx.notify();
+        }
     }
 
     fn close_image_viewer(&mut self, cx: &mut Context<Self>) {
@@ -1773,7 +1782,10 @@ impl LarptrixShell {
         let has_path = path.is_some();
         let loading = viewer.loading;
         let error = viewer.error.clone();
+        let has_error = error.is_some();
+        let error_message = error.unwrap_or_default();
         let can_navigate = viewer.images.len() > 1;
+        let zoom = viewer.zoom;
 
         div()
             .absolute()
@@ -1827,11 +1839,12 @@ impl LarptrixShell {
                     .flex()
                     .items_center()
                     .justify_center()
+                    .overflow_hidden()
                     .when_some(path, |element, path| {
                         element.child(
                             img(path)
-                                .max_w_full()
-                                .max_h(px(820.0))
+                                .w(px(960.0 * zoom))
+                                .h(px(760.0 * zoom))
                                 .object_fit(gpui::ObjectFit::Contain),
                         )
                     })
@@ -1843,15 +1856,15 @@ impl LarptrixShell {
                                 .child("Decrypting image…"),
                         )
                     })
-                    .when(error.is_some(), |element| {
+                    .when(has_error, |element| {
                         element.child(
                             div()
                                 .text_sm()
                                 .text_color(rgb(RED))
-                                .child(error.unwrap_or_default()),
+                                .child(error_message.clone()),
                         )
                     })
-                    .when(!has_path && !loading && error.is_none(), |element| {
+                    .when(!has_path && !loading && !has_error, |element| {
                         element.child(
                             div()
                                 .text_sm()
@@ -1866,7 +1879,41 @@ impl LarptrixShell {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .gap_4()
+                    .gap_3()
+                    .child(
+                        div()
+                            .id("image-zoom-out")
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .bg(rgb(SURFACE))
+                            .text_color(rgb(TEXT))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.adjust_image_zoom(-0.25, cx);
+                            }))
+                            .child("−"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child(format!("{:.0}%", zoom * 100.0)),
+                    )
+                    .child(
+                        div()
+                            .id("image-zoom-in")
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .bg(rgb(SURFACE))
+                            .text_color(rgb(TEXT))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.adjust_image_zoom(0.25, cx);
+                            }))
+                            .child("+"),
+                    )
                     .when(can_navigate, |element| {
                         element
                             .child(
