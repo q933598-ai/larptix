@@ -418,7 +418,9 @@ async fn revoke_session(
         .map(|session| session.session_id);
 
     if current.as_deref() == Some(session_id.as_str()) {
-        return Err(ApiError::bad("use Log out to close the current device session"));
+        return Err(ApiError::bad(
+            "use Log out to close the current device session",
+        ));
     }
 
     if !state
@@ -2703,7 +2705,14 @@ fn session_response(
     let expires_at = created_at + SESSION_MS;
     state
         .db
-        .create_session(&token, &user.id, device_name, user_agent, created_at, expires_at)
+        .create_session(
+            &token,
+            &user.id,
+            device_name,
+            user_agent,
+            created_at,
+            expires_at,
+        )
         .map_err(ApiError::db)?;
     let secure = std::env::var("LARPTRIX_COOKIE_SECURE")
         .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "yes"));
