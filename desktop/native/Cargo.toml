@@ -1,0 +1,12 @@
+[package]
+name = "larptrix-native"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Native Larptrix desktop client built with GPUI"
+
+[workspace]
+
+[dependencies]
+gpui = { version = "0.2.2" }
+larptrix-client-core = { path = "../../crates/client-core" }
