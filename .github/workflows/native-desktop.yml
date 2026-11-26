@@ -9,7 +9,7 @@ on:
       - "tests/**"
       - ".github/workflows/native-desktop.yml"
   push:
-    branches: ["main"]
+    branches: ["main", "rewrite/rust-client"]
     paths:
       - "desktop/native/**"
       - "crates/client-core/**"
