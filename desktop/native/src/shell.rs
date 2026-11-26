@@ -995,24 +995,38 @@ impl LarptrixShell {
         cx.notify();
     }
 
-    fn play_attachment_externally(
+    fn open_media_inline(
         &mut self,
         metadata: EncryptedAttachmentMetadata,
         cx: &mut Context<Self>,
     ) {
+        self.close_media_player();
         let Some(crypto) = self.crypto.clone() else {
-            self.connection_status = "E2E is locked; media cannot be decrypted".into();
+            self.media_error = Some("E2E is locked; media cannot be decrypted".into());
             cx.notify();
             return;
         };
         let Some(cache_dir) = self.media_cache_dir.clone() else {
-            self.connection_status = "Could not create a private temporary media directory".into();
+            self.media_error = Some("Could not create a private temporary media directory".into());
             cx.notify();
             return;
         };
 
-        self.connection_status = format!("Preparing {}…", metadata.name);
+        let is_video = metadata.mime.starts_with("video/");
+        let title = metadata.name.clone();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        self.media_session_id = Some(session_id.clone());
+        self.media_title = title.clone();
+        self.media_is_video = is_video;
+        self.media_loading = true;
+        self.media_error = None;
+        self.media_position_ms = 0;
+        self.media_duration_ms = 0;
+        self.media_finished = false;
+        self.media_frame = None;
+        self.connection_status = format!("Decrypting {}…", metadata.name);
         cx.notify();
+
         let events = self.event_tx.clone();
         self.runtime.spawn(async move {
             let result = async {
@@ -1025,23 +1039,136 @@ impl LarptrixShell {
                 tokio::fs::write(&path, bytes)
                     .await
                     .map_err(|error| format!("Could not cache decrypted media: {error}"))?;
-                open::that(&path)
-                    .map_err(|error| format!("Could not launch the system media player: {error}"))?;
-                Ok::<(), String>(())
-            }.await;
+
+                let player_path = path.clone();
+                let player = tokio::task::spawn_blocking(move || {
+                    MediaPlayback::open(&player_path, is_video)
+                })
+                .await
+                .map_err(|error| format!("Media decoder task failed: {error}"))??;
+
+                Ok::<(PathBuf, Arc<MediaPlayback>), String>((path, player))
+            }
+            .await;
 
             match result {
-                Ok(()) => {
-                    let _ = events.send_blocking(AppEvent::Status(format!(
-                        "Opened {} in the system media player",
-                        metadata.name
-                    )));
+                Ok((path, player)) => {
+                    let _ = events.send_blocking(AppEvent::MediaOpened {
+                        session_id,
+                        title,
+                        is_video,
+                        path,
+                        player,
+                    });
                 }
                 Err(error) => {
-                    let _ = events.send_blocking(AppEvent::Error(error));
+                    let _ = events.send_blocking(AppEvent::MediaFailed {
+                        session_id,
+                        error,
+                    });
                 }
             }
         });
+    }
+
+    fn start_media_monitor(&self, session_id: String, player: Arc<MediaPlayback>) {
+        let events = self.event_tx.clone();
+        self.runtime.spawn(async move {
+            while player.is_active() {
+                let error = player.poll_video_frame().err();
+                let finished = player.poll_finished();
+                let _ = events.send_blocking(AppEvent::MediaTick {
+                    session_id: session_id.clone(),
+                    position_ms: player.position_ms(),
+                    duration_ms: player.duration_ms(),
+                    finished,
+                    error: error.clone(),
+                });
+
+                if finished || error.is_some() {
+                    break;
+                }
+
+                let delay = if player.is_playing() {
+                    if player.latest_video_frame().is_some() {
+                        Duration::from_millis(33)
+                    } else {
+                        Duration::from_millis(100)
+                    }
+                } else {
+                    Duration::from_millis(250)
+                };
+                tokio::time::sleep(delay).await;
+            }
+        });
+    }
+
+    fn close_media_player(&mut self) {
+        self.media_session_id = None;
+        self.media_loading = false;
+        if let Some(player) = self.media_player.take() {
+            player.stop();
+        }
+        if let Some(path) = self.media_path.take() {
+            let _ = std::fs::remove_file(path);
+        }
+        self.media_frame = None;
+        self.media_position_ms = 0;
+        self.media_duration_ms = 0;
+        self.media_playing = false;
+        self.media_finished = false;
+        self.media_error = None;
+    }
+
+    fn toggle_media_playback(&mut self, cx: &mut Context<Self>) {
+        let Some(player) = self.media_player.as_ref() else {
+            return;
+        };
+        let next = !self.media_playing;
+        match player.set_playing(next) {
+            Ok(()) => {
+                self.media_playing = next;
+                self.media_finished = false;
+                if next && self.media_position_ms >= self.media_duration_ms && self.media_duration_ms > 0 {
+                    self.media_position_ms = 0;
+                }
+            }
+            Err(error) => self.media_error = Some(error),
+        }
+        cx.notify();
+    }
+
+    fn seek_media(&mut self, target_ms: u64, cx: &mut Context<Self>) {
+        let Some(player) = self.media_player.as_ref() else {
+            return;
+        };
+        let target = if self.media_duration_ms > 0 {
+            target_ms.min(self.media_duration_ms)
+        } else {
+            target_ms
+        };
+        match player.seek_to(target) {
+            Ok(()) => {
+                self.media_position_ms = target;
+                self.media_finished = false;
+            }
+            Err(error) => self.media_error = Some(error),
+        }
+        cx.notify();
+    }
+
+    fn seek_media_by(&mut self, delta_ms: i64, cx: &mut Context<Self>) {
+        let target = (self.media_position_ms as i128 + i128::from(delta_ms))
+            .clamp(0, self.media_duration_ms as i128) as u64;
+        self.seek_media(target, cx);
+    }
+
+    fn change_media_volume(&mut self, delta: f32, cx: &mut Context<Self>) {
+        self.media_volume = (self.media_volume + delta).clamp(0.0, 1.0);
+        if let Some(player) = self.media_player.as_ref() {
+            player.set_volume(self.media_volume);
+        }
+        cx.notify();
     }
 
     fn save_attachment(
