@@ -243,3 +243,35 @@ async fn run_socket(
         }
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_server_url;
+
+    #[test]
+    fn normalizes_server_addresses_for_api_and_websocket_paths() {
+        let url = normalize_server_url("https://chat.example.test").unwrap();
+        assert_eq!(url.as_str(), "https://chat.example.test/");
+        assert_eq!(url.join("api/login").unwrap().as_str(), "https://chat.example.test/api/login");
+        assert_eq!(url.join("ws").unwrap().as_str(), "https://chat.example.test/ws");
+    }
+
+    #[test]
+    fn preserves_a_reverse_proxy_path_prefix() {
+        let url = normalize_server_url("https://example.test/larptrix").unwrap();
+        assert_eq!(url.join("api/login").unwrap().as_str(), "https://example.test/larptrix/api/login");
+    }
+
+    #[test]
+    fn rejects_insecure_schemes_and_embedded_credentials() {
+        assert!(normalize_server_url("ftp://example.test").is_err());
+        assert!(normalize_server_url("https://user:password@example.test").is_err());
+    }
+
+    #[test]
+    fn removes_query_and_fragment_from_server_addresses() {
+        let url = normalize_server_url("https://example.test/chat?token=secret#fragment").unwrap();
+        assert_eq!(url.as_str(), "https://example.test/chat/");
+    }
+}
