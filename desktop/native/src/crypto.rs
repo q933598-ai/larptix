@@ -169,6 +169,16 @@ impl NativeMatrixCrypto {
         self.encrypt_room_payload(&room_id, &[peer_id.to_string()], json!({ "text": text })).await
     }
 
+    pub async fn encrypt_group_text(
+        &self,
+        group_id: &str,
+        member_ids: &[String],
+        text: &str,
+    ) -> Result<String, String> {
+        let room_id = self.room_id_for_group(group_id);
+        self.encrypt_room_payload(&room_id, member_ids, json!({ "text": text })).await
+    }
+
     pub async fn decrypt_message(
         &self,
         message_id: &str,
