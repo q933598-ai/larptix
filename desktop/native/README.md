@@ -23,8 +23,8 @@ GPUI 0.2.2 is pinned exactly while the native shell is being established. GPUI i
 On Arch/CachyOS, install the normal Rust/C/C++ toolchain and GPUI's Linux development libraries before building. A starting package set is:
 
 ```bash
-sudo pacman -S --needed base-devel cmake clang fontconfig freetype2 glib2 \\
-  wayland libx11 libxcb libxkbcommon libxkbcommon-x11 vulkan-icd-loader \\
+sudo pacman -S --needed base-devel cmake clang fontconfig freetype2 glib2 \
+  wayland libx11 libxcb libxkbcommon libxkbcommon-x11 vulkan-icd-loader \
   libva openssl zstd pkgconf
 ```
 
