@@ -28,11 +28,15 @@ impl LarptrixClientCore {
     pub fn snapshot_json(&self) -> Result<String, JsValue> {
         self.inner
             .snapshot_json()
-            .map_err(|error| JsValue::from_str(&format!("could not serialize client state: {error}")))
+            .map_err(|error| {
+                JsValue::from_str(&format!("could not serialize client state: {error}"))
+            })
     }
 
     pub fn take_platform_events_json(&mut self) -> Result<String, JsValue> {
         serde_json::to_string(&self.inner.take_platform_events())
-            .map_err(|error| JsValue::from_str(&format!("could not serialize platform events: {error}")))
+            .map_err(|error| {
+                JsValue::from_str(&format!("could not serialize platform events: {error}"))
+            })
     }
 }
