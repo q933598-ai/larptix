@@ -76,7 +76,10 @@ release work and are not implied by the current CI executable.
 - Group room-key sharing with the current group membership before sending a new group message.
 - Message reactions with live counts and per-user toggle state in direct and group conversations.
 - Multiple file attachments in direct and group messages using AES-256-GCM before upload.
-- Native multi-file selection and decrypted Save As downloads for images, video, audio and documents.
+- Native multi-file selection and decrypted Save As downloads for documents and other files.
+- Built-in image viewer with fullscreen overlay, gallery navigation and 50–300% zoom.
+- Audio and video decryption followed by launch in the operating system's default media player.
+- Decrypted media is cached in a private temporary directory and removed when the client exits.
 - Attachment keys, nonces, MIME types and original filenames carried inside the Matrix-encrypted message payload.
 - Download validation, ciphertext authentication, optional gzip decompression and plaintext size verification.
 - Requests for missing room keys and retry of pending message decryption after key delivery.
@@ -92,7 +95,9 @@ The golden tests validate the wire contract but do not replace live Olm/Megolm t
 4. Open a group where every member has E2E enabled, send a message from the browser, and verify that native displays it in the group conversation.
 5. Send a group message from native and verify that the browser and another group member can decrypt it.
 6. Send an image and a document from the native client; verify the web client can open them.
-7. Send an encrypted attachment from the web client; verify the native client can decrypt and save it.
+7. Open an image in native, zoom in/out, and navigate through multiple image attachments in one message.
+8. Open audio and video attachments in native and verify they launch in the system's default media player.
+9. Send an encrypted attachment from the web client; verify the native client can decrypt and save it.
 8. Restart the native client and verify that the existing room-key backup restores readable direct and group history.
 
 Use a test account and a non-sensitive test conversation. Do not share the recovery key with anyone or paste it into chat logs. Enter the E2E recovery key created by the web client when signing in; it is not the account access key. The local Matrix store is encrypted with this recovery key. The server receives Matrix public key material, encrypted room-key backup, message ciphertext and opaque attachment bytes; attachment keys, original filenames, MIME types and sizes stay inside the Matrix-encrypted message payload.
@@ -100,7 +105,8 @@ Use a test account and a non-sensitive test conversation. Do not share the recov
 ## Not implemented yet
 
 - Device verification / cross-signing UX and visible trust/fingerprint confirmation.
-- Read receipts and richer attachment previews (native attachments currently use a decrypted Save As flow).
+- Embedded audio/video playback controls and timeline seeking (audio/video currently open in the system's default player).
+- Inline image thumbnails in the message timeline.
 - Group/channel creation, membership management and richer channel controls.
 - Native audio/video calls, screen sharing and notifications.
 - Signed Windows installer and automatic desktop updates.
