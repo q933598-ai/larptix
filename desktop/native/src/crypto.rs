@@ -125,7 +125,7 @@ impl NativeMatrixCrypto {
         ).await.map_err(|error| format!("Could not initialize device keys: {error}"))?;
 
         client.process_outgoing_requests().await?;
-        client.process_pending_to_device().await?;
+        let _ = client.process_pending_to_device().await;
         let _ = client.sync_room_key_backup().await;
         Ok(client)
     }
