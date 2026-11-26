@@ -5,7 +5,7 @@ This is the standalone native desktop client for Larptrix. It is a separate Carg
 ## Stack
 
 - Rust
-- GPUI 0.2.2 (Zed's GPU-accelerated UI framework)
+- GPUI + gpui_platform pinned to Zed commit a0e666ae930a
 - larptrix-client-core (shared application state and protocol state)
 - reqwest + tokio-tungstenite (HTTP session and authenticated WebSocket)
 
@@ -58,4 +58,4 @@ For that reason encrypted message bodies are intentionally shown as an E2E place
 
 ## Notes
 
-The web client remains separate and keeps its HTML/CSS UI. GPUI is pre-1.0 and its API can change; the dependency is pinned to a released version for reproducible dependency selection.
+The web client remains separate and keeps its HTML/CSS UI. GPUI is pre-1.0 and its API can change; the desktop depends on a pinned upstream revision so the renderer and platform backend stay compatible.
