@@ -1969,6 +1969,18 @@ impl LarptrixShell {
     }
 }
 
+impl Drop for LarptrixShell {
+    fn drop(&mut self) {
+        self.media_session_id = None;
+        if let Some(player) = self.media_player.take() {
+            player.stop();
+        }
+        if let Some(path) = self.media_path.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 impl Render for LarptrixShell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.core.state().current_user.is_none() {
