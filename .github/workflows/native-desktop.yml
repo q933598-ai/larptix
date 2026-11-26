@@ -6,6 +6,7 @@ on:
       - "desktop/native/**"
       - "crates/client-core/**"
       - "crates/protocol/**"
+      - "tests/**"
       - ".github/workflows/native-desktop.yml"
   push:
     branches: ["main"]
@@ -39,8 +40,14 @@ jobs:
             libssl-dev libva-dev libvulkan1 libwayland-dev \
             libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev libsqlite3-dev
 
+      - name: Format native desktop
+        run: cargo fmt --manifest-path desktop/native/Cargo.toml -- --check
+
       - name: Check native desktop
         run: cargo check --manifest-path desktop/native/Cargo.toml
+
+      - name: Test native Matrix interoperability
+        run: cargo test --manifest-path desktop/native/Cargo.toml
 
       - name: Test shared client core
         run: cargo test -p larptrix-client-core
@@ -56,11 +63,17 @@ jobs:
         with:
           components: rustfmt
 
+      - name: Format native desktop
+        run: cargo fmt --manifest-path desktop/native/Cargo.toml -- --check
+
       - name: Check native desktop
         run: cargo check --manifest-path desktop/native/Cargo.toml
 
       - name: Build native desktop
         run: cargo build --release --manifest-path desktop/native/Cargo.toml
+
+      - name: Test native Matrix interoperability
+        run: cargo test --manifest-path desktop/native/Cargo.toml
 
       - name: Test shared client core
         run: cargo test -p larptrix-client-core
