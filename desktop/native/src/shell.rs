@@ -1041,13 +1041,20 @@ impl LarptrixShell {
                     .map_err(|error| format!("Could not cache decrypted media: {error}"))?;
 
                 let player_path = path.clone();
-                let player = tokio::task::spawn_blocking(move || {
+                let player_result = tokio::task::spawn_blocking(move || {
                     MediaPlayback::open(&player_path, is_video)
                 })
                 .await
-                .map_err(|error| format!("Media decoder task failed: {error}"))??;
+                .map_err(|error| format!("Media decoder task failed: {error}"))
+                .and_then(|result| result);
 
-                Ok::<(PathBuf, Arc<MediaPlayback>), String>((path, player))
+                match player_result {
+                    Ok(player) => Ok::<(PathBuf, Arc<MediaPlayback>), String>((path, player)),
+                    Err(error) => {
+                        let _ = tokio::fs::remove_file(&path).await;
+                        Err(error)
+                    }
+                }
             }
             .await;
 
@@ -2866,6 +2873,18 @@ fn settings_row(title: &'static str, subtitle: String) -> impl IntoElement {
                 .text_color(rgb(MUTED))
                 .child(subtitle),
         )
+}
+
+#[cfg(test)]
+mod media_time_tests {
+    use super::format_media_time;
+
+    #[test]
+    fn formats_audio_and_video_positions() {
+        assert_eq!(format_media_time(0), "0:00");
+        assert_eq!(format_media_time(65_000), "1:05");
+        assert_eq!(format_media_time(3_661_000), "1:01:01");
+    }
 }
 
 #[cfg(test)]
