@@ -374,33 +374,33 @@ impl LarptrixShell {
                     "rail-messages",
                     "◈",
                     self.active_section == Section::Messages,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.active_section = Section::Messages;
-                    cx.notify();
-                })),
+                    cx.listener(|this, _, _, cx| {
+                        this.active_section = Section::Messages;
+                        cx.notify();
+                    }),
+                ),
             )
             .child(
                 rail_button(
                     "rail-friends",
                     "♙",
                     self.active_section == Section::Friends,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.active_section = Section::Friends;
-                    cx.notify();
-                })),
+                    cx.listener(|this, _, _, cx| {
+                        this.active_section = Section::Friends;
+                        cx.notify();
+                    }),
+                ),
             )
             .child(
                 rail_button(
                     "rail-groups",
                     "▦",
                     self.active_section == Section::Groups,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.active_section = Section::Groups;
-                    cx.notify();
-                })),
+                    cx.listener(|this, _, _, cx| {
+                        this.active_section = Section::Groups;
+                        cx.notify();
+                    }),
+                ),
             )
             .child(div().flex_1())
             .child(
@@ -408,11 +408,11 @@ impl LarptrixShell {
                     "rail-settings",
                     "⚙",
                     self.active_section == Section::Settings,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.active_section = Section::Settings;
-                    cx.notify();
-                })),
+                    cx.listener(|this, _, _, cx| {
+                        this.active_section = Section::Settings;
+                        cx.notify();
+                    }),
+                ),
             )
     }
 
@@ -553,6 +553,7 @@ impl LarptrixShell {
                 (peer_id, name, preview, online)
             })
             .collect();
+        let no_peers = rows.is_empty();
 
         div()
             .flex_1()
@@ -576,7 +577,7 @@ impl LarptrixShell {
                     }),
                 )
             }))
-            .when(self.core.state().users.is_empty(), |element| {
+            .when(no_peers, |element| {
                 element.child(empty_hint("No users in the server directory yet"))
             })
     }
@@ -1020,7 +1021,12 @@ fn users_is_empty(total_users: usize) -> bool {
     total_users <= 1
 }
 
-fn rail_button(id: &'static str, icon: &'static str, selected: bool) -> impl IntoElement {
+fn rail_button(
+    id: &'static str,
+    icon: &'static str,
+    selected: bool,
+    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
     div()
         .id(id)
         .size(px(44.0))
@@ -1035,6 +1041,7 @@ fn rail_button(id: &'static str, icon: &'static str, selected: bool) -> impl Int
         .items_center()
         .justify_center()
         .cursor_pointer()
+        .on_click(on_click)
         .child(icon)
 }
 
