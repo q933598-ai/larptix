@@ -157,6 +157,11 @@ pub async fn connect(
         match tokio_tungstenite::connect_async(request).await {
             Ok((socket, _response)) => {
                 retry_delay = Duration::from_secs(1);
+                if let Err(error) = crypto.process_pending_to_device().await {
+                    let _ = events.send(AppEvent::Status(format!(
+                        "E2E sync will retry: {error}"
+                    ))).await;
+                }
                 events
                     .send(AppEvent::Status("Connected · waiting for server state…".into()))
                     .await
