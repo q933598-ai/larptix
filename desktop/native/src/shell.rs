@@ -1136,16 +1136,19 @@ impl LarptrixShell {
     }
 
     fn toggle_media_playback(&mut self, cx: &mut Context<Self>) {
-        let Some(player) = self.media_player.as_ref() else {
+        let Some(player) = self.media_player.clone() else {
             return;
         };
+        let was_finished = self.media_finished;
         let next = !self.media_playing;
         match player.set_playing(next) {
             Ok(()) => {
                 self.media_playing = next;
                 self.media_finished = false;
-                if next && self.media_position_ms >= self.media_duration_ms && self.media_duration_ms > 0 {
-                    self.media_position_ms = 0;
+                if next && was_finished {
+                    if let Some(session_id) = self.media_session_id.clone() {
+                        self.start_media_monitor(session_id, player);
+                    }
                 }
             }
             Err(error) => self.media_error = Some(error),
@@ -1154,9 +1157,10 @@ impl LarptrixShell {
     }
 
     fn seek_media(&mut self, target_ms: u64, cx: &mut Context<Self>) {
-        let Some(player) = self.media_player.as_ref() else {
+        let Some(player) = self.media_player.clone() else {
             return;
         };
+        let was_finished = self.media_finished;
         let target = if self.media_duration_ms > 0 {
             target_ms.min(self.media_duration_ms)
         } else {
@@ -1166,6 +1170,16 @@ impl LarptrixShell {
             Ok(()) => {
                 self.media_position_ms = target;
                 self.media_finished = false;
+                if was_finished {
+                    if let Err(error) = player.set_playing(false) {
+                        self.media_error = Some(error);
+                    } else {
+                        self.media_playing = false;
+                        if let Some(session_id) = self.media_session_id.clone() {
+                            self.start_media_monitor(session_id, player);
+                        }
+                    }
+                }
             }
             Err(error) => self.media_error = Some(error),
         }
