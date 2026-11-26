@@ -91,6 +91,11 @@ impl NativeMatrixCrypto {
             .await
             .map_err(|error| format!("Could not initialize Matrix E2E: {error}"))?;
 
+        // Match the web client: recover missing Megolm keys from other devices
+        // and only automatically forward keys to verified devices.
+        machine.set_room_key_requests_enabled(true);
+        machine.set_room_key_forwarding_enabled(true);
+
         let client = Arc::new(Self {
             http,
             base_url,
