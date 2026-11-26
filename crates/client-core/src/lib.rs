@@ -179,6 +179,16 @@ impl ClientCore {
     }
 
     fn conversation_peer_id(&self, message: &ChatMessage) -> String {
+        if self.state.groups.contains_key(&message.recipient_id)
+            || self
+                .state
+                .users
+                .get(&message.recipient_id)
+                .is_some_and(|user| user.is_group || user.is_channel)
+        {
+            return message.recipient_id.clone();
+        }
+
         match self.state.current_user.as_ref() {
             Some(me) if message.sender_id == me.user_id => message.recipient_id.clone(),
             _ => message.sender_id.clone(),
@@ -328,6 +338,38 @@ mod tests {
             users: vec![user("bob")],
         });
         assert!(!core.state().users["bob"].online);
+    }
+
+    #[test]
+    fn incoming_and_outgoing_group_messages_share_the_group_conversation() {
+        let mut core = signed_in_core();
+        core.apply_server_message(ServerMessage::Groups {
+            groups: vec![GroupInfo {
+                group_id: "group-1".into(),
+                name: "Friends".into(),
+                member_ids: vec!["alice".into(), "bob".into()],
+                is_channel: false,
+                admin_ids: vec!["alice".into()],
+                post_policy: "members".into(),
+                description: String::new(),
+                avatar_url: None,
+                banner_url: None,
+                subscriber_count: 2,
+            }],
+        });
+
+        core.apply_server_message(ServerMessage::Message {
+            message: message("from-alice", "alice", "group-1", 1),
+        });
+        core.apply_server_message(ServerMessage::Message {
+            message: message("from-bob", "bob", "group-1", 2),
+        });
+
+        let group_chat = &core.state().chats["group-1"];
+        assert_eq!(group_chat.len(), 2);
+        assert_eq!(group_chat[0].id, "from-alice");
+        assert_eq!(group_chat[1].id, "from-bob");
+        assert!(!core.state().chats.contains_key("bob"));
     }
 
     #[test]
