@@ -171,15 +171,23 @@ impl LarptrixShell {
         }
 
         let server_url = self.server_url.trim().to_string();
-        let access_key = self.access_key.trim().to_string();
+        let entered_key = self.access_key.trim().to_string();
+        let access_key: String = entered_key
+            .chars()
+            .filter(|ch| ch.is_ascii_hexdigit())
+            .collect();
+        let key_format_is_valid = entered_key
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit() || ch == '-' || ch.is_ascii_whitespace());
 
         if server_url.is_empty() {
             self.connection_status = "Enter your Larptrix server URL".into();
             cx.notify();
             return;
         }
-        if access_key.len() != 64 || !access_key.chars().all(|ch| ch.is_ascii_hexdigit()) {
-            self.connection_status = "The access key must contain 64 hexadecimal characters".into();
+        if !key_format_is_valid || access_key.len() != 64 {
+            self.connection_status =
+                "Enter the 64-hex access key (with or without grouping dashes)".into();
             cx.notify();
             return;
         }
@@ -240,7 +248,12 @@ impl LarptrixShell {
                 let pasted: String = text
                     .chars()
                     .filter(|ch| !ch.is_control())
-                    .filter(|ch| field != LoginField::AccessKey || ch.is_ascii_hexdigit())
+                    .filter(|ch| {
+                        field != LoginField::AccessKey
+                            || ch.is_ascii_hexdigit()
+                            || *ch == '-'
+                            || ch.is_ascii_whitespace()
+                    })
                     .take(remaining)
                     .collect();
                 match field {
@@ -259,13 +272,15 @@ impl LarptrixShell {
         if let Some(text) = event.keystroke.key_char.as_ref() {
             let (current_len, max_len) = match field {
                 LoginField::Server => (self.server_url.len(), 256usize),
-                LoginField::AccessKey => (self.access_key.len(), 64usize),
+                LoginField::AccessKey => (self.access_key.len(), 80usize),
             };
             if current_len + text.len() > max_len {
                 return;
             }
             if field == LoginField::AccessKey
-                && !text.chars().all(|ch| ch.is_ascii_hexdigit())
+                && !text.chars().all(|ch| {
+                    ch.is_ascii_hexdigit() || ch == '-' || ch.is_ascii_whitespace()
+                })
             {
                 return;
             }
