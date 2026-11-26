@@ -2174,6 +2174,9 @@ fn media_extension(mime: &str) -> &'static str {
         "image/webp" => "webp",
         "image/bmp" => "bmp",
         "image/avif" => "avif",
+        "image/tiff" => "tif",
+        "image/svg+xml" => "svg",
+        "image/x-icon" => "ico",
         "video/mp4" => "mp4",
         "video/webm" | "audio/webm" => "webm",
         "video/quicktime" => "mov",
@@ -2334,4 +2337,23 @@ fn settings_row(title: &'static str, subtitle: String) -> impl IntoElement {
                 .text_color(rgb(MUTED))
                 .child(subtitle),
         )
+}
+
+#[cfg(test)]
+mod media_tests {
+    use super::media_extension;
+
+    #[test]
+    fn selects_file_extensions_for_image_audio_and_video_players() {
+        assert_eq!(media_extension("image/jpeg"), "jpg");
+        assert_eq!(media_extension("image/png"), "png");
+        assert_eq!(media_extension("image/gif"), "gif");
+        assert_eq!(media_extension("image/webp"), "webp");
+        assert_eq!(media_extension("video/mp4"), "mp4");
+        assert_eq!(media_extension("video/webm"), "webm");
+        assert_eq!(media_extension("audio/webm"), "webm");
+        assert_eq!(media_extension("audio/mpeg"), "mp3");
+        assert_eq!(media_extension("audio/ogg"), "ogg");
+        assert_eq!(media_extension("application/octet-stream"), "bin");
+    }
 }
