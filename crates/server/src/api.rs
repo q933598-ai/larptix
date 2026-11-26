@@ -2902,10 +2902,12 @@ mod tests {
 
         let response = login(
             State(state),
+            HeaderMap::new(),
             Json(LoginBody {
                 access_key: Some(access_key),
                 email: None,
                 password: None,
+                device_name: None,
             }),
         )
         .await
@@ -2972,7 +2974,14 @@ mod tests {
             .unwrap();
         state
             .db
-            .create_session("e2e-session", &user.id, crate::now_ms() + 60_000)
+            .create_session(
+                "e2e-session",
+                &user.id,
+                "E2E Test",
+                "integration-test",
+                crate::now_ms(),
+                crate::now_ms() + 60_000,
+            )
             .unwrap();
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -3018,7 +3027,14 @@ mod tests {
         let token = "legacy-session-token";
         state
             .db
-            .create_session(token, &old_user.id, crate::now_ms() + 60_000)
+            .create_session(
+                token,
+                &old_user.id,
+                "Legacy Test",
+                "integration-test",
+                crate::now_ms(),
+                crate::now_ms() + 60_000,
+            )
             .unwrap();
         let mut headers = HeaderMap::new();
         headers.insert(
