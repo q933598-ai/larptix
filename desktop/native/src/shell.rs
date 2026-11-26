@@ -1975,6 +1975,9 @@ impl Render for LarptrixShell {
                 .when(self.image_viewer.is_some(), |element| {
                     element.child(self.image_viewer_overlay(cx))
                 })
+                .when(self.media_loading || self.media_player.is_some(), |element| {
+                    element.child(self.media_player_overlay(cx))
+                })
                 .into_any_element()
         }
     }
@@ -2157,6 +2160,302 @@ impl LarptrixShell {
                                     .child("Next  ›"),
                             )
                     }),
+            )
+            .into_any_element()
+    }
+
+    fn media_player_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let is_video = self.media_is_video;
+        let title = self.media_title.clone();
+        let frame = self.media_frame.clone();
+        let has_frame = frame.is_some();
+        let is_playing = self.media_playing;
+        let loading = self.media_loading;
+        let position = self.media_position_ms;
+        let duration = self.media_duration_ms;
+        let volume = self.media_volume;
+        let error = self.media_error.clone();
+        let error_visible = error.is_some();
+        let error_text = error.unwrap_or_default();
+        let segment_count = 40usize;
+
+        div()
+            .absolute()
+            .inset_0()
+            .occlude()
+            .bg(rgb(0x10141d))
+            .flex()
+            .flex_col()
+            .p_5()
+            .gap_4()
+            .child(
+                div()
+                    .h(px(48.0))
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(rgb(ACCENT))
+                                    .child(if is_video { "VIDEO" } else { "AUDIO" }),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(rgb(TEXT))
+                                    .child(title),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("close-media-player")
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .bg(rgb(SURFACE))
+                            .text_sm()
+                            .text_color(rgb(TEXT))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.close_media_player();
+                                cx.notify();
+                            }))
+                            .child("Close  ×"),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .rounded_lg()
+                    .bg(rgb(0x080b12))
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .overflow_hidden()
+                    .when(is_video, |element| {
+                        element.when_some(frame, |element, frame| {
+                            element.child(
+                                img(frame)
+                                    .max_w_full()
+                                    .max_h(px(620.0))
+                                    .object_fit(gpui::ObjectFit::Contain),
+                            )
+                        })
+                        .when(!has_frame && loading, |element| {
+                            element.child(
+                                div()
+                                    .text_sm()
+                                    .text_color(rgb(MUTED))
+                                    .child("Decrypting and opening video…"),
+                            )
+                        })
+                        .when(!has_frame && !loading && !error_visible, |element| {
+                            element.child(
+                                div()
+                                    .text_sm()
+                                    .text_color(rgb(MUTED))
+                                    .child("Waiting for the first video frame…"),
+                            )
+                        })
+                    })
+                    .when(!is_video, |element| {
+                        element.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_color(rgb(ACCENT))
+                                        .text_size(px(72.0))
+                                        .child("♫"),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(rgb(MUTED))
+                                        .child(if loading { "Preparing audio…" } else if is_playing { "Now playing" } else { "Playback paused" }),
+                                ),
+                        )
+                    })
+                    .when(error_visible, |element| {
+                        element.child(
+                            div()
+                                .absolute()
+                                .bottom_3()
+                                .left_3()
+                                .right_3()
+                                .p_3()
+                                .rounded_md()
+                                .bg(rgb(0x301d28))
+                                .text_xs()
+                                .text_color(rgb(RED))
+                                .child(error_text),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .p_3()
+                    .rounded_lg()
+                    .bg(rgb(SIDEBAR))
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child(format_media_time(position))
+                            .child(format_media_time(duration)),
+                    )
+                    .child(
+                        div()
+                            .id("media-seek-track")
+                            .w_full()
+                            .flex()
+                            .gap(px(2.0))
+                            .children((0..segment_count).map(|index| {
+                                let target = if duration == 0 {
+                                    0
+                                } else {
+                                    duration.saturating_mul(index as u64)
+                                        / (segment_count.saturating_sub(1) as u64)
+                                };
+                                let played = duration > 0
+                                    && (index as u64).saturating_mul(duration)
+                                        <= position.saturating_mul(segment_count as u64);
+                                div()
+                                    .id(format!("media-seek-{index}"))
+                                    .flex_1()
+                                    .h(px(8.0))
+                                    .rounded_sm()
+                                    .bg(if played { rgb(ACCENT) } else { rgb(BORDER) })
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.seek_media(target, cx);
+                                    }))
+                            })),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .id("media-seek-back")
+                                            .px_3()
+                                            .py_2()
+                                            .rounded_md()
+                                            .bg(rgb(SURFACE))
+                                            .text_color(rgb(TEXT))
+                                            .text_xs()
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.seek_media_by(-10_000, cx);
+                                            }))
+                                            .child("−10s"),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("media-play-pause")
+                                            .px_4()
+                                            .py_2()
+                                            .rounded_md()
+                                            .bg(rgb(ACCENT))
+                                            .text_color(rgb(RAIL))
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .text_sm()
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.toggle_media_playback(cx);
+                                            }))
+                                            .child(if is_playing { "Ⅱ  Pause" } else { "▶  Play" }),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("media-seek-forward")
+                                            .px_3()
+                                            .py_2()
+                                            .rounded_md()
+                                            .bg(rgb(SURFACE))
+                                            .text_color(rgb(TEXT))
+                                            .text_xs()
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.seek_media_by(10_000, cx);
+                                            }))
+                                            .child("+10s"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .id("media-volume-down")
+                                            .px_2()
+                                            .py_2()
+                                            .rounded_md()
+                                            .bg(rgb(SURFACE))
+                                            .text_color(rgb(TEXT))
+                                            .text_sm()
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.change_media_volume(-0.1, cx);
+                                            }))
+                                            .child("−"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(MUTED))
+                                            .child(format!("VOL  {:.0}%", volume * 100.0)),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("media-volume-up")
+                                            .px_2()
+                                            .py_2()
+                                            .rounded_md()
+                                            .bg(rgb(SURFACE))
+                                            .text_color(rgb(TEXT))
+                                            .text_sm()
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.change_media_volume(0.1, cx);
+                                            }))
+                                            .child("+"),
+                                    ),
+                            ),
+                    ),
             )
             .into_any_element()
     }
