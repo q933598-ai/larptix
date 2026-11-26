@@ -213,38 +213,32 @@ impl MediaPlayback {
         Ok(Some(Arc::new(RenderImage::new(smallvec![Frame::new(image)]))))
     }
 
-    pub fn poll_bus_error(&self) -> Option<String> {
-        let bus = self.pipeline.bus()?;
-        let message = bus.pop_filtered(&[gstreamer::MessageType::Error])?;
-        match message.view() {
-            gstreamer::MessageView::Error(error) => {
-                let detail = error
-                    .debug()
-                    .map(|debug| format!(" ({debug})"))
-                    .unwrap_or_default();
-                Some(format!("{}{}", error.error(), detail))
-            }
-            _ => None,
-        }
-    }
-
-    pub fn poll_finished(&self) -> bool {
+    pub fn poll_bus(&self) -> Result<bool, String> {
         if self.finished.load(Ordering::Acquire) {
-            return true;
+            return Ok(true);
         }
 
         let Some(bus) = self.pipeline.bus() else {
-            return false;
+            return Ok(false);
         };
-        if bus
-            .pop_filtered(&[gstreamer::MessageType::Eos])
-            .is_some()
-        {
-            self.playing.store(false, Ordering::Release);
-            self.finished.store(true, Ordering::Release);
-            return true;
+        while let Some(message) = bus.pop() {
+            match message.view() {
+                gstreamer::MessageView::Error(error) => {
+                    let detail = error
+                        .debug()
+                        .map(|debug| format!(" ({debug})"))
+                        .unwrap_or_default();
+                    return Err(format!("{}{}", error.error(), detail));
+                }
+                gstreamer::MessageView::Eos(_) => {
+                    self.playing.store(false, Ordering::Release);
+                    self.finished.store(true, Ordering::Release);
+                    return Ok(true);
+                }
+                _ => {}
+            }
         }
-        false
+        Ok(false)
     }
 
     pub fn stop(&self) {
