@@ -1869,12 +1869,7 @@ impl Database {
         .optional()
     }
 
-    pub fn touch_session(
-        &self,
-        token: &str,
-        now: i64,
-        user_agent: &str,
-    ) -> rusqlite::Result<()> {
+    pub fn touch_session(&self, token: &str, now: i64, user_agent: &str) -> rusqlite::Result<()> {
         let conn = self.conn.lock().expect("db lock");
         conn.execute(
             "UPDATE sessions
@@ -1886,7 +1881,11 @@ impl Database {
         Ok(())
     }
 
-    pub fn list_sessions_for_user(&self, user_id: &str, now: i64) -> rusqlite::Result<Vec<SessionRow>> {
+    pub fn list_sessions_for_user(
+        &self,
+        user_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<Vec<SessionRow>> {
         let conn = self.conn.lock().expect("db lock");
         let mut stmt = conn.prepare(
             "SELECT session_id, token, user_id, device_name, user_agent, created_at, last_seen_at, expires_at
