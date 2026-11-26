@@ -876,6 +876,31 @@ mod interoperability_tests {
     }
 
     #[test]
+    fn aes_gcm_attachment_matches_shared_browser_fixture() {
+        let fixture = fixture()["attachment_crypto"].clone();
+        let key: [u8; 32] = STANDARD
+            .decode(fixture["key"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let iv: [u8; 12] = STANDARD
+            .decode(fixture["iv"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let plaintext = fixture["plaintext"].as_str().unwrap().as_bytes();
+        let expected_ciphertext = STANDARD
+            .decode(fixture["ciphertext"].as_str().unwrap())
+            .unwrap();
+
+        let encrypted = encrypt_attachment_bytes(plaintext, &key, &iv).unwrap();
+        assert_eq!(encrypted, expected_ciphertext);
+        assert_eq!(encrypted.len() as u64, fixture["stored_size"].as_u64().unwrap());
+        assert_eq!(plaintext.len() as u64, fixture["size"].as_u64().unwrap());
+        assert_eq!(decrypt_attachment_bytes(&expected_ciphertext, &key, &iv).unwrap(), plaintext);
+    }
+
+    #[test]
     fn aes_gcm_attachment_rejects_tampered_ciphertext() {
         let key = [7u8; 32];
         let iv = [9u8; 12];
