@@ -61,7 +61,6 @@ pub async fn connect(
 
     events
         .send_blocking(AppEvent::Status("Signing in…".into()))
-        .await
         .map_err(|_| "Application closed".to_string())?;
 
     let response = http
@@ -92,7 +91,6 @@ pub async fn connect(
 
     events
         .send_blocking(AppEvent::Status("Unlocking Matrix E2E device…".into()))
-        .await
         .map_err(|_| "Application closed".to_string())?;
 
     let crypto = NativeMatrixCrypto::initialize(
@@ -119,7 +117,6 @@ pub async fn connect(
             outgoing: outgoing.clone(),
             crypto: crypto.clone(),
         })
-        .await
         .map_err(|_| "Application closed".to_string())?;
 
     let mut retry_delay = Duration::from_secs(1);
@@ -127,7 +124,6 @@ pub async fn connect(
     loop {
         events
             .send_blocking(AppEvent::Status("Connecting to live updates…".into()))
-            .await
             .map_err(|_| "Application closed".to_string())?;
 
         let mut ws_url = base
@@ -166,17 +162,15 @@ pub async fn connect(
                 if let Err(error) = crypto.process_pending_to_device().await {
                     let _ = events.send_blocking(AppEvent::Status(format!(
                         "E2E sync will retry: {error}"
-                    ))).await;
+                    )));
                 }
                 events
                     .send_blocking(AppEvent::Status("Connected · waiting for server state…".into()))
-                    .await
                     .map_err(|_| "Application closed".to_string())?;
 
                 run_socket(socket, &commands, &events, &crypto).await;
                 events
                     .send_blocking(AppEvent::Status("Connection lost · reconnecting…".into()))
-                    .await
                     .map_err(|_| "Application closed".to_string())?;
             }
             Err(error) => {
@@ -252,24 +246,24 @@ async fn run_socket(
                                 };
                                 match crypto.handle_to_device_event(&event).await {
                                     Ok(()) => {
-                                        let _ = events.send_blocking(AppEvent::E2ESynced).await;
+                                        let _ = events.send_blocking(AppEvent::E2ESynced);
                                     }
                                     Err(error) => {
                                         let _ = events.send_blocking(AppEvent::Status(format!(
                                             "E2E device sync pending: {error}"
-                                        ))).await;
+                                        )));
                                     }
                                 }
                             }
                             Ok(message) => {
-                                if events.send_blocking(AppEvent::Server(message)).await.is_err() {
+                                if events.send_blocking(AppEvent::Server(message)).is_err() {
                                     break;
                                 }
                             }
                             Err(error) => {
                                 let _ = events.send_blocking(AppEvent::Status(format!(
                                     "Ignored an unknown server event: {error}"
-                                ))).await;
+                                )));
                             }
                         }
                     }
