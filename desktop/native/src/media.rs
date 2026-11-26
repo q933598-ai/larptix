@@ -8,6 +8,7 @@ use std::{
 
 use gpui::RenderImage;
 use gstreamer::prelude::*;
+use gstreamer_video::prelude::*;
 use image::{Frame, ImageBuffer, Rgba};
 
 static GSTREAMER_INIT: OnceLock<Result<(), String>> = OnceLock::new();
