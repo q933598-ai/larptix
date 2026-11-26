@@ -168,7 +168,7 @@ pub async fn connect(
                     .send_blocking(AppEvent::Status("Connected · waiting for server state…".into()))
                     .map_err(|_| "Application closed".to_string())?;
 
-                run_socket(socket, &commands, events.clone(), &crypto).await;
+                run_socket(socket, commands.clone(), events.clone(), crypto.clone()).await;
                 events
                     .send_blocking(AppEvent::Status("Connection lost · reconnecting…".into()))
                     .map_err(|_| "Application closed".to_string())?;
@@ -212,9 +212,9 @@ async fn run_socket(
     socket: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
-    commands: &Receiver<ClientMessage>,
+    commands: Receiver<ClientMessage>,
     events: Sender<AppEvent>,
-    crypto: &Arc<NativeMatrixCrypto>,
+    crypto: Arc<NativeMatrixCrypto>,
 ) {
     let (mut writer, mut reader) = socket.split();
     let mut heartbeat = interval(Duration::from_secs(25));
