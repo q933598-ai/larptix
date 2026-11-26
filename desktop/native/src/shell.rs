@@ -2682,6 +2682,19 @@ fn chat_entry(
         )
 }
 
+fn format_media_time(milliseconds: u64) -> String {
+    let total_seconds = milliseconds / 1_000;
+    let hours = total_seconds / 3_600;
+    let minutes = (total_seconds / 60) % 60;
+    let seconds = total_seconds % 60;
+
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
+}
+
 fn media_extension(mime: &str) -> &'static str {
     match mime {
         "image/jpeg" => "jpg",
