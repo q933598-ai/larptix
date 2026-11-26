@@ -1,5 +1,5 @@
 use gpui::{
-    div, prelude::*, rgb, px, App, Context, IntoElement, Render, Window,
+    div, prelude::*, rgb, px, App, Context, Window,
 };
 use larptrix_client_core::ClientCore;
 
@@ -24,15 +24,6 @@ enum Section {
 }
 
 impl Section {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Messages => "Messages",
-            Self::Friends => "Friends",
-            Self::Groups => "Groups",
-            Self::Settings => "Settings",
-        }
-    }
-
     fn eyebrow(self) -> &'static str {
         match self {
             Self::Messages => "DIRECT MESSAGES",
@@ -334,7 +325,7 @@ impl LarptrixShell {
             .child(settings_row("Notifications", "Sounds and alerts"))
     }
 
-    fn conversation(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn conversation(&self) -> impl IntoElement {
         let (name, handle, initials, topic) = match self.selected_chat {
             "alex" => ("Alex", "@alex", "A", "Usually replies quickly"),
             "sam" => ("Sam", "@sam", "S", "Away"),
@@ -475,7 +466,7 @@ impl LarptrixShell {
 }
 
 impl Render for LarptrixShell {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
             .flex()
@@ -484,7 +475,7 @@ impl Render for LarptrixShell {
             .text_color(rgb(TEXT))
             .child(self.server_rail(cx))
             .child(self.sidebar(cx))
-            .child(self.conversation(window, cx))
+            .child(self.conversation())
     }
 }
 
