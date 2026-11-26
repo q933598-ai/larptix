@@ -161,7 +161,7 @@ impl NativeMatrixCrypto {
     }
 
     pub fn room_id_for_group(&self, group_id: &str) -> String {
-        format!("!larpgrp_{}:{}", group_id, self.server_name)
+        matrix_group_room_id(group_id, &self.server_name)
     }
 
     pub async fn encrypt_dm_text(&self, peer_id: &str, text: &str) -> Result<String, String> {
@@ -558,6 +558,10 @@ impl NativeMatrixCrypto {
     }
 }
 
+fn matrix_group_room_id(group_id: &str, server_name: &str) -> String {
+    format!("!larpgrp_{group_id}:{server_name}")
+}
+
 fn matrix_dm_room_id(server_name: &str, first_user_id: &str, second_user_id: &str) -> String {
     let mut ids = [first_user_id, second_user_id];
     ids.sort_unstable();
@@ -706,6 +710,18 @@ mod interoperability_tests {
 
         assert_eq!(matrix_dm_room_id(server_name, local_user_id, peer_user_id), expected);
         assert_eq!(matrix_dm_room_id(server_name, peer_user_id, local_user_id), expected);
+    }
+
+    #[test]
+    fn group_room_id_matches_the_web_client_contract() {
+        let fixture = fixture();
+        assert_eq!(
+            matrix_group_room_id(
+                fixture["group_id"].as_str().unwrap(),
+                fixture["server_name"].as_str().unwrap(),
+            ),
+            fixture["group_room_id"].as_str().unwrap(),
+        );
     }
 
     #[test]
