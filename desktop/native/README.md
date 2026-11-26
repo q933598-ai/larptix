@@ -19,7 +19,7 @@ From the repository root:
 cargo run --manifest-path desktop/native/Cargo.toml
 ```
 
-Enter the server URL and the 64-character access key in the native sign-in screen. The key is used to obtain the existing HttpOnly Larptrix session cookie; it is not written to disk. The client then connects to `/ws` with the session cookie and matching `Origin` header. WebSocket reconnects use exponential backoff.
+Enter the server URL, your 64-character account access key, and the E2E recovery key saved when enabling encryption in the web client. They are separate credentials: the access key creates the HTTP session, while the recovery key unlocks the encrypted local Matrix store and the shared room-key backup. Neither key is written to disk as plaintext. The client then connects to `/ws` with the HttpOnly session cookie and matching `Origin` header. WebSocket reconnects use exponential backoff.
 
 You can prefill the server URL with `LARPTRIX_SERVER_URL`:
 
@@ -74,7 +74,16 @@ release work and are not implied by the current CI executable.
 - Requests for missing room keys and retry of pending message decryption after key delivery.
 - Shared browser/native golden tests for DM room IDs, JSON message content, encrypted-event envelopes and recovery-key format.
 
-The golden tests validate the wire contract but do not replace live Olm/Megolm testing against a running server. The native E2E implementation is experimental and has not yet completed live browser/native interoperability testing. Enter the E2E recovery key created by the web client when signing in; it is not the account access key. The local Matrix store is encrypted with this recovery key, and the server only receives Matrix public key material, encrypted room-key backup and opaque message ciphertext.
+The golden tests validate the wire contract but do not replace live Olm/Megolm testing against a running server. The native E2E implementation is experimental and has not yet completed live browser/native interoperability testing.
+
+### Manual browser/native acceptance test
+
+1. Sign in to the web client and unlock E2E with the account's existing recovery key.
+2. Sign in to the native client with the same account and recovery key, then open a direct conversation with a second account.
+3. Send one message from the browser and verify that the native client decrypts it. Send a reply from native and verify that the browser decrypts it.
+4. Restart the native client and verify that the existing room-key backup restores readable history.
+
+Use a test account and a non-sensitive test conversation. Do not share the recovery key with anyone or paste it into chat logs. Enter the E2E recovery key created by the web client when signing in; it is not the account access key. The local Matrix store is encrypted with this recovery key, and the server only receives Matrix public key material, encrypted room-key backup and opaque message ciphertext.
 
 ## Not implemented yet
 
