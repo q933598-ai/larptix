@@ -71,6 +71,7 @@ release work and are not implied by the current CI executable.
 - Persistent Matrix SQLite crypto store protected by the E2E recovery key.
 - Restore and refresh of the same encrypted Megolm room-key backup used by the web client.
 - Encryption of outgoing 1:1 text messages before sending; decryption of incoming Matrix-encrypted 1:1 messages.
+- Message reactions with live counts and per-user toggle state.
 - Requests for missing room keys and retry of pending message decryption after key delivery.
 - Shared browser/native golden tests for DM room IDs, JSON message content, encrypted-event envelopes and recovery-key format.
 
@@ -88,7 +89,7 @@ Use a test account and a non-sensitive test conversation. Do not share the recov
 ## Not implemented yet
 
 - Device verification / cross-signing UX and visible trust/fingerprint confirmation.
-- Encrypted attachments, reactions and read receipts.
+- Encrypted attachments and read receipts.
 - Group message composition, group E2E and full conversation UI.
 - Native audio/video calls, screen sharing and notifications.
 - Signed Windows installer and automatic desktop updates.
