@@ -3057,10 +3057,12 @@ mod tests {
 
         let response = login(
             State(state),
+            HeaderMap::new(),
             Json(LoginBody {
                 access_key: Some(access_key),
                 email: None,
                 password: None,
+                device_name: None,
             }),
         )
         .await
