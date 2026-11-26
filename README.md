@@ -116,6 +116,22 @@ For calls between users behind different NATs, configure reachable STUN/TURN in
 some peer-to-peer calls may not connect. TURN credentials should be short-lived;
 do not put a permanent shared secret in this browser-readable setting.
 
+## Native desktop prototype (experimental)
+
+The repository now contains an early native desktop shell in `desktop/native/`.
+It uses GPUI for the UI instead of embedding the web client. It is a separate
+Cargo workspace and does not add GPU/window-system dependencies to the VPS server.
+
+Run it from the repository root:
+
+```bash
+cargo run --manifest-path desktop/native/Cargo.toml
+```
+
+This is currently a UI scaffold with placeholder people and messages. It does not
+connect to a server yet. The existing Electron/Tauri packages remain available while
+the native client is developed.
+
 ## Desktop clients
 
 `desktop/` contains a Linux desktop client using Electron's Chromium runtime, so
