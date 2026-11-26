@@ -230,7 +230,7 @@ impl MediaPlayback {
                         .unwrap_or_default();
                     return Err(format!("{}{}", error.error(), detail));
                 }
-                gstreamer::MessageView::Eos(_) => {
+                gstreamer::MessageView::Eos(..) => {
                     self.playing.store(false, Ordering::Release);
                     self.finished.store(true, Ordering::Release);
                     return Ok(true);
