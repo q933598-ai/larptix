@@ -1,6 +1,4 @@
-use gpui::{
-    div, prelude::*, rgb, px, App, Context, Window,
-};
+use gpui::{div, prelude::*, rgb, px, App, Context, Window};
 use larptrix_client_core::ClientCore;
 
 const BG: u32 = 0x1b1f2a;
@@ -267,22 +265,50 @@ impl LarptrixShell {
             .flex_col()
             .gap_1()
             .px_2()
-            .child(chat_entry("mira", "Mira", "Are you still working on it?", "2m", self.selected_chat == "mira", cx.listener(|this, _, _, cx| {
-                this.selected_chat = "mira";
-                cx.notify();
-            })))
-            .child(chat_entry("alex", "Alex", "that actually looks great", "18m", self.selected_chat == "alex", cx.listener(|this, _, _, cx| {
-                this.selected_chat = "alex";
-                cx.notify();
-            })))
-            .child(chat_entry("sam", "Sam", "sent an attachment", "1h", self.selected_chat == "sam", cx.listener(|this, _, _, cx| {
-                this.selected_chat = "sam";
-                cx.notify();
-            })))
-            .child(chat_entry("dev", "Dev corner", "Pinned: project roadmap", "3h", self.selected_chat == "dev", cx.listener(|this, _, _, cx| {
-                this.selected_chat = "dev";
-                cx.notify();
-            })))
+            .child(chat_entry(
+                "mira",
+                "Mira",
+                "Are you still working on it?",
+                "2m",
+                self.selected_chat == "mira",
+                cx.listener(|this, _, _, cx| {
+                    this.selected_chat = "mira";
+                    cx.notify();
+                }),
+            ))
+            .child(chat_entry(
+                "alex",
+                "Alex",
+                "that actually looks great",
+                "18m",
+                self.selected_chat == "alex",
+                cx.listener(|this, _, _, cx| {
+                    this.selected_chat = "alex";
+                    cx.notify();
+                }),
+            ))
+            .child(chat_entry(
+                "sam",
+                "Sam",
+                "sent an attachment",
+                "1h",
+                self.selected_chat == "sam",
+                cx.listener(|this, _, _, cx| {
+                    this.selected_chat = "sam";
+                    cx.notify();
+                }),
+            ))
+            .child(chat_entry(
+                "dev",
+                "Dev corner",
+                "Pinned: project roadmap",
+                "3h",
+                self.selected_chat == "dev",
+                cx.listener(|this, _, _, cx| {
+                    this.selected_chat = "dev";
+                    cx.notify();
+                }),
+            ))
     }
 
     fn friends_list(&self) -> impl IntoElement {
@@ -395,10 +421,26 @@ impl LarptrixShell {
                     .justify_end()
                     .gap_4()
                     .p_6()
-                    .child(message_bubble("Mira", "Hey! How is the new Larptrix build going?", false))
-                    .child(message_bubble("You", "I'm rebuilding the desktop client as a native Rust app.", true))
-                    .child(message_bubble(name, "No Electron? That should feel much lighter.", false))
-                    .child(message_bubble("You", "Exactly. Shared Rust core, separate native and web interfaces.", true))
+                    .child(message_bubble(
+                        "Mira",
+                        "Hey! How is the new Larptrix build going?",
+                        false,
+                    ))
+                    .child(message_bubble(
+                        "You",
+                        "I'm rebuilding the desktop client as a native Rust app.",
+                        true,
+                    ))
+                    .child(message_bubble(
+                        name,
+                        "No Electron? That should feel much lighter.",
+                        false,
+                    ))
+                    .child(message_bubble(
+                        "You",
+                        "Exactly. Shared Rust core, separate native and web interfaces.",
+                        true,
+                    ))
                     .child(
                         div()
                             .pt_2()
@@ -498,7 +540,11 @@ fn chat_entry(
         .items_center()
         .gap_3()
         .cursor_pointer()
-        .bg(if selected { rgb(SURFACE_HOVER) } else { rgb(SIDEBAR) })
+        .bg(if selected {
+            rgb(SURFACE_HOVER)
+        } else {
+            rgb(SIDEBAR)
+        })
         .hover(|style| style.bg(rgb(SURFACE)))
         .on_click(on_click)
         .child(
@@ -585,7 +631,11 @@ fn section_heading(text: &'static str) -> impl IntoElement {
         .child(text)
 }
 
-fn person_row(initial: &'static str, name: &'static str, status: &'static str) -> impl IntoElement {
+fn person_row(
+    initial: &'static str,
+    name: &'static str,
+    status: &'static str,
+) -> impl IntoElement {
     div()
         .p_2()
         .rounded_md()
@@ -614,7 +664,11 @@ fn person_row(initial: &'static str, name: &'static str, status: &'static str) -
         )
 }
 
-fn group_row(icon: &'static str, name: &'static str, members: &'static str) -> impl IntoElement {
+fn group_row(
+    icon: &'static str,
+    name: &'static str,
+    members: &'static str,
+) -> impl IntoElement {
     div()
         .p_2()
         .rounded_md()
