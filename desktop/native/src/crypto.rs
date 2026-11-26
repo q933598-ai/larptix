@@ -267,18 +267,18 @@ impl NativeMatrixCrypto {
             users.push(UserId::parse(format!("@{}:{}", peer, self.server_name))
                 .map_err(|error| format!("Invalid peer Matrix id: {error}"))?);
         }
-        // Materialize borrowed user IDs before entering SDK async methods.
-        // This avoids an opaque iterator lifetime escaping into the spawned UI task.
+        // Materialize each SDK input as an owned Vec. This avoids passing
+        // opaque iterator adaptors through SDK futures spawned by the UI.
         let user_refs: Vec<&UserId> = users.iter().map(|user| user.as_ref()).collect();
+        let tracked_user_refs: Vec<&UserId> = user_refs.iter().skip(1).copied().collect();
         self.machine
-            .update_tracked_users(user_refs.iter().copied().skip(1))
+            .update_tracked_users(tracked_user_refs)
             .await
             .map_err(|error| format!("Could not track Matrix devices: {error}"))?;
 
         if user_refs.len() > 1 {
-            let (request_id, request) = self.machine.query_keys_for_users(
-                user_refs.iter().copied().skip(1),
-            );
+            let key_query_users: Vec<&UserId> = user_refs.iter().skip(1).copied().collect();
+            let (request_id, request) = self.machine.query_keys_for_users(key_query_users);
             let (status, response_body) = self.api_post_raw("api/matrix/keys/query", json!({
                 "device_keys": request.device_keys,
                 "timeout": request.timeout.map(|value| value.as_millis() as u64)
@@ -289,8 +289,9 @@ impl NativeMatrixCrypto {
         }
 
         self.process_outgoing_requests().await?;
+        let missing_session_users: Vec<&UserId> = user_refs.to_vec();
         if let Some((request_id, request)) = self.machine.get_missing_sessions(
-            user_refs.iter().copied(),
+            missing_session_users,
         ).await.map_err(|error| format!("Could not find missing Olm sessions: {error}"))? {
             let encoded_request = request
                 .try_into_http_request::<Vec<u8>>(
@@ -307,9 +308,10 @@ impl NativeMatrixCrypto {
                 .map_err(|error| format!("Could not establish Olm sessions: {error}"))?;
         }
 
+        let room_key_share_users: Vec<&UserId> = user_refs.to_vec();
         let requests = self.machine.share_room_key(
             &room_id,
-            user_refs.iter().copied(),
+            room_key_share_users,
             EncryptionSettings::default(),
         ).await.map_err(|error| format!("Could not share Megolm room key: {error}"))?;
         for request in requests {
