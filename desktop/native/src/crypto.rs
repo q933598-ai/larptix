@@ -745,4 +745,16 @@ mod interoperability_tests {
         let fixture = fixture();
         validate_recovery_key(fixture["recovery_key"].as_str().unwrap()).unwrap();
     }
+
+    #[test]
+    fn matrix_room_key_backup_roundtrips_with_web_parameters() {
+        let fixture = fixture();
+        let recovery_key = fixture["recovery_key"].as_str().unwrap();
+        let exported_keys = Vec::<matrix_sdk_crypto::olm::ExportedRoomKey>::new();
+
+        let encrypted = encrypt_room_key_export(&exported_keys, recovery_key, 100_000).unwrap();
+        let restored = decrypt_room_key_export(encrypted.as_bytes(), recovery_key).unwrap();
+
+        assert!(restored.is_empty());
+    }
 }
