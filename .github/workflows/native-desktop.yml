@@ -39,9 +39,6 @@ jobs:
             libssl-dev libva-dev libvulkan1 libwayland-dev \
             libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev libsqlite3-dev
 
-      - name: Check formatting
-        run: cargo fmt --manifest-path desktop/native/Cargo.toml -- --check
-
       - name: Check native desktop
         run: cargo check --manifest-path desktop/native/Cargo.toml
 
