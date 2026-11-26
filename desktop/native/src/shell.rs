@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use async_channel::Sender;
 use gpui::{
     div, prelude::*, rgb, px, App, Context, FocusHandle, KeyDownEvent, MouseButton, Window,
@@ -201,13 +199,15 @@ impl LarptrixShell {
             return;
         };
 
-        let target = match field {
-            LoginField::Server => &mut self.server_url,
-            LoginField::AccessKey => &mut self.access_key,
-        };
-
         if event.keystroke.key == "backspace" {
-            target.pop();
+            match field {
+                LoginField::Server => {
+                    self.server_url.pop();
+                }
+                LoginField::AccessKey => {
+                    self.access_key.pop();
+                }
+            }
             cx.notify();
             return;
         }
@@ -221,18 +221,24 @@ impl LarptrixShell {
             && (event.keystroke.modifiers.control || event.keystroke.modifiers.platform);
         if is_paste {
             if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                let remaining = match field {
-                    LoginField::Server => 256usize.saturating_sub(self.server_url.len()),
-                    LoginField::AccessKey => 64usize.saturating_sub(self.access_key.len()),
+                let current_len = match field {
+                    LoginField::Server => self.server_url.len(),
+                    LoginField::AccessKey => self.access_key.len(),
                 };
-                target.push_str(&text.chars().filter(|ch| !ch.is_control()).take(remaining).collect::<String>());
-                if field == LoginField::Server {
-                    self.server_url = self.server_url.trim().to_string();
-                } else {
-                    self.access_key = self.access_key.chars()
-                        .filter(|ch| ch.is_ascii_hexdigit())
-                        .take(64)
-                        .collect();
+                let max_len = match field {
+                    LoginField::Server => 256usize,
+                    LoginField::AccessKey => 64usize,
+                };
+                let remaining = max_len.saturating_sub(current_len);
+                let pasted: String = text
+                    .chars()
+                    .filter(|ch| !ch.is_control())
+                    .filter(|ch| field != LoginField::AccessKey || ch.is_ascii_hexdigit())
+                    .take(remaining)
+                    .collect();
+                match field {
+                    LoginField::Server => self.server_url.push_str(&pasted),
+                    LoginField::AccessKey => self.access_key.push_str(&pasted),
                 }
                 cx.notify();
             }
@@ -244,20 +250,24 @@ impl LarptrixShell {
         }
 
         if let Some(text) = event.keystroke.key_char.as_ref() {
-            let max_len = match field {
-                LoginField::Server => 256,
-                LoginField::AccessKey => 64,
+            let (current_len, max_len) = match field {
+                LoginField::Server => (self.server_url.len(), 256usize),
+                LoginField::AccessKey => (self.access_key.len(), 64usize),
             };
-            if target.len() + text.len() <= max_len {
-                if field == LoginField::AccessKey
-                    && !text.chars().all(|ch| ch.is_ascii_hexdigit())
-                {
-                    return;
+            if current_len + text.len() > max_len {
+                return;
+            }
+            if field == LoginField::AccessKey
+                && !text.chars().all(|ch| ch.is_ascii_hexdigit())
+            {
+                return;
+            }
+            if !text.chars().any(char::is_control) {
+                match field {
+                    LoginField::Server => self.server_url.push_str(text),
+                    LoginField::AccessKey => self.access_key.push_str(text),
                 }
-                if !text.chars().any(char::is_control) {
-                    target.push_str(text);
-                    cx.notify();
-                }
+                cx.notify();
             }
         }
     }
@@ -408,10 +418,10 @@ impl LarptrixShell {
 
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match self.active_section {
-            Section::Messages => self.message_list(cx),
-            Section::Friends => self.friends_list(),
-            Section::Groups => self.groups_list(),
-            Section::Settings => self.settings_list(),
+            Section::Messages => self.message_list(cx).into_any_element(),
+            Section::Friends => self.friends_list().into_any_element(),
+            Section::Groups => self.groups_list().into_any_element(),
+            Section::Settings => self.settings_list().into_any_element(),
         };
 
         let (account_name, username) = self
@@ -588,6 +598,8 @@ impl LarptrixShell {
             .map(|user| (user.display_name.clone(), user.username.clone(), user.online))
             .collect();
 
+        let no_users = users.is_empty();
+
         div()
             .flex_1()
             .flex()
@@ -608,7 +620,7 @@ impl LarptrixShell {
                     },
                 )
             }))
-            .when(users_is_empty(self.core.state().users.len()), |element| {
+            .when(no_users, |element| {
                 element.child(empty_hint("No other users were returned by the server"))
             })
     }
@@ -878,18 +890,19 @@ impl LarptrixShell {
 impl Render for LarptrixShell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.core.state().current_user.is_none() {
-            return self.login_view(cx);
+            self.login_view(cx).into_any_element()
+        } else {
+            div()
+                .size_full()
+                .flex()
+                .flex_row()
+                .bg(rgb(BG))
+                .text_color(rgb(TEXT))
+                .child(self.server_rail(cx))
+                .child(self.sidebar(cx))
+                .child(self.conversation())
+                .into_any_element()
         }
-
-        div()
-            .size_full()
-            .flex()
-            .flex_row()
-            .bg(rgb(BG))
-            .text_color(rgb(TEXT))
-            .child(self.server_rail(cx))
-            .child(self.sidebar(cx))
-            .child(self.conversation())
     }
 }
 
