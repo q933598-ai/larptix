@@ -37,6 +37,7 @@ pub enum AppEvent {
         session_id: String,
         title: String,
         is_video: bool,
+        path: PathBuf,
         player: Arc<MediaPlayback>,
     },
     MediaTick {
