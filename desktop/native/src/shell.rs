@@ -1,5 +1,5 @@
 use async_channel::Sender;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 use gpui::{
     div, prelude::*, rgb, px, App, Context, FocusHandle, KeyDownEvent, MouseButton, Window,
 };
