@@ -182,6 +182,9 @@ impl MediaPlayback {
 
         let width = frame.width();
         let height = frame.height();
+        if width == 0 || height == 0 {
+            return Err("The video decoder returned an empty frame".into());
+        }
         let row_bytes = (width as usize)
             .checked_mul(4)
             .ok_or_else(|| "The video frame dimensions are too large".to_string())?;
@@ -189,7 +192,11 @@ impl MediaPlayback {
             .checked_mul(height as usize)
             .filter(|size| *size <= MAX_VIDEO_FRAME_BYTES)
             .ok_or_else(|| "The video frame exceeds the 64 MiB display limit".to_string())?;
-        let stride = frame.plane_stride()[0];
+        let stride = frame
+            .plane_stride()
+            .first()
+            .copied()
+            .ok_or_else(|| "The video decoder returned no pixel stride".to_string())?;
         if stride <= 0 || (stride as usize) < row_bytes {
             return Err("The video decoder returned an unsupported frame layout".into());
         }
@@ -203,7 +210,9 @@ impl MediaPlayback {
             let source_start = row
                 .checked_mul(stride)
                 .ok_or_else(|| "The video frame layout overflowed".to_string())?;
-            let source_end = source_start + row_bytes;
+            let source_end = source_start
+                .checked_add(row_bytes)
+                .ok_or_else(|| "The video frame layout overflowed".to_string())?;
             let target_start = row * row_bytes;
             let target_end = target_start + row_bytes;
             let source_row = source
