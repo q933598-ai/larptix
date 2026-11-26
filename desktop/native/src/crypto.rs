@@ -291,7 +291,7 @@ impl NativeMatrixCrypto {
         self.process_outgoing_requests().await?;
         let missing_session_users: Vec<&UserId> = user_refs.to_vec();
         if let Some((request_id, request)) = self.machine.get_missing_sessions(
-            missing_session_users,
+            missing_session_users.into_iter(),
         ).await.map_err(|error| format!("Could not find missing Olm sessions: {error}"))? {
             let encoded_request = request
                 .try_into_http_request::<Vec<u8>>(
@@ -311,7 +311,7 @@ impl NativeMatrixCrypto {
         let room_key_share_users: Vec<&UserId> = user_refs.to_vec();
         let requests = self.machine.share_room_key(
             &room_id,
-            room_key_share_users,
+            room_key_share_users.into_iter(),
             EncryptionSettings::default(),
         ).await.map_err(|error| format!("Could not share Megolm room key: {error}"))?;
         for request in requests {
