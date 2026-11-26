@@ -2,6 +2,8 @@
   "server_name": "chat.example.test",
   "local_user_id": "alice",
   "peer_user_id": "bob",
+  "group_id": "group-fixture-1",
+  "group_room_id": "!larpgrp_group-fixture-1:chat.example.test",
   "room_id": "!larpdm_ce1c3e9eff2db1bc604b26c89bfdb1dfa6286a823c1e1b5c594cce6ad757c507:chat.example.test",
   "payload": {
     "text": "interop fixture",
