@@ -181,8 +181,12 @@ impl NativeMatrixCrypto {
     }
 
     pub async fn encrypt_dm_text(&self, peer_id: &str, text: &str) -> Result<String, String> {
+        self.encrypt_dm_payload(peer_id, json!({ "text": text })).await
+    }
+
+    pub async fn encrypt_dm_payload(&self, peer_id: &str, payload: Value) -> Result<String, String> {
         let room_id = self.room_id_for_dm(peer_id);
-        self.encrypt_room_payload(&room_id, &[peer_id.to_string()], json!({ "text": text })).await
+        self.encrypt_room_payload(&room_id, &[peer_id.to_string()], payload).await
     }
 
     pub async fn encrypt_group_text(
@@ -191,8 +195,17 @@ impl NativeMatrixCrypto {
         member_ids: &[String],
         text: &str,
     ) -> Result<String, String> {
+        self.encrypt_group_payload(group_id, member_ids, json!({ "text": text })).await
+    }
+
+    pub async fn encrypt_group_payload(
+        &self,
+        group_id: &str,
+        member_ids: &[String],
+        payload: Value,
+    ) -> Result<String, String> {
         let room_id = self.room_id_for_group(group_id);
-        self.encrypt_room_payload(&room_id, member_ids, json!({ "text": text })).await
+        self.encrypt_room_payload(&room_id, member_ids, payload).await
     }
 
     pub async fn encrypt_attachment_and_upload(
