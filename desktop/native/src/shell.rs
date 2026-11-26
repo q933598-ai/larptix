@@ -894,6 +894,8 @@ impl LarptrixShell {
             })
             .collect();
 
+        let no_groups = groups.is_empty();
+
         div()
             .flex_1()
             .flex()
@@ -917,7 +919,7 @@ impl LarptrixShell {
                         description,
                     ))
             }))
-            .when(groups.is_empty(), |element| {
+            .when(no_groups, |element| {
                 element.child(empty_hint("No groups or channels yet"))
             })
     }
