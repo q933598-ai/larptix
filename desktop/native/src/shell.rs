@@ -872,7 +872,7 @@ impl LarptrixShell {
         if metadata.mime.starts_with("image/") {
             self.open_image_gallery(peer_id, message_id, metadata.id, cx);
         } else if metadata.mime.starts_with("video/") || metadata.mime.starts_with("audio/") {
-            self.play_attachment_externally(metadata, cx);
+            self.open_media_inline(metadata, cx);
         } else {
             self.save_attachment(metadata, cx);
         }
@@ -1075,7 +1075,9 @@ impl LarptrixShell {
         let events = self.event_tx.clone();
         self.runtime.spawn(async move {
             while player.is_active() {
-                let error = player.poll_video_frame().err();
+                let error = player
+                    .poll_bus_error()
+                    .or_else(|| player.poll_video_frame().err());
                 let finished = player.poll_finished();
                 let _ = events.send_blocking(AppEvent::MediaTick {
                     session_id: session_id.clone(),
@@ -1086,6 +1088,9 @@ impl LarptrixShell {
                 });
 
                 if finished || error.is_some() {
+                    if error.is_some() {
+                        player.stop();
+                    }
                     break;
                 }
 
@@ -1975,7 +1980,7 @@ impl Render for LarptrixShell {
                 .when(self.image_viewer.is_some(), |element| {
                     element.child(self.image_viewer_overlay(cx))
                 })
-                .when(self.media_loading || self.media_player.is_some(), |element| {
+                .when(self.media_loading || self.media_player.is_some() || self.media_error.is_some(), |element| {
                     element.child(self.media_player_overlay(cx))
                 })
                 .into_any_element()
