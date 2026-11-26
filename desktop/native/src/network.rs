@@ -168,7 +168,7 @@ pub async fn connect(
                     .send_blocking(AppEvent::Status("Connected · waiting for server state…".into()))
                     .map_err(|_| "Application closed".to_string())?;
 
-                run_socket(socket, &commands, &events, &crypto).await;
+                run_socket(socket, &commands, events.clone(), &crypto).await;
                 events
                     .send_blocking(AppEvent::Status("Connection lost · reconnecting…".into()))
                     .map_err(|_| "Application closed".to_string())?;
@@ -213,7 +213,7 @@ async fn run_socket(
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
     commands: &Receiver<ClientMessage>,
-    events: &Sender<AppEvent>,
+    events: Sender<AppEvent>,
     crypto: &Arc<NativeMatrixCrypto>,
 ) {
     let (mut writer, mut reader) = socket.split();
