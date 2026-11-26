@@ -392,9 +392,13 @@ impl NativeMatrixCrypto {
 
     async fn process_outgoing_requests(&self) -> Result<(), String> {
         let _guard = self.outgoing_lock.lock().await;
-        let requests = self.machine.outgoing_requests().await
-            .map_err(|error| format!("Could not read Matrix crypto requests: {error}"))?;
-        for outgoing in requests {
+        loop {
+            let requests = self.machine.outgoing_requests().await
+                .map_err(|error| format!("Could not read Matrix crypto requests: {error}"))?;
+            if requests.is_empty() {
+                break;
+            }
+            for outgoing in requests {
             let request_id = outgoing.request_id().to_owned();
             match outgoing.request() {
                 AnyOutgoingRequest::KeysUpload(request) => {
@@ -444,6 +448,7 @@ impl NativeMatrixCrypto {
                     return Err("Native interactive device verification is not implemented yet".into());
                 }
             }
+        }
         }
         Ok(())
     }
