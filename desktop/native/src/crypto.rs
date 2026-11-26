@@ -194,9 +194,18 @@ impl NativeMatrixCrypto {
             .cast_unchecked::<EncryptedEvent>();
         let room_id = RoomId::parse(room_id.to_string())
             .map_err(|error| format!("Invalid Matrix room id: {error}"))?;
-        let decrypted = self.machine.decrypt_room_event(
+        let decrypted = match self.machine.decrypt_room_event(
             &raw_event, &room_id, &self.decryption_settings,
-        ).await.map_err(|error| format!("Could not decrypt Matrix message: {error}"))?;
+        ).await {
+            Ok(decrypted) => decrypted,
+            Err(error) => {
+                // A missing Megolm key may have queued an m.room_key_request.
+                // Send that request so another device can share the room key.
+                let message = format!("Could not decrypt Matrix message: {error}");
+                let _ = self.process_outgoing_requests().await;
+                return Err(message);
+            }
+        };
         let event: Value = serde_json::from_str(decrypted.event.json().get())
             .map_err(|error| format!("Invalid decrypted Matrix event: {error}"))?;
         Ok(event.get("content").cloned().unwrap_or(event))
