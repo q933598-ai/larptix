@@ -7,8 +7,8 @@ use larptrix_client_core::ClientCore;
 use larptrix_protocol::{ChatMessage, ClientMessage, ServerMessage};
 use tokio::runtime::Handle;
 
-use crate::crypto::NativeMatrixCrypto;
-use crate::network::{self, AppEvent};
+use crate::crypto::{EncryptedAttachmentMetadata, NativeMatrixCrypto};
+use crate::network::{self, AppEvent, PickedFile};
 
 const BG: u32 = 0x1b1f2a;
 const RAIL: u32 = 0x171b24;
@@ -66,6 +66,8 @@ pub struct LarptrixShell {
     outgoing: Option<Sender<ClientMessage>>,
     crypto: Option<Arc<NativeMatrixCrypto>>,
     decrypted_messages: HashMap<(String, String), String>,
+    decrypted_attachments: HashMap<(String, String), Vec<EncryptedAttachmentMetadata>>,
+    pending_attachments: Vec<PickedFile>,
     pending_decryptions: HashMap<(String, String), ChatMessage>,
     decrypting_messages: HashSet<(String, String)>,
     server_url: String,
@@ -103,6 +105,8 @@ impl LarptrixShell {
             outgoing: None,
             crypto: None,
             decrypted_messages: HashMap::new(),
+            decrypted_attachments: HashMap::new(),
+            pending_attachments: Vec::new(),
             pending_decryptions: HashMap::new(),
             decrypting_messages: HashSet::new(),
             server_url: std::env::var("LARPTRIX_SERVER_URL").unwrap_or_default(),
@@ -197,11 +201,38 @@ impl LarptrixShell {
                     self.connection_status = "Connected".into();
                 }
             }
-            AppEvent::Decrypted { peer_id, message_id, body } => {
+            AppEvent::Decrypted { peer_id, message_id, body, attachments } => {
                 let key = (peer_id, message_id);
                 self.decrypting_messages.remove(&key);
                 self.pending_decryptions.remove(&key);
-                self.decrypted_messages.insert(key, body);
+                self.decrypted_messages.insert(key.clone(), body);
+                if !attachments.is_empty() {
+                    self.decrypted_attachments.insert(key, attachments);
+                }
+            }
+            AppEvent::FilesPicked(files) => {
+                let mut added = 0usize;
+                for file in files {
+                    if file.size_bytes == 0 {
+                        continue;
+                    }
+                    if file.size_bytes > larptrix_protocol::MAX_ATTACHMENT_BYTES as u64 - 16 {
+                        self.connection_status = format!("{} is larger than the 25 MiB encrypted upload limit", file.name);
+                        continue;
+                    }
+                    if self.pending_attachments.iter().any(|item| item.path == file.path) {
+                        continue;
+                    }
+                    if self.pending_attachments.len() >= 32 {
+                        self.connection_status = "A message can contain at most 32 attachments".into();
+                        break;
+                    }
+                    self.pending_attachments.push(file);
+                    added += 1;
+                }
+                if added > 0 {
+                    self.connection_status = format!("Added {added} attachment(s)");
+                }
             }
             AppEvent::DecryptionFailed { peer_id, message, error } => {
                 let key = (peer_id.clone(), message.id.clone());
@@ -528,11 +559,25 @@ impl LarptrixShell {
                 Ok(payload) => {
                     let body = payload.get("text").and_then(serde_json::Value::as_str)
                         .map(str::to_string)
-                        .unwrap_or_else(|| payload.to_string());
+                        .unwrap_or_else(|| {
+                            if payload.get("files").and_then(serde_json::Value::as_array).is_some() {
+                                String::new()
+                            } else {
+                                payload.to_string()
+                            }
+                        });
+                    let attachments = payload
+                        .get("files")
+                        .and_then(serde_json::Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|item| serde_json::from_value::<EncryptedAttachmentMetadata>(item.clone()).ok())
+                        .collect();
                     let _ = events.send_blocking(AppEvent::Decrypted {
                         peer_id,
                         message_id,
                         body,
+                        attachments,
                     });
                 }
                 Err(error) => {
