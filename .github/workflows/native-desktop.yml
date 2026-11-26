@@ -1,0 +1,49 @@
+name: Native GPUI Desktop
+
+on:
+  pull_request:
+    paths:
+      - "desktop/native/**"
+      - "crates/client-core/**"
+      - "crates/protocol/**"
+      - ".github/workflows/native-desktop.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "desktop/native/**"
+      - "crates/client-core/**"
+      - "crates/protocol/**"
+      - ".github/workflows/native-desktop.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  linux-native:
+    name: Check native GPUI app (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install GPUI Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang cmake lld llvm pkg-config \
+            libasound2-dev libfontconfig-dev libgit2-dev libglib2.0-dev \
+            libssl-dev libva-dev libvulkan1 libwayland-dev \
+            libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev libsqlite3-dev
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path desktop/native/Cargo.toml -- --check
+
+      - name: Check native desktop
+        run: cargo check --manifest-path desktop/native/Cargo.toml
+
+      - name: Test shared client core
+        run: cargo test -p larptrix-client-core
