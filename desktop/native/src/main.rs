@@ -4,7 +4,7 @@ mod shell;
 use std::future::pending;
 use std::thread;
 
-use gpui::{px, size, App, Bounds, WindowBounds, WindowOptions};
+use gpui::{px, size, App, AppContext, Bounds, WindowBounds, WindowOptions};
 use gpui_platform::application;
 use shell::LarptrixShell;
 
