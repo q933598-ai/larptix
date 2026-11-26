@@ -1865,7 +1865,8 @@ impl Database {
                 last_seen_at: row.get(6)?,
                 expires_at: row.get(7)?,
             })
-        ).optional()
+        )
+        .optional()
     }
 
     pub fn touch_session(
@@ -1891,16 +1892,18 @@ impl Database {
             "SELECT session_id, token, user_id, device_name, user_agent, created_at, last_seen_at, expires_at
              FROM sessions WHERE user_id=?1 AND expires_at>?2 ORDER BY last_seen_at DESC, created_at DESC"
         )?;
-        let rows = stmt.query_map(params![user_id, now], |row| Ok(SessionRow {
-            session_id: row.get(0)?,
-            token: row.get(1)?,
-            user_id: row.get(2)?,
-            device_name: row.get(3)?,
-            user_agent: row.get(4)?,
-            created_at: row.get(5)?,
-            last_seen_at: row.get(6)?,
-            expires_at: row.get(7)?,
-        }))?;
+        let rows = stmt.query_map(params![user_id, now], |row| {
+            Ok(SessionRow {
+                session_id: row.get(0)?,
+                token: row.get(1)?,
+                user_id: row.get(2)?,
+                device_name: row.get(3)?,
+                user_agent: row.get(4)?,
+                created_at: row.get(5)?,
+                last_seen_at: row.get(6)?,
+                expires_at: row.get(7)?,
+            })
+        })?;
         rows.collect()
     }
 
@@ -3080,9 +3083,8 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         }
     }
     let old_sessions: Vec<String> = {
-        let mut stmt = conn.prepare(
-            "SELECT token FROM sessions WHERE session_id IS NULL OR session_id = ''"
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT token FROM sessions WHERE session_id IS NULL OR session_id = ''")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         rows.collect::<Result<Vec<_>, _>>()?
     };
