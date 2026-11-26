@@ -324,6 +324,9 @@ impl LarptrixShell {
         let Some(field) = self.active_input else {
             return;
         };
+        if self.sending_message && field == LoginField::Composer {
+            return;
+        }
 
         if event.keystroke.key == "backspace" {
             match field {
@@ -701,6 +704,9 @@ impl LarptrixShell {
     }
 
     fn pick_attachments(&mut self, cx: &mut Context<Self>) {
+        if self.sending_message {
+            return;
+        }
         let events = self.event_tx.clone();
         self.connection_status = "Choose files to attach…".into();
         cx.notify();
