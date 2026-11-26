@@ -1226,6 +1226,10 @@ impl LarptrixShell {
                     body,
                     mine,
                     message.reactions.clone(),
+                    self.decrypted_attachments
+                        .get(&(peer_id.to_string(), message.id.clone()))
+                        .cloned()
+                        .unwrap_or_default(),
                 )
             })
             .collect();
@@ -1237,6 +1241,12 @@ impl LarptrixShell {
             format!("@{}", peer.username)
         };
         let status = if peer.online { "Online" } else { "Offline" };
+        let pending_attachment_labels: Vec<(usize, String)> = self
+            .pending_attachments
+            .iter()
+            .enumerate()
+            .map(|(index, file)| (index, format!("{} · {}", file.name, format_attachment_size(file.size_bytes))))
+            .collect();
 
         div()
             .flex_1()
@@ -1300,13 +1310,32 @@ impl LarptrixShell {
                     .justify_end()
                     .gap_4()
                     .p_6()
-                    .children(messages.iter().map(|(message_id, author, body, mine, reactions)| {
+                    .children(messages.iter().map(|(message_id, author, body, mine, reactions, attachments)| {
                         let reaction_peer_id = peer_id.to_string();
                         div()
                             .flex()
                             .flex_col()
                             .gap_1()
                             .child(message_bubble(author.clone(), body.clone(), *mine))
+                            .children(attachments.iter().map(|metadata| {
+                                let metadata = metadata.clone();
+                                let label = format!("⇩ {} · {}", metadata.name, format_attachment_size(metadata.size));
+                                div()
+                                    .id(format!("attachment-download-{}-{}", message_id, metadata.id))
+                                    .px_3()
+                                    .py_2()
+                                    .rounded_md()
+                                    .bg(rgb(SIDEBAR))
+                                    .border_1()
+                                    .border_color(rgb(BORDER))
+                                    .text_xs()
+                                    .text_color(rgb(ACCENT))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.save_attachment(metadata.clone(), cx);
+                                    }))
+                                    .child(label)
+                            }))
                             .child(
                                 div()
                                     .flex()
@@ -1370,6 +1399,21 @@ impl LarptrixShell {
                     .gap_3()
                     .child(
                         div()
+                            .id("attach-file-button")
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .bg(rgb(SURFACE))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .text_color(rgb(ACCENT))
+                            .text_sm()
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| this.pick_attachments(cx)))
+                            .child("＋"),
+                    )
+                    .child(
+                        div()
                             .id("message-composer")
                             .track_focus(&self.input_focus)
                             .flex_1()
@@ -1397,15 +1441,44 @@ impl LarptrixShell {
                             .px_3()
                             .py_2()
                             .rounded_md()
-                            .bg(rgb(ACCENT))
+                            .bg(if self.sending_message { rgb(SURFACE_HOVER) } else { rgb(ACCENT) })
                             .text_color(rgb(RAIL))
                             .text_sm()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .cursor_pointer()
                             .on_click(cx.listener(|this, _, _, cx| this.send_message(cx)))
-                            .child("Send"),
+                            .child(if self.sending_message { "Sending…" } else { "Send" }),
                     ),
             )
+            .when(!pending_attachment_labels.is_empty(), |element| {
+                element.child(
+                    div()
+                        .mx_5()
+                        .mb_2()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .children(pending_attachment_labels.iter().map(|(index, label)| {
+                            let index = *index;
+                            div()
+                                .id(format!("pending-attachment-{index}"))
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .px_3()
+                                .py_1()
+                                .rounded_md()
+                                .bg(rgb(SURFACE))
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.remove_pending_attachment(index, cx);
+                                }))
+                                .child(format!("{label}   ×"))
+                        })),
+                )
+            })
             .child(
                 div()
                     .px_5()
