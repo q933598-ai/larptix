@@ -7,6 +7,7 @@ use std::{
 
 use base64::{engine::general_purpose::{STANDARD, STANDARD_NO_PAD}, Engine as _};
 use matrix_sdk_crypto::{
+    decrypt_room_key_export, encrypt_room_key_export,
     DecryptionSettings, EncryptionSettings, EncryptionSyncChanges, OlmMachine,
     OlmMachineBuilder, TrustRequirement,
     types::{events::room::encrypted::EncryptedEvent, requests::AnyOutgoingRequest},
@@ -50,6 +51,7 @@ pub struct NativeMatrixCrypto {
     internal_user_id: String,
     matrix_user_id: OwnedUserId,
     device_id: OwnedDeviceId,
+    recovery_key: String,
     machine: OlmMachine,
     decryption_settings: DecryptionSettings,
     outgoing_lock: Mutex<()>,
@@ -96,6 +98,7 @@ impl NativeMatrixCrypto {
             internal_user_id,
             matrix_user_id,
             device_id,
+            recovery_key: recovery_key.clone(),
             machine,
             decryption_settings: DecryptionSettings {
                 sender_device_trust_requirement: TrustRequirement::Untrusted,
@@ -103,6 +106,8 @@ impl NativeMatrixCrypto {
             outgoing_lock: Mutex::new(()),
             room_lock: Mutex::new(()),
         });
+
+        client.restore_room_key_backup().await?;
 
         // Match the web client's bootstrap so a fresh device publishes its
         // identity and one-time keys before attempting to send a message.
@@ -121,6 +126,7 @@ impl NativeMatrixCrypto {
 
         client.process_outgoing_requests().await?;
         client.process_pending_to_device().await?;
+        let _ = client.sync_room_key_backup().await;
         Ok(client)
     }
 
@@ -275,7 +281,45 @@ impl NativeMatrixCrypto {
             self.machine.mark_request_as_sent(&request.txn_id, &response).await
                 .map_err(|error| format!("Could not commit room-key delivery: {error}"))?;
         }
-        self.process_outgoing_requests().await
+        self.process_outgoing_requests().await?;
+        let _ = self.sync_room_key_backup().await;
+        Ok(())
+    }
+
+    async fn restore_room_key_backup(&self) -> Result<(), String> {
+        let response = self.api_get("api/matrix/key-backup").await?;
+        let Some(encrypted) = response.get("encrypted_backup").and_then(Value::as_str) else {
+            return Ok(());
+        };
+        if encrypted.is_empty() {
+            return Ok(());
+        }
+        let exported = decrypt_room_key_export(encrypted.as_bytes(), &self.recovery_key)
+            .map_err(|error| format!("Could not unlock the existing E2E room-key backup: {error}"))?;
+        self.machine.store().import_room_keys(exported, None, |_, _| {})
+            .await.map_err(|error| format!("Could not restore E2E room keys: {error}"))?;
+        Ok(())
+    }
+
+    async fn sync_room_key_backup(&self) -> Result<(), String> {
+        let exported = self.machine.store().export_room_keys(|_| true).await
+            .map_err(|error| format!("Could not export E2E room keys: {error}"))?;
+        if exported.is_empty() {
+            return Ok(());
+        }
+        let encrypted = encrypt_room_key_export(&exported, &self.recovery_key, 100_000)
+            .map_err(|error| format!("Could not encrypt E2E room-key backup: {error}"))?;
+        self.api_request_put_key_backup(encrypted).await
+    }
+
+    async fn api_request_put_key_backup(&self, encrypted_backup: String) -> Result<(), String> {
+        api_request(
+            &self.http,
+            &self.base_url,
+            Method::PUT,
+            "api/matrix/key-backup",
+            Some(json!({ "encrypted_backup": encrypted_backup })),
+        ).await.map(|_| ())
     }
 
     pub async fn process_pending_to_device(&self) -> Result<(), String> {
@@ -342,6 +386,7 @@ impl NativeMatrixCrypto {
         ).await.map_err(|error| format!("Could not process Matrix to-device event: {error}"))?;
         self.process_outgoing_requests().await?;
         self.api_post("api/matrix/to-device/ack", json!({ "event_ids": [event_id] })).await?;
+        let _ = self.sync_room_key_backup().await;
         Ok(())
     }
 
