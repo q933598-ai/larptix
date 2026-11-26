@@ -1,9 +1,8 @@
 use std::{
     path::Path,
     sync::{
-        Arc,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
-        OnceLock,
     },
 };
 
@@ -20,6 +19,7 @@ pub struct MediaPlayback {
     active: AtomicBool,
     playing: AtomicBool,
     finished: AtomicBool,
+    latest_frame: Mutex<Option<Arc<RenderImage>>>,
 }
 
 impl MediaPlayback {
@@ -74,12 +74,17 @@ impl MediaPlayback {
             active: AtomicBool::new(true),
             playing: AtomicBool::new(true),
             finished: AtomicBool::new(false),
+            latest_frame: Mutex::new(None),
         }))
     }
 
     pub fn set_playing(&self, playing: bool) -> Result<(), String> {
         if !self.active.load(Ordering::Acquire) {
             return Err("The media player is closed".into());
+        }
+
+        if playing && self.finished.load(Ordering::Acquire) {
+            self.seek_to(0)?;
         }
 
         self.pipeline
@@ -112,6 +117,19 @@ impl MediaPlayback {
             .map_err(|error| format!("This media stream cannot seek: {error}"))?;
         self.finished.store(false, Ordering::Release);
         Ok(())
+    }
+
+    pub fn poll_video_frame(&self) -> Result<(), String> {
+        if let Some(frame) = self.take_video_frame()? {
+            if let Ok(mut latest) = self.latest_frame.lock() {
+                *latest = Some(frame);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn latest_video_frame(&self) -> Option<Arc<RenderImage>> {
+        self.latest_frame.lock().ok().and_then(|frame| frame.clone())
     }
 
     pub fn position_ms(&self) -> u64 {
@@ -165,7 +183,7 @@ impl MediaPlayback {
             .filter(|size| *size <= MAX_VIDEO_FRAME_BYTES)
             .ok_or_else(|| "The video frame exceeds the 64 MiB display limit".to_string())?;
         let stride = frame.plane_stride()[0];
-        if stride <= 0 || stride as usize < row_bytes {
+        if stride <= 0 || (stride as usize) < row_bytes {
             return Err("The video decoder returned an unsupported frame layout".into());
         }
 
@@ -216,6 +234,9 @@ impl MediaPlayback {
         if self.active.swap(false, Ordering::AcqRel) {
             let _ = self.pipeline.set_state(gstreamer::State::Null);
             self.playing.store(false, Ordering::Release);
+            if let Ok(mut frame) = self.latest_frame.lock() {
+                *frame = None;
+            }
         }
     }
 }
