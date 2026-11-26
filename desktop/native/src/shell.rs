@@ -1,5 +1,14 @@
-use gpui::{div, prelude::*, rgb, px, App, Context, Window};
+use std::sync::Arc;
+
+use async_channel::Sender;
+use gpui::{
+    div, prelude::*, rgb, px, App, Context, FocusHandle, KeyDownEvent, MouseButton, Window,
+};
 use larptrix_client_core::ClientCore;
+use larptrix_protocol::{ClientMessage, ServerMessage};
+use tokio::runtime::Handle;
+
+use crate::network::{self, AppEvent};
 
 const BG: u32 = 0x1b1f2a;
 const RAIL: u32 = 0x171b24;
@@ -11,6 +20,7 @@ const TEXT: u32 = 0xd8dee9;
 const MUTED: u32 = 0x9aa8bd;
 const ACCENT: u32 = 0x88c0d0;
 const GREEN: u32 = 0xa3be8c;
+const RED: u32 = 0xbf616a;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Section {
@@ -22,6 +32,15 @@ enum Section {
 }
 
 impl Section {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Messages => "Messages",
+            Self::Friends => "Friends",
+            Self::Groups => "Groups",
+            Self::Settings => "Settings",
+        }
+    }
+
     fn eyebrow(self) -> &'static str {
         match self {
             Self::Messages => "DIRECT MESSAGES",
@@ -32,23 +51,288 @@ impl Section {
     }
 }
 
-pub struct LarptrixShell {
-    active_section: Section,
-    selected_chat: &'static str,
-    _core: ClientCore,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoginField {
+    Server,
+    AccessKey,
 }
 
-impl Default for LarptrixShell {
-    fn default() -> Self {
-        Self {
-            active_section: Section::Messages,
-            selected_chat: "mira",
-            _core: ClientCore::new(),
-        }
-    }
+pub struct LarptrixShell {
+    runtime: Handle,
+    event_tx: Sender<AppEvent>,
+    core: ClientCore,
+    outgoing: Option<Sender<ClientMessage>>,
+    server_url: String,
+    access_key: String,
+    input_focus: FocusHandle,
+    active_input: Option<LoginField>,
+    connecting: bool,
+    connection_status: String,
+    active_section: Section,
+    selected_peer: Option<String>,
 }
 
 impl LarptrixShell {
+    pub fn new(cx: &mut Context<Self>, runtime: Handle) -> Self {
+        let (event_tx, event_rx) = async_channel::bounded::<AppEvent>(256);
+
+        cx.spawn(async move |this, cx| {
+            while let Ok(event) = event_rx.recv().await {
+                if this
+                    .update(cx, |this, cx| this.handle_event(event, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        Self {
+            runtime,
+            event_tx,
+            core: ClientCore::new(),
+            outgoing: None,
+            server_url: std::env::var("LARPTRIX_SERVER_URL").unwrap_or_default(),
+            access_key: String::new(),
+            input_focus: cx.focus_handle(),
+            active_input: Some(LoginField::Server),
+            connecting: false,
+            connection_status: "Enter your server address and access key".into(),
+            active_section: Section::Messages,
+            selected_peer: None,
+        }
+    }
+
+    fn handle_event(&mut self, event: AppEvent, cx: &mut Context<Self>) {
+        match event {
+            AppEvent::Authenticated { user, outgoing } => {
+                self.connecting = false;
+                self.access_key.clear();
+                self.outgoing = Some(outgoing);
+                self.core.apply_server_message(ServerMessage::Welcome {
+                    user,
+                    users: Vec::new(),
+                });
+                self.connection_status = "Signed in · synchronizing".into();
+                self.active_section = Section::Messages;
+            }
+            AppEvent::Server(message) => {
+                let suggested_peer = match &message {
+                    ServerMessage::Welcome { user, users } => users
+                        .iter()
+                        .find(|candidate| candidate.user_id != user.user_id)
+                        .map(|candidate| candidate.user_id.clone()),
+                    ServerMessage::Directory { users } => self
+                        .core
+                        .state()
+                        .current_user
+                        .as_ref()
+                        .and_then(|me| {
+                            users
+                                .iter()
+                                .find(|candidate| candidate.user_id != me.user_id)
+                        })
+                        .map(|candidate| candidate.user_id.clone()),
+                    _ => None,
+                };
+
+                self.core.apply_server_message(message);
+
+                if self.selected_peer.is_none() {
+                    if let Some(peer_id) = suggested_peer {
+                        self.open_chat(peer_id);
+                    }
+                }
+
+                if self.core.state().current_user.is_some() {
+                    self.connection_status = "Connected".into();
+                }
+            }
+            AppEvent::Status(status) => {
+                self.connection_status = status;
+            }
+            AppEvent::Error(error) => {
+                self.connecting = false;
+                self.connection_status = error;
+            }
+        }
+        cx.notify();
+    }
+
+    fn start_connection(&mut self, cx: &mut Context<Self>) {
+        if self.connecting || self.core.state().current_user.is_some() {
+            return;
+        }
+
+        let server_url = self.server_url.trim().to_string();
+        let access_key = self.access_key.trim().to_string();
+
+        if server_url.is_empty() {
+            self.connection_status = "Enter your Larptrix server URL".into();
+            cx.notify();
+            return;
+        }
+        if access_key.len() != 64 || !access_key.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            self.connection_status = "The access key must contain 64 hexadecimal characters".into();
+            cx.notify();
+            return;
+        }
+
+        self.connecting = true;
+        self.connection_status = "Starting secure session…".into();
+        cx.notify();
+
+        let events = self.event_tx.clone();
+        self.runtime.spawn(async move {
+            if let Err(error) = network::connect(server_url, access_key, events.clone()).await {
+                let _ = events.send(AppEvent::Error(error)).await;
+            }
+        });
+    }
+
+    fn handle_input_key(
+        &mut self,
+        event: &KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(field) = self.active_input else {
+            return;
+        };
+
+        let target = match field {
+            LoginField::Server => &mut self.server_url,
+            LoginField::AccessKey => &mut self.access_key,
+        };
+
+        if event.keystroke.key == "backspace" {
+            target.pop();
+            cx.notify();
+            return;
+        }
+
+        if event.keystroke.key == "enter" {
+            self.start_connection(cx);
+            return;
+        }
+
+        let is_paste = event.keystroke.key == "v"
+            && (event.keystroke.modifiers.control || event.keystroke.modifiers.platform);
+        if is_paste {
+            if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                let remaining = match field {
+                    LoginField::Server => 256usize.saturating_sub(self.server_url.len()),
+                    LoginField::AccessKey => 64usize.saturating_sub(self.access_key.len()),
+                };
+                target.push_str(&text.chars().filter(|ch| !ch.is_control()).take(remaining).collect::<String>());
+                if field == LoginField::Server {
+                    self.server_url = self.server_url.trim().to_string();
+                } else {
+                    self.access_key = self.access_key.chars()
+                        .filter(|ch| ch.is_ascii_hexdigit())
+                        .take(64)
+                        .collect();
+                }
+                cx.notify();
+            }
+            return;
+        }
+
+        if event.keystroke.modifiers.control || event.keystroke.modifiers.platform {
+            return;
+        }
+
+        if let Some(text) = event.keystroke.key_char.as_ref() {
+            let max_len = match field {
+                LoginField::Server => 256,
+                LoginField::AccessKey => 64,
+            };
+            if target.len() + text.len() <= max_len {
+                if field == LoginField::AccessKey
+                    && !text.chars().all(|ch| ch.is_ascii_hexdigit())
+                {
+                    return;
+                }
+                if !text.chars().any(char::is_control) {
+                    target.push_str(text);
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    fn login_field(
+        &self,
+        field: LoginField,
+        label: &'static str,
+        placeholder: &'static str,
+        value: &str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let focused = self.active_input == Some(field);
+        let display_value = if field == LoginField::AccessKey && !value.is_empty() {
+            "•".repeat(value.chars().count())
+        } else {
+            value.to_string()
+        };
+        let contents = if display_value.is_empty() {
+            placeholder.to_string()
+        } else {
+            display_value
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(rgb(MUTED))
+                    .child(label),
+            )
+            .child(
+                div()
+                    .id(match field {
+                        LoginField::Server => "server-url-input",
+                        LoginField::AccessKey => "access-key-input",
+                    })
+                    .track_focus(&self.input_focus)
+                    .w_full()
+                    .p_3()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(if focused { rgb(ACCENT) } else { rgb(BORDER) })
+                    .bg(rgb(BG))
+                    .cursor(gpui::CursorStyle::IBeam)
+                    .text_sm()
+                    .text_color(if contents == placeholder {
+                        rgb(MUTED)
+                    } else {
+                        rgb(TEXT)
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            this.active_input = Some(field);
+                            window.focus(&this.input_focus, cx);
+                            cx.notify();
+                        }),
+                    )
+                    .on_key_down(cx.listener(Self::handle_input_key))
+                    .child(contents),
+            )
+    }
+
+    fn open_chat(&mut self, peer_id: String) {
+        self.selected_peer = Some(peer_id.clone());
+        if let Some(outgoing) = &self.outgoing {
+            let _ = outgoing.try_send(ClientMessage::Open { peer_id });
+        }
+    }
+
     fn server_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .w(px(72.0))
@@ -76,106 +360,67 @@ impl LarptrixShell {
             )
             .child(div().w(px(30.0)).h(px(1.0)).bg(rgb(BORDER)))
             .child(
-                div()
-                    .id("rail-messages")
-                    .size(px(44.0))
-                    .rounded_xl()
-                    .bg(if self.active_section == Section::Messages {
-                        rgb(SURFACE_HOVER)
-                    } else {
-                        rgb(SURFACE)
-                    })
-                    .text_color(rgb(TEXT))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .child("◈")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.active_section = Section::Messages;
-                        cx.notify();
-                    })),
+                rail_button(
+                    "rail-messages",
+                    "◈",
+                    self.active_section == Section::Messages,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.active_section = Section::Messages;
+                    cx.notify();
+                })),
             )
             .child(
-                div()
-                    .id("rail-friends")
-                    .size(px(44.0))
-                    .rounded_xl()
-                    .bg(if self.active_section == Section::Friends {
-                        rgb(SURFACE_HOVER)
-                    } else {
-                        rgb(SURFACE)
-                    })
-                    .text_color(rgb(TEXT))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .child("♙")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.active_section = Section::Friends;
-                        cx.notify();
-                    })),
+                rail_button(
+                    "rail-friends",
+                    "♙",
+                    self.active_section == Section::Friends,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.active_section = Section::Friends;
+                    cx.notify();
+                })),
             )
             .child(
-                div()
-                    .id("rail-groups")
-                    .size(px(44.0))
-                    .rounded_xl()
-                    .bg(if self.active_section == Section::Groups {
-                        rgb(SURFACE_HOVER)
-                    } else {
-                        rgb(SURFACE)
-                    })
-                    .text_color(rgb(TEXT))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .child("▦")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.active_section = Section::Groups;
-                        cx.notify();
-                    })),
+                rail_button(
+                    "rail-groups",
+                    "▦",
+                    self.active_section == Section::Groups,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.active_section = Section::Groups;
+                    cx.notify();
+                })),
             )
             .child(div().flex_1())
             .child(
-                div()
-                    .id("rail-settings")
-                    .size(px(44.0))
-                    .rounded_xl()
-                    .bg(if self.active_section == Section::Settings {
-                        rgb(SURFACE_HOVER)
-                    } else {
-                        rgb(SURFACE)
-                    })
-                    .text_color(rgb(MUTED))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .child("⚙")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.active_section = Section::Settings;
-                        cx.notify();
-                    })),
+                rail_button(
+                    "rail-settings",
+                    "⚙",
+                    self.active_section == Section::Settings,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.active_section = Section::Settings;
+                    cx.notify();
+                })),
             )
     }
 
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let title = match self.active_section {
-            Section::Messages => "Messages",
-            Section::Friends => "Friends",
-            Section::Groups => "Groups",
-            Section::Settings => "Settings",
+        let content = match self.active_section {
+            Section::Messages => self.message_list(cx),
+            Section::Friends => self.friends_list(),
+            Section::Groups => self.groups_list(),
+            Section::Settings => self.settings_list(),
         };
 
-        let content = match self.active_section {
-            Section::Messages => div().flex_1().child(self.message_list(cx)),
-            Section::Friends => div().flex_1().child(self.friends_list()),
-            Section::Groups => div().flex_1().child(self.groups_list()),
-            Section::Settings => div().flex_1().child(self.settings_list()),
-        };
+        let (account_name, username) = self
+            .core
+            .state()
+            .current_user
+            .as_ref()
+            .map(|user| (user.display_name.clone(), user.username.clone()))
+            .unwrap_or_else(|| ("Account".into(), String::new()));
 
         div()
             .w(px(264.0))
@@ -198,7 +443,7 @@ impl LarptrixShell {
                             .text_base()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(rgb(TEXT))
-                            .child(title),
+                            .child(self.active_section.title()),
                     ),
             )
             .child(
@@ -232,7 +477,7 @@ impl LarptrixShell {
                             .text_sm()
                             .font_weight(gpui::FontWeight::BOLD)
                             .text_color(rgb(ACCENT))
-                            .child("Y"),
+                            .child(account_name.chars().next().unwrap_or('U').to_string()),
                     )
                     .child(
                         div()
@@ -245,13 +490,17 @@ impl LarptrixShell {
                                     .text_sm()
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .text_color(rgb(TEXT))
-                                    .child("Your account"),
+                                    .child(account_name),
                             )
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(rgb(MUTED))
-                                    .child("Local preview"),
+                                    .child(if username.is_empty() {
+                                        self.connection_status.clone()
+                                    } else {
+                                        format!("@{username}")
+                                    }),
                             ),
                     )
                     .child(div().size(px(7.0)).rounded_full().bg(rgb(GREEN))),
@@ -259,82 +508,144 @@ impl LarptrixShell {
     }
 
     fn message_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let me_id = self
+            .core
+            .state()
+            .current_user
+            .as_ref()
+            .map(|user| user.user_id.as_str())
+            .unwrap_or_default();
+
+        let rows: Vec<_> = self
+            .core
+            .state()
+            .users
+            .values()
+            .filter(|user| user.user_id != me_id && !user.is_group && !user.is_channel)
+            .map(|user| {
+                let peer_id = user.user_id.clone();
+                let name = user.display_name.clone();
+                let online = user.online;
+                let preview = self
+                    .core
+                    .state()
+                    .chats
+                    .get(&peer_id)
+                    .and_then(|messages| messages.last())
+                    .map(|_| "Encrypted message".to_string())
+                    .unwrap_or_else(|| {
+                        if online {
+                            "Start a conversation".into()
+                        } else {
+                            "Offline".into()
+                        }
+                    });
+                (peer_id, name, preview, online)
+            })
+            .collect();
+
         div()
             .flex_1()
             .flex()
             .flex_col()
             .gap_1()
             .px_2()
-            .child(chat_entry(
-                "mira",
-                "Mira",
-                "Are you still working on it?",
-                "2m",
-                self.selected_chat == "mira",
-                cx.listener(|this, _, _, cx| {
-                    this.selected_chat = "mira";
-                    cx.notify();
-                }),
-            ))
-            .child(chat_entry(
-                "alex",
-                "Alex",
-                "that actually looks great",
-                "18m",
-                self.selected_chat == "alex",
-                cx.listener(|this, _, _, cx| {
-                    this.selected_chat = "alex";
-                    cx.notify();
-                }),
-            ))
-            .child(chat_entry(
-                "sam",
-                "Sam",
-                "sent an attachment",
-                "1h",
-                self.selected_chat == "sam",
-                cx.listener(|this, _, _, cx| {
-                    this.selected_chat = "sam";
-                    cx.notify();
-                }),
-            ))
-            .child(chat_entry(
-                "dev",
-                "Dev corner",
-                "Pinned: project roadmap",
-                "3h",
-                self.selected_chat == "dev",
-                cx.listener(|this, _, _, cx| {
-                    this.selected_chat = "dev";
-                    cx.notify();
-                }),
-            ))
+            .children(rows.into_iter().map(|(peer_id, name, preview, online)| {
+                let selected = self.selected_peer.as_deref() == Some(peer_id.as_str());
+                let click_id = peer_id.clone();
+                chat_entry(
+                    peer_id,
+                    name,
+                    preview,
+                    if online { "ONLINE" } else { "OFFLINE" }.into(),
+                    selected,
+                    cx.listener(move |this, _, _, cx| {
+                        this.active_section = Section::Messages;
+                        this.open_chat(click_id.clone());
+                        cx.notify();
+                    }),
+                )
+            }))
+            .when(self.core.state().users.is_empty(), |element| {
+                element.child(empty_hint("No users in the server directory yet"))
+            })
     }
 
     fn friends_list(&self) -> impl IntoElement {
+        let me_id = self
+            .core
+            .state()
+            .current_user
+            .as_ref()
+            .map(|user| user.user_id.as_str())
+            .unwrap_or_default();
+        let users: Vec<_> = self
+            .core
+            .state()
+            .users
+            .values()
+            .filter(|user| user.user_id != me_id && !user.is_group && !user.is_channel)
+            .map(|user| (user.display_name.clone(), user.username.clone(), user.online))
+            .collect();
+
         div()
             .flex_1()
             .flex()
             .flex_col()
             .gap_2()
             .p_4()
-            .child(section_heading("ONLINE"))
-            .child(person_row("M", "Mira", "Online"))
-            .child(person_row("A", "Alex", "Online"))
-            .child(section_heading("OFFLINE"))
-            .child(person_row("S", "Sam", "Last seen recently"))
+            .child(section_heading("PEOPLE ON THIS SERVER"))
+            .children(users.into_iter().map(|(name, username, online)| {
+                person_row(
+                    name.chars().next().unwrap_or('?').to_string(),
+                    name,
+                    if online {
+                        "Online".into()
+                    } else if username.is_empty() {
+                        "Offline".into()
+                    } else {
+                        format!("@{username}")
+                    },
+                )
+            }))
+            .when(users_is_empty(self.core.state().users.len()), |element| {
+                element.child(empty_hint("No other users were returned by the server"))
+            })
     }
 
     fn groups_list(&self) -> impl IntoElement {
+        let groups: Vec<_> = self
+            .core
+            .state()
+            .groups
+            .values()
+            .map(|group| {
+                (
+                    group.name.clone(),
+                    group.member_ids.len(),
+                    group.is_channel,
+                    group.description.clone(),
+                )
+            })
+            .collect();
+
         div()
             .flex_1()
             .flex()
             .flex_col()
             .gap_2()
             .p_4()
-            .child(group_row("⌘", "Dev corner", "4 members"))
-            .child(group_row("◉", "Game nights", "6 members"))
-            .child(group_row("◇", "Project notes", "3 members"))
+            .children(groups.iter().map(|(name, members, is_channel, description)| {
+                group_row(
+                    if *is_channel { "▤" } else { "⌘" }.into(),
+                    name.clone(),
+                    format!("{members} members"),
+                    description.clone(),
+                )
+            }))
+            .when(groups.is_empty(), |element| {
+                element.child(empty_hint("No groups or channels yet"))
+            })
     }
 
     fn settings_list(&self) -> impl IntoElement {
@@ -344,20 +655,102 @@ impl LarptrixShell {
             .flex_col()
             .gap_3()
             .p_4()
-            .child(settings_row("Account", "Profile and devices"))
-            .child(settings_row("Appearance", "Themes and layout"))
-            .child(settings_row("Voice & video", "Audio and camera"))
-            .child(settings_row("Privacy", "Sessions and encryption"))
-            .child(settings_row("Notifications", "Sounds and alerts"))
+            .child(settings_row("Connection", self.connection_status.clone()))
+            .child(settings_row("Account", "Account profile and active sessions"))
+            .child(settings_row(
+                "End-to-end encryption",
+                "Native device crypto integration is the next milestone",
+            ))
+            .child(settings_row(
+                "Appearance",
+                "Native theme and layout preferences",
+            ))
     }
 
     fn conversation(&self) -> impl IntoElement {
-        let (name, handle, initials, topic) = match self.selected_chat {
-            "alex" => ("Alex", "@alex", "A", "Usually replies quickly"),
-            "sam" => ("Sam", "@sam", "S", "Away"),
-            "dev" => ("Dev corner", "#dev-corner", "D", "A small space for building things"),
-            _ => ("Mira", "@mira", "M", "Online"),
+        let Some(peer_id) = self.selected_peer.as_deref() else {
+            return div()
+                .flex_1()
+                .h_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .bg(rgb(BG))
+                .gap_2()
+                .child(
+                    div()
+                        .text_lg()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(rgb(TEXT))
+                        .child("Your conversations"),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(MUTED))
+                        .child("Choose a person from the sidebar to load chat history"),
+                )
+                .child(
+                    div()
+                        .pt_4()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(self.connection_status.clone()),
+                );
         };
+
+        let Some(peer) = self.core.state().users.get(peer_id) else {
+            return div()
+                .flex_1()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(rgb(BG))
+                .text_color(rgb(MUTED))
+                .child("Loading conversation…");
+        };
+
+        let current_user_id = self
+            .core
+            .state()
+            .current_user
+            .as_ref()
+            .map(|user| user.user_id.as_str())
+            .unwrap_or_default();
+
+        let messages: Vec<_> = self
+            .core
+            .state()
+            .chats
+            .get(peer_id)
+            .into_iter()
+            .flatten()
+            .map(|message| {
+                let mine = message.sender_id == current_user_id;
+                let author = if mine {
+                    "You".to_string()
+                } else {
+                    message.sender_name.clone()
+                };
+                let looks_encrypted = serde_json::from_str::<serde_json::Value>(&message.body).is_ok();
+                let body = if looks_encrypted {
+                    "Encrypted message · waiting for native E2E decryption".to_string()
+                } else {
+                    message.body.clone()
+                };
+                (author, body, mine)
+            })
+            .collect();
+
+        let display_name = peer.display_name.clone();
+        let handle = if peer.username.is_empty() {
+            String::new()
+        } else {
+            format!("@{}", peer.username)
+        };
+        let status = if peer.online { "Online" } else { "Offline" };
 
         div()
             .flex_1()
@@ -384,7 +777,7 @@ impl LarptrixShell {
                             .justify_center()
                             .font_weight(gpui::FontWeight::BOLD)
                             .text_color(rgb(ACCENT))
-                            .child(initials),
+                            .child(display_name.chars().next().unwrap_or('?').to_string()),
                     )
                     .child(
                         div()
@@ -396,13 +789,13 @@ impl LarptrixShell {
                                     .text_sm()
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .text_color(rgb(TEXT))
-                                    .child(name),
+                                    .child(display_name),
                             )
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(rgb(MUTED))
-                                    .child(topic),
+                                    .child(status),
                             ),
                     )
                     .child(div().flex_1())
@@ -421,40 +814,17 @@ impl LarptrixShell {
                     .justify_end()
                     .gap_4()
                     .p_6()
-                    .child(message_bubble(
-                        "Mira",
-                        "Hey! How is the new Larptrix build going?",
-                        false,
-                    ))
-                    .child(message_bubble(
-                        "You",
-                        "I'm rebuilding the desktop client as a native Rust app.",
-                        true,
-                    ))
-                    .child(message_bubble(
-                        name,
-                        "No Electron? That should feel much lighter.",
-                        false,
-                    ))
-                    .child(message_bubble(
-                        "You",
-                        "Exactly. Shared Rust core, separate native and web interfaces.",
-                        true,
-                    ))
-                    .child(
-                        div()
-                            .pt_2()
-                            .text_xs()
-                            .text_color(rgb(MUTED))
-                            .flex()
-                            .justify_center()
-                            .child("Today · local interface preview"),
-                    ),
+                    .children(messages.iter().map(|(author, body, mine)| {
+                        message_bubble(author.clone(), body.clone(), *mine)
+                    }))
+                    .when(messages.is_empty(), |element| {
+                        element.child(empty_hint("No message history in this conversation"))
+                    }),
             )
             .child(
                 div()
                     .mx_5()
-                    .mb_4()
+                    .mb_3()
                     .p_3()
                     .rounded_lg()
                     .border_1()
@@ -465,8 +835,8 @@ impl LarptrixShell {
                     .gap_3()
                     .child(
                         div()
-                            .text_color(rgb(MUTED))
                             .text_sm()
+                            .text_color(rgb(MUTED))
                             .child("＋"),
                     )
                     .child(
@@ -474,24 +844,17 @@ impl LarptrixShell {
                             .flex_1()
                             .text_sm()
                             .text_color(rgb(MUTED))
-                            .child(format!("Message {handle}…")),
-                    )
-                    .child(
-                        div()
-                            .text_color(rgb(MUTED))
-                            .text_sm()
-                            .child("☺"),
+                            .child("Message composer will unlock after native E2E is connected"),
                     )
                     .child(
                         div()
                             .px_3()
                             .py_2()
                             .rounded_md()
-                            .bg(rgb(ACCENT))
-                            .text_color(rgb(RAIL))
+                            .bg(rgb(SURFACE))
                             .text_sm()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("Send"),
+                            .text_color(rgb(MUTED))
+                            .child("E2E"),
                     ),
             )
             .child(
@@ -502,13 +865,22 @@ impl LarptrixShell {
                     .text_color(rgb(MUTED))
                     .flex()
                     .justify_between()
-                    .child("Native GPUI preview · not connected to a server"),
+                    .child(self.connection_status.clone())
+                    .child(if handle.is_empty() {
+                        String::new()
+                    } else {
+                        handle
+                    }),
             )
     }
 }
 
 impl Render for LarptrixShell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.core.state().current_user.is_none() {
+            return self.login_view(cx);
+        }
+
         div()
             .size_full()
             .flex()
@@ -521,11 +893,143 @@ impl Render for LarptrixShell {
     }
 }
 
+impl LarptrixShell {
+    fn login_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgb(BG))
+            .child(
+                div()
+                    .w(px(460.0))
+                    .p_6()
+                    .rounded_xl()
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .bg(rgb(SIDEBAR))
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(
+                        div()
+                            .size(px(48.0))
+                            .rounded_xl()
+                            .bg(rgb(ACCENT))
+                            .text_color(rgb(RAIL))
+                            .text_xl()
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child("L"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_2xl()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .text_color(rgb(TEXT))
+                                    .child("Welcome to Larptrix"),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(rgb(MUTED))
+                                    .child("Connect to your self-hosted server"),
+                            ),
+                    )
+                    .child(self.login_field(
+                        LoginField::Server,
+                        "SERVER ADDRESS",
+                        "https://chat.example.com",
+                        &self.server_url,
+                        cx,
+                    ))
+                    .child(self.login_field(
+                        LoginField::AccessKey,
+                        "ACCESS KEY",
+                        "64-character access key",
+                        &self.access_key,
+                        cx,
+                    ))
+                    .child(
+                        div()
+                            .w_full()
+                            .p_3()
+                            .rounded_md()
+                            .bg(rgb(ACCENT))
+                            .text_color(rgb(RAIL))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.start_connection(cx);
+                            }))
+                            .child(if self.connecting {
+                                "Connecting…"
+                            } else {
+                                "Connect securely"
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(if self.connection_status.contains("failed")
+                                || self.connection_status.contains("invalid")
+                                || self.connection_status.contains("must")
+                                || self.connection_status.contains("failed")
+                            {
+                                rgb(RED)
+                            } else {
+                                rgb(MUTED)
+                            })
+                            .child(self.connection_status.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child("Your access key is used only to create a session. It is not saved to disk."),
+                    ),
+            )
+    }
+}
+
+fn users_is_empty(total_users: usize) -> bool {
+    total_users <= 1
+}
+
+fn rail_button(id: &'static str, icon: &'static str, selected: bool) -> impl IntoElement {
+    div()
+        .id(id)
+        .size(px(44.0))
+        .rounded_xl()
+        .bg(if selected {
+            rgb(SURFACE_HOVER)
+        } else {
+            rgb(SURFACE)
+        })
+        .text_color(rgb(TEXT))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .child(icon)
+}
+
 fn chat_entry(
-    id: &'static str,
-    name: &'static str,
-    preview: &'static str,
-    time: &'static str,
+    id: String,
+    name: String,
+    preview: String,
+    time: String,
     selected: bool,
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
@@ -595,7 +1099,7 @@ fn chat_entry(
         )
 }
 
-fn message_bubble(author: &'static str, body: &'static str, mine: bool) -> impl IntoElement {
+fn message_bubble(author: String, body: String, mine: bool) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -614,7 +1118,11 @@ fn message_bubble(author: &'static str, body: &'static str, mine: bool) -> impl 
                 .px_4()
                 .py_3()
                 .rounded_lg()
-                .bg(if mine { rgb(0x35495b) } else { rgb(SURFACE) })
+                .bg(if mine {
+                    rgb(0x35495b)
+                } else {
+                    rgb(SURFACE)
+                })
                 .text_sm()
                 .text_color(rgb(TEXT))
                 .child(body),
@@ -631,11 +1139,15 @@ fn section_heading(text: &'static str) -> impl IntoElement {
         .child(text)
 }
 
-fn person_row(
-    initial: &'static str,
-    name: &'static str,
-    status: &'static str,
-) -> impl IntoElement {
+fn empty_hint(text: &'static str) -> impl IntoElement {
+    div()
+        .p_3()
+        .text_xs()
+        .text_color(rgb(MUTED))
+        .child(text)
+}
+
+fn person_row(initial: String, name: String, status: String) -> impl IntoElement {
     div()
         .p_2()
         .rounded_md()
@@ -665,9 +1177,10 @@ fn person_row(
 }
 
 fn group_row(
-    icon: &'static str,
-    name: &'static str,
-    members: &'static str,
+    icon: String,
+    name: String,
+    members: String,
+    description: String,
 ) -> impl IntoElement {
     div()
         .p_2()
@@ -692,11 +1205,14 @@ fn group_row(
                 .flex_col()
                 .gap_0p5()
                 .child(div().text_sm().text_color(rgb(TEXT)).child(name))
-                .child(div().text_xs().text_color(rgb(MUTED)).child(members)),
+                .child(div().text_xs().text_color(rgb(MUTED)).child(members))
+                .when(!description.is_empty(), |element| {
+                    element.child(div().text_xs().text_color(rgb(MUTED)).child(description))
+                }),
         )
 }
 
-fn settings_row(title: &'static str, subtitle: &'static str) -> impl IntoElement {
+fn settings_row(title: &'static str, subtitle: String) -> impl IntoElement {
     div()
         .p_3()
         .rounded_md()
