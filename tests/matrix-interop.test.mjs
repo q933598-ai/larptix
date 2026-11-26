@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
@@ -75,4 +75,24 @@ assert.deepEqual(
 
 assert.equal(Buffer.from(fixture.recovery_key, "base64").length, 32);
 
-console.log("Matrix browser/native wire-contract fixtures passed.");
+const attachment = fixture.attachment_crypto;
+const attachmentKey = Buffer.from(attachment.key, "base64");
+const attachmentIv = Buffer.from(attachment.iv, "base64");
+const attachmentCiphertext = Buffer.from(attachment.ciphertext, "base64");
+const decipher = createDecipheriv("aes-256-gcm", attachmentKey, attachmentIv);
+decipher.setAuthTag(attachmentCiphertext.subarray(-16));
+const attachmentPlaintext = Buffer.concat([
+  decipher.update(attachmentCiphertext.subarray(0, -16)),
+  decipher.final(),
+]);
+assert.equal(attachmentPlaintext.toString("utf8"), attachment.plaintext);
+
+const cipher = createCipheriv("aes-256-gcm", attachmentKey, attachmentIv);
+const browserCompatibleCiphertext = Buffer.concat([
+  cipher.update(Buffer.from(attachment.plaintext, "utf8")),
+  cipher.final(),
+  cipher.getAuthTag(),
+]);
+assert.deepEqual(browserCompatibleCiphertext, attachmentCiphertext);
+
+console.log("Matrix and AES-GCM browser/native interoperability fixtures passed.");
