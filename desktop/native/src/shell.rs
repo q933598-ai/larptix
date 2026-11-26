@@ -452,13 +452,27 @@ impl LarptrixShell {
             return;
         };
 
+        let group_members = self
+            .core
+            .state()
+            .groups
+            .get(&peer_id)
+            .map(|group| group.member_ids.clone());
+
         self.composer_text.clear();
         self.connection_status = "Encrypting message…".into();
         cx.notify();
 
         let events: Sender<AppEvent> = Sender::clone(&self.event_tx);
         self.runtime.spawn(async move {
-            match crypto.encrypt_dm_text(&peer_id, &body).await {
+            let encrypted = match group_members {
+                Some(member_ids) => crypto
+                    .encrypt_group_text(&peer_id, &member_ids, &body)
+                    .await,
+                None => crypto.encrypt_dm_text(&peer_id, &body).await,
+            };
+
+            match encrypted {
                 Ok(encrypted_body) => {
                     match outgoing.send(ClientMessage::Send {
                         peer_id,
@@ -657,7 +671,7 @@ impl LarptrixShell {
         let content = match self.active_section {
             Section::Messages => self.message_list(cx).into_any_element(),
             Section::Friends => self.friends_list().into_any_element(),
-            Section::Groups => self.groups_list().into_any_element(),
+            Section::Groups => self.groups_list(cx).into_any_element(),
             Section::Settings => self.settings_list().into_any_element(),
         };
 
@@ -863,7 +877,7 @@ impl LarptrixShell {
             })
     }
 
-    fn groups_list(&self) -> impl IntoElement {
+    fn groups_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let groups: Vec<_> = self
             .core
             .state()
@@ -871,6 +885,7 @@ impl LarptrixShell {
             .values()
             .map(|group| {
                 (
+                    group.group_id.clone(),
                     group.name.clone(),
                     group.member_ids.len(),
                     group.is_channel,
@@ -885,13 +900,22 @@ impl LarptrixShell {
             .flex_col()
             .gap_2()
             .p_4()
-            .children(groups.iter().map(|(name, members, is_channel, description)| {
-                group_row(
-                    if *is_channel { "▤" } else { "⌘" }.into(),
-                    name.clone(),
-                    format!("{members} members"),
-                    description.clone(),
-                )
+            .children(groups.into_iter().map(|(group_id, name, members, is_channel, description)| {
+                let click_id = group_id.clone();
+                div()
+                    .id(format!("group-{group_id}"))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.active_section = Section::Messages;
+                        this.open_chat(click_id.clone());
+                        cx.notify();
+                    }))
+                    .child(group_row(
+                        if is_channel { "▤" } else { "⌘" }.into(),
+                        name,
+                        format!("{members} members"),
+                        description,
+                    ))
             }))
             .when(groups.is_empty(), |element| {
                 element.child(empty_hint("No groups or channels yet"))
