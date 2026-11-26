@@ -77,6 +77,7 @@ pub struct LarptrixShell {
     input_focus: FocusHandle,
     active_input: Option<LoginField>,
     connecting: bool,
+    sending_message: bool,
     connection_status: String,
     active_section: Section,
     selected_peer: Option<String>,
@@ -116,6 +117,7 @@ impl LarptrixShell {
             input_focus: cx.focus_handle(),
             active_input: Some(LoginField::Server),
             connecting: false,
+            sending_message: false,
             connection_status: "Enter your server address and access key".into(),
             active_section: Section::Messages,
             selected_peer: None,
@@ -248,6 +250,17 @@ impl LarptrixShell {
             }
             AppEvent::Status(status) => {
                 self.connection_status = status;
+            }
+            AppEvent::MessageSendFinished { body, success, error } => {
+                self.sending_message = false;
+                if success {
+                    self.composer_text.clear();
+                    self.pending_attachments.clear();
+                    self.connection_status = "Encrypted message sent".into();
+                } else {
+                    self.composer_text = body;
+                    self.connection_status = error.unwrap_or_else(|| "Message could not be sent".into());
+                }
             }
             AppEvent::Error(error) => {
                 self.connecting = false;
@@ -469,7 +482,10 @@ impl LarptrixShell {
 
     fn send_message(&mut self, cx: &mut Context<Self>) {
         let body = self.composer_text.trim().to_string();
-        if body.is_empty() || self.connecting {
+        if (body.is_empty() && self.pending_attachments.is_empty())
+            || self.connecting
+            || self.sending_message
+        {
             return;
         }
         let Some(peer_id) = self.selected_peer.clone() else {
@@ -492,38 +508,80 @@ impl LarptrixShell {
             .groups
             .get(&peer_id)
             .map(|group| group.member_ids.clone());
+        let files = self.pending_attachments.clone();
 
-        self.composer_text.clear();
-        self.connection_status = "Encrypting message…".into();
+        self.sending_message = true;
+        self.connection_status = if files.is_empty() {
+            "Encrypting message…".into()
+        } else {
+            format!("Encrypting and uploading {} attachment(s)…", files.len())
+        };
         cx.notify();
 
         let events: Sender<AppEvent> = Sender::clone(&self.event_tx);
         self.runtime.spawn(async move {
-            let encrypted = match group_members {
-                Some(member_ids) => crypto
-                    .encrypt_group_text(&peer_id, &member_ids, &body)
-                    .await,
-                None => crypto.encrypt_dm_text(&peer_id, &body).await,
-            };
+            let result = async {
+                let mut uploaded_files = Vec::with_capacity(files.len());
+                let mut attachment_ids = Vec::with_capacity(files.len());
 
-            match encrypted {
-                Ok(encrypted_body) => {
-                    match outgoing.send(ClientMessage::Send {
+                for file in files {
+                    let bytes = tokio::fs::read(&file.path)
+                        .await
+                        .map_err(|error| format!("Could not read {}: {error}", file.name))?;
+                    if bytes.len() as u64 != file.size_bytes {
+                        return Err(format!("{} changed after it was selected; choose it again", file.name));
+                    }
+                    let mime = mime_guess::from_path(&file.path)
+                        .first_or_octet_stream()
+                        .essence_str()
+                        .to_string();
+                    let metadata = crypto
+                        .encrypt_attachment_and_upload(&file.name, &mime, &bytes)
+                        .await?;
+                    attachment_ids.push(metadata.id.clone());
+                    uploaded_files.push(serde_json::to_value(metadata)
+                        .map_err(|error| format!("Could not encode attachment metadata: {error}"))?);
+                }
+
+                let mut payload = serde_json::json!({ "text": body });
+                if !uploaded_files.is_empty() {
+                    payload["files"] = serde_json::Value::Array(uploaded_files);
+                }
+
+                let encrypted_body = match group_members {
+                    Some(member_ids) => crypto
+                        .encrypt_group_payload(&peer_id, &member_ids, payload)
+                        .await?,
+                    None => crypto.encrypt_dm_payload(&peer_id, payload).await?,
+                };
+
+                outgoing
+                    .send(ClientMessage::Send {
                         peer_id,
                         body: encrypted_body,
-                        attachment_id: None,
-                        attachment_ids: Vec::new(),
-                    }).await {
-                        Ok(()) => {
-                            let _ = events.send_blocking(AppEvent::Status("Encrypted message sent".into()));
-                        }
-                        Err(error) => {
-                            let _ = events.send_blocking(AppEvent::Error(format!("Could not queue encrypted message: {error}")));
-                        }
-                    }
+                        attachment_id: attachment_ids.first().cloned(),
+                        attachment_ids,
+                    })
+                    .await
+                    .map_err(|error| format!("Could not queue encrypted message: {error}"))?;
+
+                Ok::<(), String>(())
+            }.await;
+
+            match result {
+                Ok(()) => {
+                    let _ = events.send_blocking(AppEvent::MessageSendFinished {
+                        body,
+                        success: true,
+                        error: None,
+                    });
                 }
                 Err(error) => {
-                    let _ = events.send_blocking(AppEvent::Error(format!("Message encryption failed: {error}")));
+                    let _ = events.send_blocking(AppEvent::MessageSendFinished {
+                        body,
+                        success: false,
+                        error: Some(error),
+                    });
                 }
             }
         });
