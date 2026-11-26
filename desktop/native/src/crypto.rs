@@ -258,7 +258,9 @@ impl NativeMatrixCrypto {
             users.push(UserId::parse(format!("@{}:{}", peer, self.server_name))
                 .map_err(|error| format!("Invalid peer Matrix id: {error}"))?);
         }
-        self.machine.update_tracked_users(users.iter().skip(1).map(|user| user.as_ref()))
+        self.machine.update_tracked_users(
+            users.iter().skip(1).map(|user: &OwnedUserId| user.as_ref())
+        )
             .await.map_err(|error| format!("Could not track Matrix devices: {error}"))?;
 
         if users.len() > 1 {
