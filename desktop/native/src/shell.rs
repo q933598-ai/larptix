@@ -384,6 +384,8 @@ impl LarptrixShell {
                     .id(match field {
                         LoginField::Server => "server-url-input",
                         LoginField::AccessKey => "access-key-input",
+                        LoginField::RecoveryKey => "recovery-key-input",
+                        LoginField::Composer => "message-composer",
                     })
                     .track_focus(&self.input_focus)
                     .w_full()
@@ -829,7 +831,9 @@ impl LarptrixShell {
             .child(settings_row("Account", "Account profile and active sessions".to_string()))
             .child(settings_row(
                 "End-to-end encryption",
-                "Native device crypto integration is the next milestone".to_string(),
+                self.crypto.as_ref()
+                    .map(|crypto| format!("Enabled · Matrix device {}", crypto.device_id()))
+                    .unwrap_or_else(|| "Locked · sign in with your E2E recovery key".to_string()),
             ))
             .child(settings_row(
                 "Appearance",
