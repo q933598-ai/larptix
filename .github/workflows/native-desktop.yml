@@ -77,8 +77,8 @@ jobs:
         shell: pwsh
         run: |
           $version = "1.28.9"
-          $root = "C:\\gstreamer\\1.0\\msvc_x86_64"
-          $installer = "$env:RUNNER_TEMP\\gstreamer-1.0-msvc-x86_64-$version.exe"
+          $root = "C:\gstreamer\1.0\msvc_x86_64"
+          $installer = "$env:RUNNER_TEMP\gstreamer-1.0-msvc-x86_64-$version.exe"
           $url = "https://gstreamer.freedesktop.org/pkg/windows/$version/msvc/gstreamer-1.0-msvc-x86_64-$version.exe"
           Invoke-WebRequest -Uri $url -OutFile $installer
           $process = Start-Process -FilePath $installer -Wait -PassThru -ArgumentList @(
@@ -88,11 +88,11 @@ jobs:
           if ($process.ExitCode -ne 0) {
             throw "GStreamer installer failed with exit code $($process.ExitCode)"
           }
-          "$root\\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-          "PKG_CONFIG=$root\\bin\\pkg-config.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "PKG_CONFIG_PATH=$root\\lib\\pkgconfig;$root\\lib\\gstreamer-1.0\\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "PKG_CONFIG=$root\bin\pkg-config.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "PKG_CONFIG_PATH=$root\lib\pkgconfig;$root\lib\gstreamer-1.0\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "GSTREAMER_1_0_ROOT_MSVC_X86_64=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "GST_PLUGIN_PATH=$root\\lib\\gstreamer-1.0" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "GST_PLUGIN_PATH=$root\lib\gstreamer-1.0" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Check native desktop
         run: cargo check --manifest-path desktop/native/Cargo.toml
