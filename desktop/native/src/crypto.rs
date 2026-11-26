@@ -351,9 +351,6 @@ impl NativeMatrixCrypto {
         let _guard = self.backup_lock.lock().await;
         let exported = self.machine.store().export_room_keys(|_| true).await
             .map_err(|error| format!("Could not export E2E room keys: {error}"))?;
-        if exported.is_empty() {
-            return Ok(());
-        }
         let encrypted = encrypt_room_key_export(&exported, &self.recovery_key, 100_000)
             .map_err(|error| format!("Could not encrypt E2E room-key backup: {error}"))?;
         self.api_request_put_key_backup(encrypted).await
