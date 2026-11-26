@@ -11,10 +11,13 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use url::Url;
 
+use crate::crypto::{MatrixToDeviceEvent, NativeMatrixCrypto};
+
 pub enum AppEvent {
     Authenticated {
         user: UserInfo,
         outgoing: Sender<ClientMessage>,
+        crypto: Arc<NativeMatrixCrypto>,
     },
     Server(ServerMessage),
     Status(String),
@@ -30,6 +33,7 @@ struct LoginRequest<'a> {
 pub async fn connect(
     server_address: String,
     access_key: String,
+    recovery_key: String,
     events: Sender<AppEvent>,
 ) -> Result<(), String> {
     let base = normalize_server_url(&server_address)?;
@@ -75,6 +79,19 @@ pub async fn connect(
         .await
         .map_err(|error| format!("Server returned an invalid login response: {error}"))?;
 
+    events
+        .send(AppEvent::Status("Unlocking Matrix E2E device…".into()))
+        .await
+        .map_err(|_| "Application closed".to_string())?;
+
+    let crypto = NativeMatrixCrypto::initialize(
+        http.clone(),
+        base.clone(),
+        user.user_id.clone(),
+        recovery_key,
+    )
+    .await?;
+
     let cookie = jar
         .cookies(&base)
         .ok_or_else(|| "The server did not issue a session cookie".to_string())?
@@ -89,6 +106,7 @@ pub async fn connect(
         .send(AppEvent::Authenticated {
             user,
             outgoing: outgoing.clone(),
+            crypto: crypto.clone(),
         })
         .await
         .map_err(|_| "Application closed".to_string())?;
@@ -139,7 +157,7 @@ pub async fn connect(
                     .await
                     .map_err(|_| "Application closed".to_string())?;
 
-                run_socket(socket, &commands, &events).await;
+                run_socket(socket, &commands, &events, &crypto).await;
                 events
                     .send(AppEvent::Status("Connection lost · reconnecting…".into()))
                     .await
@@ -187,6 +205,7 @@ async fn run_socket(
     >,
     commands: &Receiver<ClientMessage>,
     events: &Sender<AppEvent>,
+    crypto: &Arc<NativeMatrixCrypto>,
 ) {
     let (mut writer, mut reader) = socket.split();
     let mut heartbeat = interval(Duration::from_secs(25));
@@ -198,6 +217,29 @@ async fn run_socket(
                 match frame {
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<ServerMessage>(text.as_str()) {
+                            Ok(ServerMessage::MatrixToDevice {
+                                event_id,
+                                sender_id,
+                                sender_device_id: _,
+                                recipient_device_id,
+                                event_type,
+                                txn_id,
+                                content,
+                            }) => {
+                                let event = MatrixToDeviceEvent {
+                                    event_id,
+                                    sender_id,
+                                    recipient_device_id,
+                                    event_type,
+                                    txn_id,
+                                    content,
+                                };
+                                if let Err(error) = crypto.handle_to_device_event(&event).await {
+                                    let _ = events.send(AppEvent::Status(format!(
+                                        "E2E device sync pending: {error}"
+                                    ))).await;
+                                }
+                            }
                             Ok(message) => {
                                 if events.send(AppEvent::Server(message)).await.is_err() {
                                     break;
