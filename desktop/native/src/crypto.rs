@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::BTreeMap,
     env,
     path::{Path, PathBuf},
@@ -17,7 +18,7 @@ use http::{Response as HttpResponse, StatusCode};
 use reqwest::{Client, Method};
 use ruma::{
     api::{
-        IncomingResponseExt, OutgoingRequestExt,
+        IncomingResponseExt, OutgoingRequestExt, SupportedVersions,
         auth_scheme::SendAccessToken,
         client::{
         keys::{
@@ -277,11 +278,11 @@ impl NativeMatrixCrypto {
         if let Some((request_id, request)) = self.machine.get_missing_sessions(
             users.iter().map(|user| user.as_ref()),
         ).await.map_err(|error| format!("Could not find missing Olm sessions: {error}"))? {
-            let encoded_request = (*request).clone()
+            let encoded_request = request
                 .try_into_http_request::<Vec<u8>>(
                     "https://matrix.invalid",
                     SendAccessToken::Always("serialization-only"),
-                    (),
+                    Cow::Owned(matrix_supported_versions()),
                 )
                 .map_err(|error| format!("Could not encode Matrix key claim: {error}"))?;
             let request_body: Value = serde_json::from_slice(encoded_request.body())
@@ -435,7 +436,7 @@ impl NativeMatrixCrypto {
                         .try_into_http_request::<Vec<u8>>(
                             "https://matrix.invalid",
                             SendAccessToken::Always("serialization-only"),
-                            (),
+                            Cow::Owned(matrix_supported_versions()),
                         )
                         .map_err(|error| format!("Could not encode Matrix key upload: {error}"))?;
                     let request_body: Value = serde_json::from_slice(encoded_request.body())
@@ -523,6 +524,13 @@ impl NativeMatrixCrypto {
         }
         Ok((status, bytes.to_vec()))
     }
+}
+
+fn matrix_supported_versions() -> SupportedVersions {
+    // The Larptrix Matrix API implements the stable v1.0 endpoint paths used
+    // for device-key upload and one-time-key claiming.
+    let versions = vec!["v1.0".to_string()];
+    SupportedVersions::from_parts(&versions, &BTreeMap::new())
 }
 
 fn parse_matrix_response<T>(status: StatusCode, body: &[u8]) -> Result<T, String>
