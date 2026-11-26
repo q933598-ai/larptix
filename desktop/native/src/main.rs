@@ -4,7 +4,8 @@ mod shell;
 use std::future::pending;
 use std::thread;
 
-use gpui::{px, size, App, Application, Bounds, WindowBounds, WindowOptions};
+use gpui::{px, size, App, Bounds, WindowBounds, WindowOptions};
+use gpui_platform::application;
 use shell::LarptrixShell;
 
 fn main() {
@@ -20,7 +21,7 @@ fn main() {
         .spawn(move || runtime.block_on(pending::<()>()))
         .expect("could not start the network thread");
 
-    Application::new().run(move |cx: &mut App| {
+    application().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1280.0), px(820.0)), cx);
         let handle = runtime_handle.clone();
 
