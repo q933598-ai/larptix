@@ -1,7 +1,7 @@
 use async_channel::Sender;
-use std::{collections::{HashMap, HashSet}, sync::Arc};
+use std::{collections::{HashMap, HashSet}, path::PathBuf, sync::Arc};
 use gpui::{
-    div, prelude::*, rgb, px, App, Context, FocusHandle, KeyDownEvent, MouseButton, Window,
+    div, img, prelude::*, rgb, px, App, Context, FocusHandle, KeyDownEvent, MouseButton, Window,
 };
 use larptrix_client_core::ClientCore;
 use larptrix_protocol::{ChatMessage, ClientMessage, ServerMessage};
@@ -59,6 +59,15 @@ enum LoginField {
     Composer,
 }
 
+struct ImageViewer {
+    peer_id: String,
+    message_id: String,
+    images: Vec<EncryptedAttachmentMetadata>,
+    index: usize,
+    loading: bool,
+    error: Option<String>,
+}
+
 pub struct LarptrixShell {
     runtime: Handle,
     event_tx: Sender<AppEvent>,
@@ -67,6 +76,9 @@ pub struct LarptrixShell {
     crypto: Option<Arc<NativeMatrixCrypto>>,
     decrypted_messages: HashMap<(String, String), String>,
     decrypted_attachments: HashMap<(String, String), Vec<EncryptedAttachmentMetadata>>,
+    cached_attachment_paths: HashMap<String, PathBuf>,
+    media_cache_dir: Option<Arc<tempfile::TempDir>>,
+    image_viewer: Option<ImageViewer>,
     pending_attachments: Vec<PickedFile>,
     pending_decryptions: HashMap<(String, String), ChatMessage>,
     decrypting_messages: HashSet<(String, String)>,
@@ -107,6 +119,13 @@ impl LarptrixShell {
             crypto: None,
             decrypted_messages: HashMap::new(),
             decrypted_attachments: HashMap::new(),
+            cached_attachment_paths: HashMap::new(),
+            media_cache_dir: tempfile::Builder::new()
+                .prefix("larptrix-media-")
+                .tempdir()
+                .ok()
+                .map(Arc::new),
+            image_viewer: None,
             pending_attachments: Vec::new(),
             pending_decryptions: HashMap::new(),
             decrypting_messages: HashSet::new(),
