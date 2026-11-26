@@ -39,6 +39,26 @@ sudo pacman -S --needed base-devel cmake clang fontconfig freetype2 glib2 \
 
 On Linux, test both Wayland and X11 sessions; the intended primary path is Wayland/niri. GPUI's upstream Linux build requirements are documented in the [Zed repository](https://github.com/zed-industries/zed/blob/main/script/linux).
 
+On Windows 10/11 x64, install the stable Rust toolchain with the MSVC target and
+the Visual Studio 2022 C++ Build Tools (including the Windows 10/11 SDK). Then run
+the same native client command from PowerShell:
+
+```powershell
+cargo run --manifest-path desktop/native/Cargo.toml
+```
+
+For an optimized local build:
+
+```powershell
+cargo build --release --manifest-path desktop/native/Cargo.toml
+```
+
+The executable is written to
+`desktop/native/target/release/larptrix-native.exe`. Windows is a first-class
+build target for this native client; CI checks and builds the Windows executable
+alongside the Linux build. A signed installer and automatic update channel are
+release work and are not implied by the current CI executable.
+
 ## Current scope
 
 - Native GPUI window and three-panel messenger layout.
