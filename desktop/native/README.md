@@ -106,7 +106,7 @@ Use a test account and a non-sensitive test conversation. Do not share the recov
 
 - Device verification / cross-signing UX and visible trust/fingerprint confirmation.
 - Embedded audio/video playback controls and timeline seeking (audio/video currently open in the system's default player).
-- Inline image thumbnails in the message timeline.
+- Automatic image thumbnail loading before the user opens an attachment (thumbnails are cached after first viewing).
 - Group/channel creation, membership management and richer channel controls.
 - Native audio/video calls, screen sharing and notifications.
 - Signed Windows installer and automatic desktop updates.
