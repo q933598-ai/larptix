@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use async_channel::{Receiver, Sender};
 use futures_util::{SinkExt, StreamExt};
-use larptrix_protocol::{ClientMessage, ServerMessage, UserInfo};
+use larptrix_protocol::{ChatMessage, ClientMessage, ServerMessage, UserInfo};
 use reqwest::cookie::{CookieStore, Jar};
 use serde::Serialize;
 use tokio::time::{interval, sleep};
@@ -25,6 +25,12 @@ pub enum AppEvent {
         message_id: String,
         body: String,
     },
+    DecryptionFailed {
+        peer_id: String,
+        message: ChatMessage,
+        error: String,
+    },
+    E2ESynced,
     Status(String),
     Error(String),
 }
@@ -244,10 +250,15 @@ async fn run_socket(
                                     txn_id,
                                     content,
                                 };
-                                if let Err(error) = crypto.handle_to_device_event(&event).await {
-                                    let _ = events.send(AppEvent::Status(format!(
-                                        "E2E device sync pending: {error}"
-                                    ))).await;
+                                match crypto.handle_to_device_event(&event).await {
+                                    Ok(()) => {
+                                        let _ = events.send(AppEvent::E2ESynced).await;
+                                    }
+                                    Err(error) => {
+                                        let _ = events.send(AppEvent::Status(format!(
+                                            "E2E device sync pending: {error}"
+                                        ))).await;
+                                    }
                                 }
                             }
                             Ok(message) => {
