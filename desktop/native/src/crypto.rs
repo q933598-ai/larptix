@@ -7,6 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Nonce};
 use base64::{engine::general_purpose::{STANDARD, STANDARD_NO_PAD}, Engine as _};
 use matrix_sdk_crypto::{
     decrypt_room_key_export, encrypt_room_key_export,
@@ -16,7 +17,7 @@ use matrix_sdk_crypto::{
 };
 use matrix_sdk_sqlite::SqliteCryptoStore;
 use http::{Response as HttpResponse, StatusCode};
-use reqwest::{Client, Method};
+use reqwest::{multipart, Client, Method};
 use ruma::{
     api::{
         IncomingResponseExt, OutgoingRequestExt, SupportedVersions,
@@ -35,6 +36,7 @@ use ruma::{
     serde::Raw,
     OwnedDeviceId, OwnedUserId, RoomId, UserId,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
@@ -49,6 +51,20 @@ pub struct MatrixToDeviceEvent {
     pub event_type: String,
     pub txn_id: String,
     pub content: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EncryptedAttachmentMetadata {
+    pub id: String,
+    pub url: String,
+    pub key: String,
+    pub iv: String,
+    pub name: String,
+    pub mime: String,
+    pub size: u64,
+    pub stored_size: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compression: Option<String>,
 }
 
 pub struct NativeMatrixCrypto {
@@ -177,6 +193,115 @@ impl NativeMatrixCrypto {
     ) -> Result<String, String> {
         let room_id = self.room_id_for_group(group_id);
         self.encrypt_room_payload(&room_id, member_ids, json!({ "text": text })).await
+    }
+
+    pub async fn encrypt_attachment_and_upload(
+        &self,
+        name: &str,
+        mime: &str,
+        plaintext: &[u8],
+    ) -> Result<EncryptedAttachmentMetadata, String> {
+        if plaintext.is_empty() {
+            return Err("Cannot attach an empty file".into());
+        }
+        if plaintext.len().saturating_add(16) > larptrix_protocol::MAX_ATTACHMENT_BYTES {
+            return Err("Encrypted attachment exceeds the 25 MiB server limit".into());
+        }
+
+        let mut key = [0u8; 32];
+        let mut iv = [0u8; 12];
+        getrandom::getrandom(&mut key)
+            .map_err(|error| format!("Could not generate attachment key: {error}"))?;
+        getrandom::getrandom(&mut iv)
+            .map_err(|error| format!("Could not generate attachment nonce: {error}"))?;
+
+        let ciphertext = encrypt_attachment_bytes(plaintext, &key, &iv)?;
+        let upload_name = format!("{name}.encrypted");
+        let upload_url = self.base_url.join("api/upload")
+            .map_err(|error| format!("Invalid upload URL: {error}"))?;
+        let part = multipart::Part::bytes(ciphertext.clone())
+            .file_name(upload_name)
+            .mime_str("application/octet-stream")
+            .map_err(|error| format!("Could not prepare encrypted attachment: {error}"))?;
+        let form = multipart::Form::new().part("file", part);
+        let response = self.http.post(upload_url)
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|error| format!("Could not upload encrypted attachment: {error}"))?;
+        let status = response.status();
+        let response_body = response.bytes().await
+            .map_err(|error| format!("Could not read upload response: {error}"))?;
+        if !status.is_success() {
+            let detail = String::from_utf8_lossy(&response_body);
+            return Err(format!("Attachment upload failed ({status}): {}", detail.trim()));
+        }
+        let uploaded: Value = serde_json::from_slice(&response_body)
+            .map_err(|error| format!("Server returned an invalid attachment response: {error}"))?;
+        let id = uploaded.get("id").and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "Server did not return an attachment id".to_string())?
+            .to_string();
+        let url = uploaded.get("url").and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| larptrix_protocol::attachment_url(&id));
+
+        Ok(EncryptedAttachmentMetadata {
+            id,
+            url,
+            key: STANDARD.encode(key),
+            iv: STANDARD.encode(iv),
+            name: name.to_string(),
+            mime: if mime.trim().is_empty() {
+                "application/octet-stream".into()
+            } else {
+                mime.to_string()
+            },
+            size: plaintext.len() as u64,
+            stored_size: ciphertext.len() as u64,
+            compression: None,
+        })
+    }
+
+    pub async fn download_and_decrypt_attachment(
+        &self,
+        metadata: &EncryptedAttachmentMetadata,
+    ) -> Result<Vec<u8>, String> {
+        let url = self.base_url.join(&metadata.url)
+            .map_err(|error| format!("Invalid attachment URL: {error}"))?;
+        if url.origin() != self.base_url.origin() {
+            return Err("Refusing to download an attachment from another server".into());
+        }
+
+        let response = self.http.get(url).send().await
+            .map_err(|error| format!("Could not download encrypted attachment: {error}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!("Attachment download failed ({status})"));
+        }
+        let ciphertext = response.bytes().await
+            .map_err(|error| format!("Could not read encrypted attachment: {error}"))?;
+        if ciphertext.len() > larptrix_protocol::MAX_ATTACHMENT_BYTES {
+            return Err("Downloaded attachment exceeds the server size limit".into());
+        }
+
+        let key = STANDARD.decode(&metadata.key)
+            .or_else(|_| STANDARD_NO_PAD.decode(&metadata.key))
+            .map_err(|_| "Attachment key is not valid base64".to_string())?;
+        let iv = STANDARD.decode(&metadata.iv)
+            .or_else(|_| STANDARD_NO_PAD.decode(&metadata.iv))
+            .map_err(|_| "Attachment nonce is not valid base64".to_string())?;
+        let key: [u8; 32] = key.try_into()
+            .map_err(|_| "Attachment key must contain exactly 32 bytes".to_string())?;
+        let iv: [u8; 12] = iv.try_into()
+            .map_err(|_| "Attachment nonce must contain exactly 12 bytes".to_string())?;
+
+        let plaintext = decrypt_attachment_bytes(&ciphertext, &key, &iv)?;
+        if plaintext.len() as u64 != metadata.size {
+            return Err("Decrypted attachment size does not match its metadata".into());
+        }
+        Ok(plaintext)
     }
 
     pub async fn decrypt_message(
@@ -558,6 +683,20 @@ impl NativeMatrixCrypto {
     }
 }
 
+fn encrypt_attachment_bytes(plaintext: &[u8], key: &[u8; 32], iv: &[u8; 12]) -> Result<Vec<u8>, String> {
+    let cipher = Aes256Gcm::new_from_slice(key)
+        .map_err(|_| "Invalid attachment encryption key".to_string())?;
+    cipher.encrypt(Nonce::from_slice(iv), plaintext)
+        .map_err(|_| "Could not encrypt attachment bytes".to_string())
+}
+
+fn decrypt_attachment_bytes(ciphertext: &[u8], key: &[u8; 32], iv: &[u8; 12]) -> Result<Vec<u8>, String> {
+    let cipher = Aes256Gcm::new_from_slice(key)
+        .map_err(|_| "Invalid attachment decryption key".to_string())?;
+    cipher.decrypt(Nonce::from_slice(iv), ciphertext)
+        .map_err(|_| "Attachment authentication failed: wrong key, nonce, or damaged file".to_string())
+}
+
 fn matrix_group_room_id(group_id: &str, server_name: &str) -> String {
     format!("!larpgrp_{group_id}:{server_name}")
 }
@@ -710,6 +849,27 @@ mod interoperability_tests {
 
         assert_eq!(matrix_dm_room_id(server_name, local_user_id, peer_user_id), expected);
         assert_eq!(matrix_dm_room_id(server_name, peer_user_id, local_user_id), expected);
+    }
+
+    #[test]
+    fn aes_gcm_attachment_roundtrip_matches_web_crypto_layout() {
+        let key = [7u8; 32];
+        let iv = [9u8; 12];
+        let plaintext = b"Larptrix encrypted attachment";
+        let ciphertext = encrypt_attachment_bytes(plaintext, &key, &iv).unwrap();
+
+        assert_eq!(ciphertext.len(), plaintext.len() + 16);
+        assert_eq!(decrypt_attachment_bytes(&ciphertext, &key, &iv).unwrap(), plaintext);
+    }
+
+    #[test]
+    fn aes_gcm_attachment_rejects_tampered_ciphertext() {
+        let key = [7u8; 32];
+        let iv = [9u8; 12];
+        let mut ciphertext = encrypt_attachment_bytes(b"protected bytes", &key, &iv).unwrap();
+        ciphertext[0] ^= 0x80;
+
+        assert!(decrypt_attachment_bytes(&ciphertext, &key, &iv).is_err());
     }
 
     #[test]
