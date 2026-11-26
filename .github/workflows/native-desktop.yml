@@ -14,6 +14,7 @@ on:
       - "desktop/native/**"
       - "crates/client-core/**"
       - "crates/protocol/**"
+      - "tests/**"
       - ".github/workflows/native-desktop.yml"
 
 permissions:
