@@ -81,7 +81,10 @@ impl ClientCore {
                 let messages = self.state.chats.entry(peer_id).or_default();
                 upsert_message(messages, message);
             }
-            ServerMessage::MessageDeleted { peer_id, message_id } => {
+            ServerMessage::MessageDeleted {
+                peer_id,
+                message_id,
+            } => {
                 if let Some(messages) = self.state.chats.get_mut(&peer_id) {
                     messages.retain(|message| message.id != message_id);
                 }
@@ -184,7 +187,10 @@ impl ClientCore {
 }
 
 fn upsert_message(messages: &mut Vec<ChatMessage>, incoming: ChatMessage) {
-    if let Some(existing) = messages.iter_mut().find(|message| message.id == incoming.id) {
+    if let Some(existing) = messages
+        .iter_mut()
+        .find(|message| message.id == incoming.id)
+    {
         *existing = incoming;
     } else {
         messages.push(incoming);
