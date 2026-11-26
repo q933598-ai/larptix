@@ -642,6 +642,97 @@ impl LarptrixShell {
         cx.notify();
     }
 
+    fn pick_attachments(&mut self, cx: &mut Context<Self>) {
+        let events = self.event_tx.clone();
+        self.connection_status = "Choose files to attach…".into();
+        cx.notify();
+
+        self.runtime.spawn(async move {
+            let selected = rfd::AsyncFileDialog::new()
+                .set_title("Attach files to Larptrix")
+                .pick_files()
+                .await;
+
+            let mut files = Vec::new();
+            for file in selected.unwrap_or_default() {
+                let path = file.path().to_path_buf();
+                let size_bytes = match tokio::fs::metadata(&path).await {
+                    Ok(metadata) => metadata.len(),
+                    Err(error) => {
+                        let _ = events.send_blocking(AppEvent::Error(format!(
+                            "Could not read {}: {error}",
+                            file.file_name()
+                        )));
+                        continue;
+                    }
+                };
+                files.push(PickedFile {
+                    path,
+                    name: file.file_name(),
+                    size_bytes,
+                });
+            }
+
+            let _ = events.send_blocking(AppEvent::FilesPicked(files));
+        });
+    }
+
+    fn remove_pending_attachment(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.pending_attachments.len() {
+            self.pending_attachments.remove(index);
+            self.connection_status = "Attachment removed".into();
+            cx.notify();
+        }
+    }
+
+    fn save_attachment(
+        &mut self,
+        metadata: EncryptedAttachmentMetadata,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(crypto) = self.crypto.clone() else {
+            self.connection_status = "E2E is locked; attachment cannot be decrypted".into();
+            cx.notify();
+            return;
+        };
+
+        self.connection_status = format!("Downloading and decrypting {}…", metadata.name);
+        cx.notify();
+        let events = self.event_tx.clone();
+        self.runtime.spawn(async move {
+            let result = async {
+                let bytes = crypto.download_and_decrypt_attachment(&metadata).await?;
+                let file_name = std::path::Path::new(&metadata.name)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("attachment")
+                    .to_string();
+                let Some(destination) = rfd::AsyncFileDialog::new()
+                    .set_title("Save decrypted attachment")
+                    .set_file_name(file_name)
+                    .save_file()
+                    .await
+                else {
+                    return Ok::<String, String>("Save cancelled".into());
+                };
+
+                destination.write(&bytes).await
+                    .map_err(|error| format!("Could not save decrypted attachment: {error}"))?;
+                Ok(format!("Saved {}", metadata.name))
+            }.await;
+
+            match result {
+                Ok(status) => {
+                    let _ = events.send_blocking(AppEvent::Status(status));
+                }
+                Err(error) => {
+                    let _ = events.send_blocking(AppEvent::Error(error));
+                }
+            }
+        });
+    }
+
     fn server_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .w(px(72.0))
