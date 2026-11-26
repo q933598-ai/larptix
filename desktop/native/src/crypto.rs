@@ -152,11 +152,7 @@ impl NativeMatrixCrypto {
     }
 
     pub fn room_id_for_dm(&self, peer_id: &str) -> String {
-        let mut ids = [self.internal_user_id.as_str(), peer_id];
-        ids.sort_unstable();
-        let pair = ids.join("\n");
-        let digest = Sha256::digest(format!("{}\n{}", self.server_name, pair).as_bytes());
-        format!("!larpdm_{:x}:{}", digest, self.server_name)
+        matrix_dm_room_id(&self.server_name, &self.internal_user_id, peer_id)
     }
 
     pub fn room_id_for_group(&self, group_id: &str) -> String {
@@ -186,15 +182,14 @@ impl NativeMatrixCrypto {
         let ciphertext = envelope.get("ciphertext")
             .cloned()
             .ok_or_else(|| "Encrypted message is missing ciphertext".to_string())?;
-        let event_id = ["$", message_id].concat();
-        let raw_event_value = json!({
-            "event_id": event_id,
-            "sender": format!("@{}:{}", sender_id, self.server_name),
-            "origin_server_ts": created_at,
-            "room_id": room_id,
-            "type": "m.room.encrypted",
-            "content": ciphertext,
-        });
+        let raw_event_value = matrix_encrypted_event(
+            message_id,
+            sender_id,
+            created_at,
+            room_id,
+            &self.server_name,
+            ciphertext,
+        );
         let raw_event = Raw::new(&raw_event_value)
             .map_err(|error| format!("Invalid encrypted event: {error}"))?
             .cast_unchecked::<EncryptedEvent>();
@@ -234,13 +229,11 @@ impl NativeMatrixCrypto {
             .await.map_err(|error| format!("Could not encrypt message: {error}"))?;
         let ciphertext = serde_json::to_value(encrypted.content)
             .map_err(|error| format!("Could not serialize ciphertext: {error}"))?;
-        Ok(json!({
-            "version": 3,
-            "message_type": "matrix",
-            "sender_device_id": self.device_id.as_str(),
-            "room_id": room_id.as_str(),
-            "ciphertext": ciphertext
-        }).to_string())
+        Ok(matrix_message_envelope(
+            self.device_id.as_str(),
+            room_id.as_str(),
+            ciphertext,
+        ).to_string())
     }
 
     async fn prepare_room(&self, room_id: &str, peer_ids: &[String]) -> Result<(), String> {
@@ -531,6 +524,41 @@ impl NativeMatrixCrypto {
     }
 }
 
+fn matrix_dm_room_id(server_name: &str, first_user_id: &str, second_user_id: &str) -> String {
+    let mut ids = [first_user_id, second_user_id];
+    ids.sort_unstable();
+    let pair = ids.join("\n");
+    let digest = Sha256::digest(format!("{}\n{}", server_name, pair).as_bytes());
+    format!("!larpdm_{:x}:{}", digest, server_name)
+}
+
+fn matrix_message_envelope(sender_device_id: &str, room_id: &str, ciphertext: Value) -> Value {
+    json!({
+        "version": 3,
+        "message_type": "matrix",
+        "sender_device_id": sender_device_id,
+        "room_id": room_id,
+        "ciphertext": ciphertext
+    })
+}
+
+fn matrix_encrypted_event(
+    message_id: &str,
+    sender_id: &str,
+    created_at: i64,
+    room_id: &str,
+    server_name: &str,
+    ciphertext: Value,
+) -> Value {
+    json!({
+        "event_id": format!("${}", message_id),
+        "sender": format!("@{}:{}", sender_id, server_name),
+        "origin_server_ts": created_at,
+        "room_id": room_id,
+        "type": "m.room.encrypted",
+        "content": ciphertext
+    })
+}
 fn matrix_supported_versions() -> SupportedVersions {
     // The Larptrix Matrix API implements the stable v1.0 endpoint paths used
     // for device-key upload and one-time-key claiming.
@@ -622,4 +650,74 @@ async fn api_request(
     }
     serde_json::from_slice(&bytes)
         .map_err(|error| format!("Larptrix E2E API returned invalid JSON: {error}"))
+}
+
+#[cfg(test)]
+mod interoperability_tests {
+    use super::*;
+    use serde_json::Value;
+
+    fn fixture() -> Value {
+        serde_json::from_str(include_str!("../../../tests/fixtures/matrix-interop.json"))
+            .expect("shared Matrix interoperability fixture must be valid JSON")
+    }
+
+    #[test]
+    fn dm_room_id_matches_web_client_golden_vector() {
+        let fixture = fixture();
+        let server_name = fixture["server_name"].as_str().unwrap();
+        let local_user_id = fixture["local_user_id"].as_str().unwrap();
+        let peer_user_id = fixture["peer_user_id"].as_str().unwrap();
+        let expected = fixture["room_id"].as_str().unwrap();
+
+        assert_eq!(matrix_dm_room_id(server_name, local_user_id, peer_user_id), expected);
+        assert_eq!(matrix_dm_room_id(server_name, peer_user_id, local_user_id), expected);
+    }
+
+    #[test]
+    fn browser_and_native_encode_identical_matrix_message_content() {
+        let fixture = fixture();
+        let browser_payload_json = fixture["payload_json"].as_str().unwrap();
+        let browser_content: Raw<AnyMessageLikeEventContent> =
+            serde_json::from_str(browser_payload_json).unwrap();
+        let native_content = Raw::new(&fixture["payload"])
+            .unwrap()
+            .cast_unchecked::<AnyMessageLikeEventContent>();
+
+        assert_eq!(browser_content.json().get(), native_content.json().get());
+        assert_eq!(browser_content.json().get(), browser_payload_json);
+    }
+
+    #[test]
+    fn native_message_envelope_matches_web_client_contract() {
+        let fixture = fixture();
+        let envelope = matrix_message_envelope(
+            fixture["sender_device_id"].as_str().unwrap(),
+            fixture["room_id"].as_str().unwrap(),
+            fixture["ciphertext"].clone(),
+        );
+        assert_eq!(envelope, fixture["envelope"]);
+        assert_eq!(envelope["version"], 3);
+        assert_eq!(envelope["message_type"], "matrix");
+    }
+
+    #[test]
+    fn encrypted_event_reconstruction_matches_web_client_contract() {
+        let fixture = fixture();
+        let event = matrix_encrypted_event(
+            fixture["message_id"].as_str().unwrap(),
+            fixture["sender_id"].as_str().unwrap(),
+            fixture["created_at"].as_i64().unwrap(),
+            fixture["room_id"].as_str().unwrap(),
+            fixture["server_name"].as_str().unwrap(),
+            fixture["ciphertext"].clone(),
+        );
+        assert_eq!(event, fixture["encrypted_event"]);
+    }
+
+    #[test]
+    fn web_recovery_key_shape_is_accepted_by_native_client() {
+        let fixture = fixture();
+        validate_recovery_key(fixture["recovery_key"].as_str().unwrap()).unwrap();
+    }
 }
