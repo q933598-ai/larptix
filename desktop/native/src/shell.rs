@@ -144,7 +144,10 @@ impl LarptrixShell {
                         let current_user_id = self.core.state().current_user.as_ref()
                             .map(|user| user.user_id.as_str())
                             .unwrap_or_default();
-                        let peer_id = if message.sender_id == current_user_id {
+                        let recipient_is_group = self.core.state().groups.contains_key(&message.recipient_id)
+                            || self.core.state().users.get(&message.recipient_id)
+                                .is_some_and(|user| user.is_group || user.is_channel);
+                        let peer_id = if recipient_is_group || message.sender_id == current_user_id {
                             message.recipient_id.clone()
                         } else {
                             message.sender_id.clone()
