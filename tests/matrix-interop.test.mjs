@@ -14,6 +14,10 @@ function browserDmRoomId(serverName, localUserId, peerUserId) {
   return `!larpdm_${digest}:${serverName}`;
 }
 
+function browserGroupRoomId(groupId, serverName) {
+  return `!larpgrp_${groupId}:${serverName}`;
+}
+
 function browserEnvelope(senderDeviceId, roomId, ciphertext) {
   return {
     version: 3,
@@ -37,6 +41,10 @@ function browserEncryptedEvent(messageId, senderId, createdAt, roomId, serverNam
 
 // Golden vectors shared with the native Rust unit tests. These tests verify
 // the browser/native wire contract, not a live Olm/Megolm network exchange.
+assert.equal(
+  browserGroupRoomId(fixture.group_id, fixture.server_name),
+  fixture.group_room_id,
+);
 assert.equal(
   browserDmRoomId(fixture.server_name, fixture.local_user_id, fixture.peer_user_id),
   fixture.room_id,
