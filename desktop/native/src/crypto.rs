@@ -13,9 +13,13 @@ use matrix_sdk_crypto::{
     types::{events::room::encrypted::EncryptedEvent, requests::AnyOutgoingRequest},
 };
 use matrix_sdk_sqlite::SqliteCryptoStore;
+use http::{Response as HttpResponse, StatusCode};
 use reqwest::{Client, Method};
 use ruma::{
-    api::client::{
+    api::{
+        IncomingResponseExt, OutgoingRequestExt,
+        auth_scheme::SendAccessToken,
+        client::{
         keys::{
             claim_keys::v3::Response as KeysClaimResponse,
             get_keys::v3::Response as KeysQueryResponse,
@@ -23,6 +27,7 @@ use ruma::{
         },
         sync::sync_events::DeviceLists,
         to_device::send_event_to_device::v3::Response as ToDeviceResponse,
+        },
     },
     events::{AnyMessageLikeEventContent, AnyToDeviceEvent},
     serde::Raw,
@@ -259,12 +264,11 @@ impl NativeMatrixCrypto {
             let (request_id, request) = self.machine.query_keys_for_users(
                 users.iter().skip(1).map(|user| user.as_ref()),
             );
-            let response = self.api_post("api/matrix/keys/query", json!({
+            let (status, response_body) = self.api_post_raw("api/matrix/keys/query", json!({
                 "device_keys": request.device_keys,
                 "timeout": request.timeout.map(|value| value.as_millis() as u64)
             })).await?;
-            let response: KeysQueryResponse = serde_json::from_value(response)
-                .map_err(|error| format!("Invalid key-query response: {error}"))?;
+            let response: KeysQueryResponse = parse_matrix_response(status, &response_body)?;
             self.machine.mark_request_as_sent(&request_id, &response).await
                 .map_err(|error| format!("Could not apply device keys: {error}"))?;
         }
@@ -273,11 +277,17 @@ impl NativeMatrixCrypto {
         if let Some((request_id, request)) = self.machine.get_missing_sessions(
             users.iter().map(|user| user.as_ref()),
         ).await.map_err(|error| format!("Could not find missing Olm sessions: {error}"))? {
-            let response = self.api_post("api/matrix/keys/claim",
-                serde_json::to_value(request).map_err(|error| error.to_string())?
-            ).await?;
-            let response: KeysClaimResponse = serde_json::from_value(response)
-                .map_err(|error| format!("Invalid key-claim response: {error}"))?;
+            let encoded_request = (*request).clone()
+                .try_into_http_request::<Vec<u8>>(
+                    "https://matrix.invalid",
+                    SendAccessToken::Always("serialization-only"),
+                    (),
+                )
+                .map_err(|error| format!("Could not encode Matrix key claim: {error}"))?;
+            let request_body: Value = serde_json::from_slice(encoded_request.body())
+                .map_err(|error| format!("Could not decode encoded Matrix key claim: {error}"))?;
+            let (status, response_body) = self.api_post_raw("api/matrix/keys/claim", request_body).await?;
+            let response: KeysClaimResponse = parse_matrix_response(status, &response_body)?;
             self.machine.mark_request_as_sent(&request_id, &response).await
                 .map_err(|error| format!("Could not establish Olm sessions: {error}"))?;
         }
@@ -295,9 +305,8 @@ impl NativeMatrixCrypto {
                 "messages": serde_json::to_value(&request.messages)
                     .map_err(|error| format!("Could not encode to-device messages: {error}"))?
             });
-            let response = self.api_post("api/matrix/to-device", body).await?;
-            let response: ToDeviceResponse = serde_json::from_value(response)
-                .map_err(|error| format!("Invalid to-device response: {error}"))?;
+            let (status, response_body) = self.api_post_raw("api/matrix/to-device", body).await?;
+            let response: ToDeviceResponse = parse_matrix_response(status, &response_body)?;
             self.machine.mark_request_as_sent(&request.txn_id, &response).await
                 .map_err(|error| format!("Could not commit room-key delivery: {error}"))?;
         }
@@ -422,31 +431,44 @@ impl NativeMatrixCrypto {
             let request_id = outgoing.request_id().to_owned();
             match outgoing.request() {
                 AnyOutgoingRequest::KeysUpload(request) => {
-                    let response = self.api_post("api/matrix/keys/upload", json!({
+                    let encoded_request = (*request).clone()
+                        .try_into_http_request::<Vec<u8>>(
+                            "https://matrix.invalid",
+                            SendAccessToken::Always("serialization-only"),
+                            (),
+                        )
+                        .map_err(|error| format!("Could not encode Matrix key upload: {error}"))?;
+                    let request_body: Value = serde_json::from_slice(encoded_request.body())
+                        .map_err(|error| format!("Could not decode encoded Matrix key upload: {error}"))?;
+                    let (status, response_body) = self.api_post_raw("api/matrix/keys/upload", json!({
                         "device_id": self.device_id.as_str(),
-                        "request": request
+                        "request": request_body
                     })).await?;
-                    let response: KeysUploadResponse = serde_json::from_value(response)
-                        .map_err(|error| format!("Invalid key-upload response: {error}"))?;
+                    let response: KeysUploadResponse = parse_matrix_response(status, &response_body)?;
                     self.machine.mark_request_as_sent(&request_id, &response).await
                         .map_err(|error| format!("Could not apply key-upload response: {error}"))?;
                 }
                 AnyOutgoingRequest::KeysQuery(request) => {
-                    let response = self.api_post("api/matrix/keys/query", json!({
+                    let (status, response_body) = self.api_post_raw("api/matrix/keys/query", json!({
                         "device_keys": request.device_keys,
                         "timeout": request.timeout.map(|value| value.as_millis() as u64)
                     })).await?;
-                    let response: KeysQueryResponse = serde_json::from_value(response)
-                        .map_err(|error| format!("Invalid key-query response: {error}"))?;
+                    let response: KeysQueryResponse = parse_matrix_response(status, &response_body)?;
                     self.machine.mark_request_as_sent(&request_id, &response).await
                         .map_err(|error| format!("Could not apply key-query response: {error}"))?;
                 }
                 AnyOutgoingRequest::KeysClaim(request) => {
-                    let response = self.api_post("api/matrix/keys/claim",
-                        serde_json::to_value(request).map_err(|error| error.to_string())?
-                    ).await?;
-                    let response: KeysClaimResponse = serde_json::from_value(response)
-                        .map_err(|error| format!("Invalid key-claim response: {error}"))?;
+                    let encoded_request = (*request).clone()
+                        .try_into_http_request::<Vec<u8>>(
+                            "https://matrix.invalid",
+                            SendAccessToken::Always("serialization-only"),
+                            (),
+                        )
+                        .map_err(|error| format!("Could not encode Matrix key claim: {error}"))?;
+                    let request_body: Value = serde_json::from_slice(encoded_request.body())
+                        .map_err(|error| format!("Could not decode encoded Matrix key claim: {error}"))?;
+                    let (status, response_body) = self.api_post_raw("api/matrix/keys/claim", request_body).await?;
+                    let response: KeysClaimResponse = parse_matrix_response(status, &response_body)?;
                     self.machine.mark_request_as_sent(&request_id, &response).await
                         .map_err(|error| format!("Could not apply key-claim response: {error}"))?;
                 }
@@ -458,9 +480,8 @@ impl NativeMatrixCrypto {
                         "messages": serde_json::to_value(&request.messages)
                             .map_err(|error| format!("Could not encode to-device messages: {error}"))?
                     });
-                    let response = self.api_post("api/matrix/to-device", body).await?;
-                    let response: ToDeviceResponse = serde_json::from_value(response)
-                        .map_err(|error| format!("Invalid to-device response: {error}"))?;
+                    let (status, response_body) = self.api_post_raw("api/matrix/to-device", body).await?;
+                    let response: ToDeviceResponse = parse_matrix_response(status, &response_body)?;
                     self.machine.mark_request_as_sent(&request_id, &response).await
                         .map_err(|error| format!("Could not apply to-device response: {error}"))?;
                 }
@@ -480,6 +501,40 @@ impl NativeMatrixCrypto {
     async fn api_post(&self, path: &str, body: Value) -> Result<Value, String> {
         api_request(&self.http, &self.base_url, Method::POST, path, Some(body)).await
     }
+
+    async fn api_post_raw(
+        &self,
+        path: &str,
+        body: Value,
+    ) -> Result<(StatusCode, Vec<u8>), String> {
+        let url = self.base_url.join(path)
+            .map_err(|error| format!("Invalid Larptrix API path: {error}"))?;
+        let response = self.http.post(url).json(&body).send().await
+            .map_err(|error| format!("Could not reach Larptrix E2E API: {error}"))?;
+        let status = response.status();
+        let bytes = response.bytes().await
+            .map_err(|error| format!("Could not read Larptrix E2E response: {error}"))?;
+        if !status.is_success() {
+            return Err(format!(
+                "Larptrix E2E API returned {}: {}",
+                status,
+                String::from_utf8_lossy(&bytes).trim()
+            ));
+        }
+        Ok((status, bytes.to_vec()))
+    }
+}
+
+fn parse_matrix_response<T>(status: StatusCode, body: &[u8]) -> Result<T, String>
+where
+    T: IncomingResponseExt,
+{
+    let response = HttpResponse::builder()
+        .status(status)
+        .body(body)
+        .map_err(|error| format!("Could not build Matrix API response: {error}"))?;
+    T::try_from_http_response(response)
+        .map_err(|error| format!("Could not parse Matrix API response: {error}"))
 }
 
 fn validate_recovery_key(key: &str) -> Result<(), String> {
