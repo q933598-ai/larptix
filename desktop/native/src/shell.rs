@@ -1,5 +1,5 @@
 use async_channel::Sender;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::{HashMap, HashSet}, sync::Arc};
 use gpui::{
     div, prelude::*, rgb, px, App, Context, FocusHandle, KeyDownEvent, MouseButton, Window,
 };
@@ -66,6 +66,8 @@ pub struct LarptrixShell {
     outgoing: Option<Sender<ClientMessage>>,
     crypto: Option<Arc<NativeMatrixCrypto>>,
     decrypted_messages: HashMap<(String, String), String>,
+    pending_decryptions: HashMap<(String, String), ChatMessage>,
+    decrypting_messages: HashSet<(String, String)>,
     server_url: String,
     access_key: String,
     recovery_key: String,
@@ -101,6 +103,8 @@ impl LarptrixShell {
             outgoing: None,
             crypto: None,
             decrypted_messages: HashMap::new(),
+            pending_decryptions: HashMap::new(),
+            decrypting_messages: HashSet::new(),
             server_url: std::env::var("LARPTRIX_SERVER_URL").unwrap_or_default(),
             access_key: String::new(),
             recovery_key: String::new(),
@@ -191,7 +195,22 @@ impl LarptrixShell {
                 }
             }
             AppEvent::Decrypted { peer_id, message_id, body } => {
-                self.decrypted_messages.insert((peer_id, message_id), body);
+                let key = (peer_id, message_id);
+                self.decrypting_messages.remove(&key);
+                self.pending_decryptions.remove(&key);
+                self.decrypted_messages.insert(key, body);
+            }
+            AppEvent::DecryptionFailed { peer_id, message, error } => {
+                let key = (peer_id.clone(), message.id.clone());
+                self.decrypting_messages.remove(&key);
+                self.pending_decryptions.insert(key, message);
+                self.connection_status = format!("Waiting for an E2E room key: {error}");
+            }
+            AppEvent::E2ESynced => {
+                let pending = std::mem::take(&mut self.pending_decryptions);
+                for ((peer_id, _), message) in pending {
+                    self.queue_decryption(peer_id, message);
+                }
             }
             AppEvent::Status(status) => {
                 self.connection_status = status;
@@ -462,19 +481,30 @@ impl LarptrixShell {
         });
     }
 
-    fn queue_decryption(&self, peer_id: String, message: ChatMessage) {
+    fn queue_decryption(&mut self, peer_id: String, message: ChatMessage) {
+        let key = (peer_id.clone(), message.id.clone());
+        if self.decrypted_messages.contains_key(&key) || !self.decrypting_messages.insert(key.clone()) {
+            return;
+        }
+
         let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&message.body) else {
+            self.decrypting_messages.remove(&key);
             return;
         };
         if envelope.get("version").and_then(serde_json::Value::as_i64) != Some(3)
             || envelope.get("message_type").and_then(serde_json::Value::as_str) != Some("matrix")
         {
+            self.decrypting_messages.remove(&key);
             return;
         }
-        let Some(crypto) = self.crypto.clone() else { return; };
+        let Some(crypto) = self.crypto.clone() else {
+            self.decrypting_messages.remove(&key);
+            return;
+        };
+
         let events = self.event_tx.clone();
-        let message_id = message.id;
-        let sender_id = message.sender_id;
+        let message_id = message.id.clone();
+        let sender_id = message.sender_id.clone();
         let created_at = message.created_at;
         self.runtime.spawn(async move {
             match crypto.decrypt_message(&message_id, &sender_id, created_at, &envelope).await {
@@ -489,7 +519,11 @@ impl LarptrixShell {
                     }).await;
                 }
                 Err(error) => {
-                    let _ = events.send(AppEvent::Status(format!("E2E decryption failed: {error}"))).await;
+                    let _ = events.send(AppEvent::DecryptionFailed {
+                        peer_id,
+                        message,
+                        error,
+                    }).await;
                 }
             }
         });
