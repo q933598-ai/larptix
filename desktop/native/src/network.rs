@@ -12,6 +12,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use url::Url;
 
 use crate::crypto::{EncryptedAttachmentMetadata, MatrixToDeviceEvent, NativeMatrixCrypto};
+use crate::media::MediaPlayback;
 
 pub enum AppEvent {
     Authenticated {
@@ -31,6 +32,23 @@ pub enum AppEvent {
         attachment_id: String,
         path: PathBuf,
         error: Option<String>,
+    },
+    MediaOpened {
+        session_id: String,
+        title: String,
+        is_video: bool,
+        player: Arc<MediaPlayback>,
+    },
+    MediaTick {
+        session_id: String,
+        position_ms: u64,
+        duration_ms: u64,
+        finished: bool,
+        error: Option<String>,
+    },
+    MediaFailed {
+        session_id: String,
+        error: String,
     },
     MessageSendFinished {
         body: String,
