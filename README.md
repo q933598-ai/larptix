@@ -135,10 +135,17 @@ in memory, and connects to the authenticated `/ws` endpoint. You can prefill the
 server URL with `LARPTRIX_SERVER_URL`.
 
 The current native client loads the server directory, presence, groups and 1:1 chat
-history. Native E2E decryption and encrypted sending, attachments, calls and
-notifications are not yet implemented. Encrypted message bodies are displayed as
-placeholders, and the composer stays disabled rather than sending plaintext. The
-existing Electron/Tauri builds remain available during migration.
+history. An experimental Matrix E2E implementation now initializes a native device,
+uses an encrypted local SQLite crypto store, restores the web client's encrypted
+Megolm room-key backup, and encrypts/decrypts 1:1 messages using the same Matrix SDK
+protocol. Enter the web client's E2E recovery key at sign-in; this is distinct from
+the account access key.
+
+Live browser/native interoperability and device verification are still being tested.
+Device verification/cross-signing UI, group messaging, encrypted attachments, calls
+and notifications remain unfinished. The native composer sends only after encryption
+succeeds and has no plaintext fallback. The existing Electron/Tauri builds remain
+available during migration.
 
 ## Desktop clients
 
