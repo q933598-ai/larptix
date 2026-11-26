@@ -1,0 +1,49 @@
+{
+  "server_name": "chat.example.test",
+  "local_user_id": "alice",
+  "peer_user_id": "bob",
+  "room_id": "!larpdm_ce1c3e9eff2db1bc604b26c89bfdb1dfa6286a823c1e1b5c594cce6ad757c507:chat.example.test",
+  "payload": {
+    "text": "interop fixture",
+    "reply_to": {
+      "id": "message-1"
+    }
+  },
+  "payload_json": "{\"text\":\"interop fixture\",\"reply_to\":{\"id\":\"message-1\"}}",
+  "message_id": "fixture-message-1",
+  "sender_id": "bob",
+  "created_at": 1730000000123,
+  "sender_device_id": "web-device-fixture",
+  "ciphertext": {
+    "algorithm": "m.megolm.v1.aes-sha2",
+    "sender_key": "fixture-sender-key",
+    "session_id": "fixture-session",
+    "ciphertext": "opaque-fixture-ciphertext"
+  },
+  "recovery_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "envelope": {
+    "version": 3,
+    "message_type": "matrix",
+    "sender_device_id": "web-device-fixture",
+    "room_id": "!larpdm_ce1c3e9eff2db1bc604b26c89bfdb1dfa6286a823c1e1b5c594cce6ad757c507:chat.example.test",
+    "ciphertext": {
+      "algorithm": "m.megolm.v1.aes-sha2",
+      "sender_key": "fixture-sender-key",
+      "session_id": "fixture-session",
+      "ciphertext": "opaque-fixture-ciphertext"
+    }
+  },
+  "encrypted_event": {
+    "event_id": "$fixture-message-1",
+    "sender": "@bob:chat.example.test",
+    "origin_server_ts": 1730000000123,
+    "room_id": "!larpdm_ce1c3e9eff2db1bc604b26c89bfdb1dfa6286a823c1e1b5c594cce6ad757c507:chat.example.test",
+    "type": "m.room.encrypted",
+    "content": {
+      "algorithm": "m.megolm.v1.aes-sha2",
+      "sender_key": "fixture-sender-key",
+      "session_id": "fixture-session",
+      "ciphertext": "opaque-fixture-ciphertext"
+    }
+  }
+}
