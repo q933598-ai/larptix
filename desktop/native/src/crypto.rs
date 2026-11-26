@@ -708,8 +708,13 @@ mod interoperability_tests {
             .unwrap()
             .cast_unchecked::<AnyMessageLikeEventContent>();
 
-        assert_eq!(browser_content.json().get(), native_content.json().get());
-        assert_eq!(browser_content.json().get(), browser_payload_json);
+        // JSON object member order is not semantically significant. The web
+        // serializes insertion order, while serde_json::Value may sort keys.
+        let browser_value: Value = serde_json::from_str(browser_content.json().get()).unwrap();
+        let native_value: Value = serde_json::from_str(native_content.json().get()).unwrap();
+        assert_eq!(browser_value, fixture["payload"]);
+        assert_eq!(native_value, fixture["payload"]);
+        assert_eq!(serde_json::from_str::<Value>(browser_payload_json).unwrap(), native_value);
     }
 
     #[test]
