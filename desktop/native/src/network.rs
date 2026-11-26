@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 use std::time::Duration;
 
 use async_channel::{Receiver, Sender};
@@ -11,7 +11,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use url::Url;
 
-use crate::crypto::{MatrixToDeviceEvent, NativeMatrixCrypto};
+use crate::crypto::{EncryptedAttachmentMetadata, MatrixToDeviceEvent, NativeMatrixCrypto};
 
 pub enum AppEvent {
     Authenticated {
@@ -24,7 +24,9 @@ pub enum AppEvent {
         peer_id: String,
         message_id: String,
         body: String,
+        attachments: Vec<EncryptedAttachmentMetadata>,
     },
+    FilesPicked(Vec<PickedFile>),
     DecryptionFailed {
         peer_id: String,
         message: ChatMessage,
@@ -33,6 +35,13 @@ pub enum AppEvent {
     E2ESynced,
     Status(String),
     Error(String),
+}
+
+#[derive(Clone, Debug)]
+pub struct PickedFile {
+    pub path: PathBuf,
+    pub name: String,
+    pub size_bytes: u64,
 }
 
 #[derive(Serialize)]
