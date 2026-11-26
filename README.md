@@ -116,11 +116,12 @@ For calls between users behind different NATs, configure reachable STUN/TURN in
 some peer-to-peer calls may not connect. TURN credentials should be short-lived;
 do not put a permanent shared secret in this browser-readable setting.
 
-## Native desktop prototype (experimental)
+## Native desktop client (experimental)
 
-The repository now contains an early native desktop shell in `desktop/native/`.
-It uses GPUI for the UI instead of embedding the web client. It is a separate
-Cargo workspace and does not add GPU/window-system dependencies to the VPS server.
+`desktop/native/` is a standalone Rust desktop client rendered with GPUI. It does
+not embed the web client, Chromium, Electron, Tauri, or an OS WebView. It is a
+separate Cargo workspace, so the native GPU/window-system dependencies do not enter
+the VPS server or Docker image.
 
 Run it from the repository root:
 
@@ -128,9 +129,16 @@ Run it from the repository root:
 cargo run --manifest-path desktop/native/Cargo.toml
 ```
 
-This is currently a UI scaffold with placeholder people and messages. It does not
-connect to a server yet. The existing Electron/Tauri packages remain available while
-the native client is developed.
+Enter your server URL and the 64-character access key in the native sign-in screen.
+The app uses the existing `/api/login` endpoint, keeps the returned session cookie
+in memory, and connects to the authenticated `/ws` endpoint. You can prefill the
+server URL with `LARPTRIX_SERVER_URL`.
+
+The current native client loads the server directory, presence, groups and 1:1 chat
+history. Native E2E decryption and encrypted sending, attachments, calls and
+notifications are not yet implemented. Encrypted message bodies are displayed as
+placeholders, and the composer stays disabled rather than sending plaintext. The
+existing Electron/Tauri builds remain available during migration.
 
 ## Desktop clients
 
