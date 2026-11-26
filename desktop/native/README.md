@@ -1,12 +1,13 @@
 # Larptrix Native Desktop
 
-This is the first native desktop UI shell for Larptrix. It is a standalone Cargo workspace so the native GPU/windowing dependencies are not pulled into the VPS server or Docker build.
+This is the standalone native desktop client for Larptrix. It is a separate Cargo workspace, so GPUI's GPU and window-system dependencies are not pulled into the VPS server or Docker build.
 
 ## Stack
 
 - Rust
 - GPUI 0.2.2 (Zed's GPU-accelerated UI framework)
-- larptrix-client-core (shared application state crate)
+- larptrix-client-core (shared application state and protocol state)
+- reqwest + tokio-tungstenite (HTTP session and authenticated WebSocket)
 
 The desktop UI is rendered natively by GPUI. It does not load the web client's HTML and does not embed Electron, Chromium, Tauri, or an OS WebView.
 
@@ -18,7 +19,15 @@ From the repository root:
 cargo run --manifest-path desktop/native/Cargo.toml
 ```
 
-GPUI 0.2.2 is pinned exactly while the native shell is being established. GPUI is pre-1.0, so this avoids silently changing APIs during development. A later version change should be intentional and tested.
+Enter the server URL and the 64-character access key in the native sign-in screen. The key is used to obtain the existing HttpOnly Larptrix session cookie; it is not written to disk. The client then connects to `/ws` with the session cookie and matching `Origin` header. WebSocket reconnects use exponential backoff.
+
+You can prefill the server URL with `LARPTRIX_SERVER_URL`:
+
+```bash
+LARPTRIX_SERVER_URL=https://chat.example.com cargo run --manifest-path desktop/native/Cargo.toml
+```
+
+GPUI 0.2.2 is pinned exactly while the native shell is being established. GPUI is pre-1.0, so changes to it should be intentional and tested.
 
 On Arch/CachyOS, install the normal Rust/C/C++ toolchain and GPUI's Linux development libraries before building. A starting package set is:
 
@@ -32,14 +41,21 @@ On Linux, test both Wayland and X11 sessions; the intended primary path is Wayla
 
 ## Current scope
 
-- Native app window bootstrap.
-- Three-panel messenger shell: navigation rail, conversation sidebar and chat view.
-- Clickable navigation between Messages, Friends, Groups and Settings.
-- Clickable sample conversations.
-- Shared Rust client core is linked into the desktop binary.
+- Native GPUI window and three-panel messenger layout.
+- Native server URL and access-key sign-in form with clipboard paste.
+- Cookie-based HTTP login against the existing Larptrix API.
+- Authenticated WebSocket connection and reconnect loop.
+- Real server directory, groups, presence and DM history loading.
+- Shared Rust client core updates from incoming protocol events.
 
-The visible messages and people are placeholder preview data. The shell is not connected to a Larptrix server yet. The next integration step is to connect the shared core to the existing HTTP and WebSocket protocol, then replace the preview data with real application state.
+## Not implemented yet
+
+- Native Olm/Matrix E2E decryption and encrypted sending.
+- Message composition, uploads, attachments, reactions and read receipts.
+- Native audio/video calls, screen sharing and notifications.
+
+For that reason encrypted message bodies are intentionally shown as an E2E placeholder, and the composer is disabled. The native client does not send plaintext messages.
 
 ## Notes
 
-GPUI is pre-1.0 and its API can change. The dependency is pinned to a released 0.2.2 crate version for reproducible dependency selection. Linux prerequisites are documented by GPUI upstream.
+The web client remains separate and keeps its HTML/CSS UI. GPUI is pre-1.0 and its API can change; the dependency is pinned to a released version for reproducible dependency selection.
