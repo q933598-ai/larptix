@@ -231,7 +231,8 @@ impl NativeMatrixCrypto {
             .map_err(|error| format!("Could not generate attachment nonce: {error}"))?;
 
         let ciphertext = encrypt_attachment_bytes(plaintext, &key, &iv)?;
-        let upload_name = format!("{name}.encrypted");
+        // Keep the original filename only inside the Matrix-encrypted payload.
+        let upload_name = "attachment.encrypted";
         let upload_url = self.base_url.join("api/upload")
             .map_err(|error| format!("Invalid upload URL: {error}"))?;
         let part = multipart::Part::bytes(ciphertext.clone())
