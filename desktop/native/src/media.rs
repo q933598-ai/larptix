@@ -7,6 +7,7 @@ use std::{
 };
 
 use gpui::RenderImage;
+use gstreamer::prelude::*;
 use image::{Frame, ImageBuffer, Rgba};
 use smallvec::smallvec;
 
