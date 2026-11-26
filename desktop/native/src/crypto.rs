@@ -2,6 +2,7 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap},
     env,
+    io::Read,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
@@ -16,6 +17,7 @@ use matrix_sdk_crypto::{
     types::{events::room::encrypted::EncryptedEvent, requests::AnyOutgoingRequest},
 };
 use matrix_sdk_sqlite::SqliteCryptoStore;
+use flate2::read::GzDecoder;
 use http::{Response as HttpResponse, StatusCode};
 use reqwest::{multipart, Client, Method};
 use ruma::{
@@ -287,16 +289,26 @@ impl NativeMatrixCrypto {
             return Err("Refusing to download an attachment from another server".into());
         }
 
-        let response = self.http.get(url).send().await
+        let mut response = self.http.get(url).send().await
             .map_err(|error| format!("Could not download encrypted attachment: {error}"))?;
         let status = response.status();
         if !status.is_success() {
             return Err(format!("Attachment download failed ({status})"));
         }
-        let ciphertext = response.bytes().await
-            .map_err(|error| format!("Could not read encrypted attachment: {error}"))?;
-        if ciphertext.len() > larptrix_protocol::MAX_ATTACHMENT_BYTES {
+        if response.content_length().is_some_and(|size| size > larptrix_protocol::MAX_ATTACHMENT_BYTES as u64) {
             return Err("Downloaded attachment exceeds the server size limit".into());
+        }
+        let mut ciphertext = Vec::new();
+        while let Some(chunk) = response.chunk().await
+            .map_err(|error| format!("Could not read encrypted attachment: {error}"))?
+        {
+            if ciphertext.len().saturating_add(chunk.len()) > larptrix_protocol::MAX_ATTACHMENT_BYTES {
+                return Err("Downloaded attachment exceeds the server size limit".into());
+            }
+            ciphertext.extend_from_slice(&chunk);
+        }
+        if ciphertext.len() as u64 != metadata.stored_size {
+            return Err("Downloaded attachment size does not match its metadata".into());
         }
 
         let key = STANDARD.decode(&metadata.key)
@@ -310,7 +322,23 @@ impl NativeMatrixCrypto {
         let iv: [u8; 12] = iv.try_into()
             .map_err(|_| "Attachment nonce must contain exactly 12 bytes".to_string())?;
 
-        let plaintext = decrypt_attachment_bytes(&ciphertext, &key, &iv)?;
+        let mut plaintext = decrypt_attachment_bytes(&ciphertext, &key, &iv)?;
+        match metadata.compression.as_deref() {
+            Some("gzip") => {
+                let decoder = GzDecoder::new(plaintext.as_slice());
+                let mut decompressed = Vec::new();
+                decoder
+                    .take(larptrix_protocol::MAX_ATTACHMENT_BYTES as u64 + 1)
+                    .read_to_end(&mut decompressed)
+                    .map_err(|error| format!("Could not decompress attachment: {error}"))?;
+                if decompressed.len() > larptrix_protocol::MAX_ATTACHMENT_BYTES {
+                    return Err("Decompressed attachment exceeds the 25 MiB limit".into());
+                }
+                plaintext = decompressed;
+            }
+            Some(other) => return Err(format!("Unsupported attachment compression: {other}")),
+            None => {}
+        }
         if plaintext.len() as u64 != metadata.size {
             return Err("Decrypted attachment size does not match its metadata".into());
         }
