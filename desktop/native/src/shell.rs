@@ -231,6 +231,25 @@ impl LarptrixShell {
                     self.decrypted_attachments.insert(key, attachments);
                 }
             }
+            AppEvent::ImageCached { attachment_id, path, error } => {
+                if let Some(error) = error {
+                    if let Some(viewer) = self.image_viewer.as_mut() {
+                        if viewer.images.get(viewer.index).is_some_and(|image| image.id == attachment_id) {
+                            viewer.loading = false;
+                            viewer.error = Some(error.clone());
+                        }
+                    }
+                    self.connection_status = format!("Image preview failed: {error}");
+                } else {
+                    self.cached_attachment_paths.insert(attachment_id.clone(), path);
+                    if let Some(viewer) = self.image_viewer.as_mut() {
+                        if viewer.images.get(viewer.index).is_some_and(|image| image.id == attachment_id) {
+                            viewer.loading = false;
+                            viewer.error = None;
+                        }
+                    }
+                }
+            }
             AppEvent::FilesPicked(files) => {
                 let mut added = 0usize;
                 for file in files {
@@ -766,6 +785,182 @@ impl LarptrixShell {
             self.connection_status = "Attachment removed".into();
             cx.notify();
         }
+    }
+
+    fn open_attachment(
+        &mut self,
+        peer_id: String,
+        message_id: String,
+        metadata: EncryptedAttachmentMetadata,
+        cx: &mut Context<Self>,
+    ) {
+        if metadata.mime.starts_with("image/") {
+            self.open_image_gallery(peer_id, message_id, metadata.id, cx);
+        } else if metadata.mime.starts_with("video/") || metadata.mime.starts_with("audio/") {
+            self.play_attachment_externally(metadata, cx);
+        } else {
+            self.save_attachment(metadata, cx);
+        }
+    }
+
+    fn open_image_gallery(
+        &mut self,
+        peer_id: String,
+        message_id: String,
+        attachment_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        let images: Vec<_> = self
+            .decrypted_attachments
+            .get(&(peer_id.clone(), message_id.clone()))
+            .into_iter()
+            .flatten()
+            .filter(|attachment| attachment.mime.starts_with("image/"))
+            .cloned()
+            .collect();
+
+        if images.is_empty() {
+            self.connection_status = "No image attachments are available in this message".into();
+            cx.notify();
+            return;
+        }
+
+        let index = images
+            .iter()
+            .position(|image| image.id == attachment_id)
+            .unwrap_or(0);
+        self.image_viewer = Some(ImageViewer {
+            peer_id,
+            message_id,
+            images,
+            index,
+            loading: false,
+            error: None,
+        });
+        self.load_viewer_image(cx);
+        cx.notify();
+    }
+
+    fn load_viewer_image(&mut self, cx: &mut Context<Self>) {
+        let Some(viewer) = self.image_viewer.as_mut() else {
+            return;
+        };
+        let Some(metadata) = viewer.images.get(viewer.index).cloned() else {
+            return;
+        };
+        if self.cached_attachment_paths.contains_key(&metadata.id) {
+            viewer.loading = false;
+            viewer.error = None;
+            return;
+        }
+        let Some(crypto) = self.crypto.clone() else {
+            viewer.loading = false;
+            viewer.error = Some("E2E is locked".into());
+            return;
+        };
+        let Some(cache_dir) = self.media_cache_dir.clone() else {
+            viewer.loading = false;
+            viewer.error = Some("Could not create a private temporary media directory".into());
+            return;
+        };
+
+        viewer.loading = true;
+        viewer.error = None;
+        let events = self.event_tx.clone();
+        self.runtime.spawn(async move {
+            let result = async {
+                let bytes = crypto.download_and_decrypt_attachment(&metadata).await?;
+                let extension = media_extension(&metadata.mime);
+                let path = cache_dir.path().join(format!("{}.{}", uuid::Uuid::new_v4(), extension));
+                tokio::fs::write(&path, bytes)
+                    .await
+                    .map_err(|error| format!("Could not cache decrypted image: {error}"))?;
+                Ok::<PathBuf, String>(path)
+            }.await;
+
+            let event = match result {
+                Ok(path) => AppEvent::ImageCached {
+                    attachment_id: metadata.id,
+                    path,
+                    error: None,
+                },
+                Err(error) => AppEvent::ImageCached {
+                    attachment_id: metadata.id,
+                    path: PathBuf::new(),
+                    error: Some(error),
+                },
+            };
+            let _ = events.send_blocking(event);
+        });
+    }
+
+    fn navigate_image_gallery(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some(viewer) = self.image_viewer.as_mut() else {
+            return;
+        };
+        let len = viewer.images.len();
+        if len < 2 {
+            return;
+        }
+        viewer.index = (viewer.index as isize + delta).rem_euclid(len as isize) as usize;
+        viewer.loading = false;
+        viewer.error = None;
+        self.load_viewer_image(cx);
+        cx.notify();
+    }
+
+    fn close_image_viewer(&mut self, cx: &mut Context<Self>) {
+        self.image_viewer = None;
+        cx.notify();
+    }
+
+    fn play_attachment_externally(
+        &mut self,
+        metadata: EncryptedAttachmentMetadata,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(crypto) = self.crypto.clone() else {
+            self.connection_status = "E2E is locked; media cannot be decrypted".into();
+            cx.notify();
+            return;
+        };
+        let Some(cache_dir) = self.media_cache_dir.clone() else {
+            self.connection_status = "Could not create a private temporary media directory".into();
+            cx.notify();
+            return;
+        };
+
+        self.connection_status = format!("Preparing {}…", metadata.name);
+        cx.notify();
+        let events = self.event_tx.clone();
+        self.runtime.spawn(async move {
+            let result = async {
+                let bytes = crypto.download_and_decrypt_attachment(&metadata).await?;
+                let path = cache_dir.path().join(format!(
+                    "{}.{}",
+                    uuid::Uuid::new_v4(),
+                    media_extension(&metadata.mime),
+                ));
+                tokio::fs::write(&path, bytes)
+                    .await
+                    .map_err(|error| format!("Could not cache decrypted media: {error}"))?;
+                open::that(&path)
+                    .map_err(|error| format!("Could not launch the system media player: {error}"))?;
+                Ok::<(), String>(())
+            }.await;
+
+            match result {
+                Ok(()) => {
+                    let _ = events.send_blocking(AppEvent::Status(format!(
+                        "Opened {} in the system media player",
+                        metadata.name
+                    )));
+                }
+                Err(error) => {
+                    let _ = events.send_blocking(AppEvent::Error(error));
+                }
+            }
+        });
     }
 
     fn save_attachment(
