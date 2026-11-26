@@ -1,5 +1,10 @@
 use async_channel::Sender;
-use std::{collections::{HashMap, HashSet}, path::PathBuf, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 use gpui::{
     div, img, prelude::*, rgb, px, App, Context, FocusHandle, KeyDownEvent, MouseButton, Window,
 };
@@ -8,6 +13,7 @@ use larptrix_protocol::{ChatMessage, ClientMessage, ServerMessage};
 use tokio::runtime::Handle;
 
 use crate::crypto::{EncryptedAttachmentMetadata, NativeMatrixCrypto};
+use crate::media::MediaPlayback;
 use crate::network::{self, AppEvent, PickedFile};
 
 const BG: u32 = 0x1b1f2a;
@@ -78,6 +84,19 @@ pub struct LarptrixShell {
     cached_attachment_paths: HashMap<String, PathBuf>,
     media_cache_dir: Option<Arc<tempfile::TempDir>>,
     image_viewer: Option<ImageViewer>,
+    media_player: Option<Arc<MediaPlayback>>,
+    media_session_id: Option<String>,
+    media_title: String,
+    media_is_video: bool,
+    media_path: Option<PathBuf>,
+    media_frame: Option<Arc<gpui::RenderImage>>,
+    media_position_ms: u64,
+    media_duration_ms: u64,
+    media_volume: f32,
+    media_playing: bool,
+    media_finished: bool,
+    media_loading: bool,
+    media_error: Option<String>,
     pending_attachments: Vec<PickedFile>,
     pending_decryptions: HashMap<(String, String), ChatMessage>,
     decrypting_messages: HashSet<(String, String)>,
@@ -125,6 +144,19 @@ impl LarptrixShell {
                 .ok()
                 .map(Arc::new),
             image_viewer: None,
+            media_player: None,
+            media_session_id: None,
+            media_title: String::new(),
+            media_is_video: false,
+            media_path: None,
+            media_frame: None,
+            media_position_ms: 0,
+            media_duration_ms: 0,
+            media_volume: 0.8,
+            media_playing: false,
+            media_finished: false,
+            media_loading: false,
+            media_error: None,
             pending_attachments: Vec::new(),
             pending_decryptions: HashMap::new(),
             decrypting_messages: HashSet::new(),
@@ -247,6 +279,50 @@ impl LarptrixShell {
                             viewer.error = None;
                         }
                     }
+                }
+            }
+            AppEvent::MediaOpened { session_id, title, is_video, path, player } => {
+                if self.media_session_id.as_deref() != Some(session_id.as_str()) {
+                    player.stop();
+                    let _ = std::fs::remove_file(path);
+                } else {
+                    self.media_loading = false;
+                    self.media_title = title;
+                    self.media_is_video = is_video;
+                    self.media_path = Some(path);
+                    self.media_frame = None;
+                    self.media_position_ms = 0;
+                    self.media_duration_ms = player.duration_ms();
+                    self.media_playing = player.is_playing();
+                    self.media_finished = false;
+                    self.media_error = None;
+                    player.set_volume(self.media_volume);
+                    self.media_player = Some(player.clone());
+                    self.start_media_monitor(session_id, player);
+                }
+            }
+            AppEvent::MediaTick { session_id, position_ms, duration_ms, finished, error } => {
+                if self.media_session_id.as_deref() == Some(session_id.as_str()) {
+                    self.media_position_ms = position_ms;
+                    self.media_duration_ms = duration_ms.max(self.media_duration_ms);
+                    self.media_finished = finished;
+                    if finished {
+                        self.media_playing = false;
+                    }
+                    if let Some(player) = self.media_player.as_ref() {
+                        self.media_frame = player.latest_video_frame();
+                    }
+                    if let Some(error) = error {
+                        self.media_error = Some(error);
+                        self.media_playing = false;
+                    }
+                }
+            }
+            AppEvent::MediaFailed { session_id, error } => {
+                if self.media_session_id.as_deref() == Some(session_id.as_str()) {
+                    self.media_loading = false;
+                    self.media_error = Some(error);
+                    self.media_playing = false;
                 }
             }
             AppEvent::FilesPicked(files) => {
