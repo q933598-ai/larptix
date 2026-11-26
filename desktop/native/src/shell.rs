@@ -1774,6 +1774,7 @@ impl LarptrixShell {
             .unwrap_or_else(|| "Image preview".into());
         let count = format!("{} / {}", viewer.index + 1, viewer.images.len());
         let path = current.and_then(|image| self.cached_attachment_paths.get(&image.id)).cloned();
+        let has_path = path.is_some();
         let loading = viewer.loading;
         let error = viewer.error.clone();
         let can_navigate = viewer.images.len() > 1;
@@ -1854,7 +1855,7 @@ impl LarptrixShell {
                                 .child(error.unwrap_or_default()),
                         )
                     })
-                    .when(path.is_none() && !loading && error.is_none(), |element| {
+                    .when(!has_path && !loading && error.is_none(), |element| {
                         element.child(
                             div()
                                 .text_sm()
@@ -2120,6 +2121,26 @@ fn chat_entry(
                         .child(preview),
                 ),
         )
+}
+
+fn media_extension(mime: &str) -> &'static str {
+    match mime {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/bmp" => "bmp",
+        "image/avif" => "avif",
+        "video/mp4" => "mp4",
+        "video/webm" => "webm",
+        "video/quicktime" => "mov",
+        "audio/mpeg" => "mp3",
+        "audio/mp4" => "m4a",
+        "audio/ogg" => "ogg",
+        "audio/wav" | "audio/x-wav" => "wav",
+        "audio/flac" => "flac",
+        _ => "bin",
+    }
 }
 
 fn format_attachment_size(size: u64) -> String {
