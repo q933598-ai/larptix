@@ -1541,7 +1541,23 @@ impl LarptrixShell {
                             })
                             .children(attachments.iter().map(|metadata| {
                                 let metadata = metadata.clone();
-                                let label = format!("⇩ {} · {}", metadata.name, format_attachment_size(metadata.size));
+                                let target_peer = reaction_peer_id.clone();
+                                let target_message = message_id.clone();
+                                let (icon, action) = if metadata.mime.starts_with("image/") {
+                                    ("▧", "View")
+                                } else if metadata.mime.starts_with("video/") {
+                                    ("▶", "Play")
+                                } else if metadata.mime.starts_with("audio/") {
+                                    ("♫", "Play")
+                                } else {
+                                    ("⇩", "Save")
+                                };
+                                let label = format!(
+                                    "{icon}  {}  ·  {}  ·  {}",
+                                    action,
+                                    metadata.name,
+                                    format_attachment_size(metadata.size),
+                                );
                                 div()
                                     .id(format!("attachment-download-{}-{}", message_id, metadata.id))
                                     .px_3()
@@ -1554,7 +1570,12 @@ impl LarptrixShell {
                                     .text_color(rgb(ACCENT))
                                     .cursor_pointer()
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.save_attachment(metadata.clone(), cx);
+                                        this.open_attachment(
+                                            target_peer.clone(),
+                                            target_message.clone(),
+                                            metadata.clone(),
+                                            cx,
+                                        );
                                     }))
                                     .child(label)
                             }))
@@ -1730,15 +1751,160 @@ impl Render for LarptrixShell {
                 .flex_row()
                 .bg(rgb(BG))
                 .text_color(rgb(TEXT))
+                .relative()
                 .child(self.server_rail(cx))
                 .child(self.sidebar(cx))
                 .child(self.conversation(cx))
+                .when(self.image_viewer.is_some(), |element| {
+                    element.child(self.image_viewer_overlay(cx))
+                })
                 .into_any_element()
         }
     }
 }
 
 impl LarptrixShell {
+    fn image_viewer_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(viewer) = self.image_viewer.as_ref() else {
+            return div().into_any_element();
+        };
+        let current = viewer.images.get(viewer.index);
+        let title = current
+            .map(|image| image.name.clone())
+            .unwrap_or_else(|| "Image preview".into());
+        let count = format!("{} / {}", viewer.index + 1, viewer.images.len());
+        let path = current.and_then(|image| self.cached_attachment_paths.get(&image.id)).cloned();
+        let loading = viewer.loading;
+        let error = viewer.error.clone();
+        let can_navigate = viewer.images.len() > 1;
+
+        div()
+            .absolute()
+            .inset_0()
+            .occlude()
+            .bg(rgb(0x10141d))
+            .flex()
+            .flex_col()
+            .p_4()
+            .gap_3()
+            .child(
+                div()
+                    .h(px(48.0))
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(rgb(TEXT))
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child(count),
+                    )
+                    .child(
+                        div()
+                            .id("close-image-viewer")
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .bg(rgb(SURFACE))
+                            .text_sm()
+                            .text_color(rgb(TEXT))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.close_image_viewer(cx);
+                            }))
+                            .child("Close  ×"),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when_some(path, |element, path| {
+                        element.child(
+                            img(path)
+                                .max_w_full()
+                                .max_h(px(820.0))
+                                .object_fit(gpui::ObjectFit::Contain),
+                        )
+                    })
+                    .when(loading, |element| {
+                        element.child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(MUTED))
+                                .child("Decrypting image…"),
+                        )
+                    })
+                    .when(error.is_some(), |element| {
+                        element.child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(RED))
+                                .child(error.unwrap_or_default()),
+                        )
+                    })
+                    .when(path.is_none() && !loading && error.is_none(), |element| {
+                        element.child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(MUTED))
+                                .child("Image is not available"),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .h(px(48.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap_4()
+                    .when(can_navigate, |element| {
+                        element
+                            .child(
+                                div()
+                                    .id("image-gallery-previous")
+                                    .px_4()
+                                    .py_2()
+                                    .rounded_md()
+                                    .bg(rgb(SURFACE))
+                                    .text_color(rgb(TEXT))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.navigate_image_gallery(-1, cx);
+                                    }))
+                                    .child("‹  Previous"),
+                            )
+                            .child(
+                                div()
+                                    .id("image-gallery-next")
+                                    .px_4()
+                                    .py_2()
+                                    .rounded_md()
+                                    .bg(rgb(SURFACE))
+                                    .text_color(rgb(TEXT))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.navigate_image_gallery(1, cx);
+                                    }))
+                                    .child("Next  ›"),
+                            )
+                    }),
+            )
+            .into_any_element()
+    }
+
     fn login_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
