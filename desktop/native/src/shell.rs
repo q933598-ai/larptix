@@ -691,14 +691,14 @@ impl LarptrixShell {
             .gap_3()
             .p_4()
             .child(settings_row("Connection", self.connection_status.clone()))
-            .child(settings_row("Account", "Account profile and active sessions"))
+            .child(settings_row("Account", "Account profile and active sessions".to_string()))
             .child(settings_row(
                 "End-to-end encryption",
-                "Native device crypto integration is the next milestone",
+                "Native device crypto integration is the next milestone".to_string(),
             ))
             .child(settings_row(
                 "Appearance",
-                "Native theme and layout preferences",
+                "Native theme and layout preferences".to_string(),
             ))
     }
 
@@ -839,7 +839,7 @@ impl LarptrixShell {
                         div()
                             .text_xs()
                             .text_color(rgb(MUTED))
-                            .child(handle),
+                            .child(handle.clone()),
                     ),
             )
             .child(
@@ -997,6 +997,7 @@ impl LarptrixShell {
                     ))
                     .child(
                         div()
+                            .id("connect-button")
                             .w_full()
                             .p_3()
                             .rounded_md()
