@@ -1316,7 +1316,9 @@ impl LarptrixShell {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(message_bubble(author.clone(), body.clone(), *mine))
+                            .when(!body.is_empty(), |element| {
+                                element.child(message_bubble(author.clone(), body.clone(), *mine))
+                            })
                             .children(attachments.iter().map(|metadata| {
                                 let metadata = metadata.clone();
                                 let label = format!("⇩ {} · {}", metadata.name, format_attachment_size(metadata.size));
