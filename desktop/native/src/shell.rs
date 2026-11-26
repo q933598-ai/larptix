@@ -1548,6 +1548,7 @@ impl LarptrixShell {
                                 let metadata = metadata.clone();
                                 let target_peer = reaction_peer_id.clone();
                                 let target_message = message_id.clone();
+                                let cached_preview = self.cached_attachment_paths.get(&metadata.id).cloned();
                                 let (icon, action) = if metadata.mime.starts_with("image/") {
                                     ("▧", "View")
                                 } else if metadata.mime.starts_with("video/") {
@@ -1574,6 +1575,14 @@ impl LarptrixShell {
                                     .text_xs()
                                     .text_color(rgb(ACCENT))
                                     .cursor_pointer()
+                                    .when_some(cached_preview, |element, path| {
+                                        element.child(
+                                            img(path)
+                                                .w(px(220.0))
+                                                .h(px(150.0))
+                                                .object_fit(gpui::ObjectFit::Contain),
+                                        )
+                                    })
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.open_attachment(
                                             target_peer.clone(),
