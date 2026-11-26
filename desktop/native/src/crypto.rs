@@ -80,6 +80,12 @@ impl NativeMatrixCrypto {
         let account_dir = crypto_data_dir(&internal_user_id)?;
         std::fs::create_dir_all(&account_dir)
             .map_err(|error| format!("Could not create encrypted key directory: {error}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&account_dir, std::fs::Permissions::from_mode(0o700))
+                .map_err(|error| format!("Could not secure encrypted key directory: {error}"))?;
+        }
         let device_id = load_or_create_device_id(&account_dir)?;
         let store_dir = account_dir.join("matrix-store");
         let store = SqliteCryptoStore::open(&store_dir, Some(&recovery_key))
@@ -504,6 +510,12 @@ fn load_or_create_device_id(directory: &Path) -> Result<OwnedDeviceId, String> {
     let value = Uuid::new_v4().simple().to_string();
     std::fs::write(&path, &value)
         .map_err(|error| format!("Could not save Matrix device id: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("Could not secure Matrix device id: {error}"))?;
+    }
     Ok(value.into())
 }
 
