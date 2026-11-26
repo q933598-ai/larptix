@@ -8,5 +8,5 @@ description = "Native Larptrix desktop client built with GPUI"
 [workspace]
 
 [dependencies]
-gpui = { version = "0.2.2" }
+gpui = { version = "=0.2.2" }
 larptrix-client-core = { path = "../../crates/client-core" }
