@@ -32,6 +32,11 @@ jobs:
         with:
           components: rustfmt
 
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Install GPUI Linux dependencies
         run: |
           sudo apt-get update
@@ -49,6 +54,9 @@ jobs:
 
       - name: Test shared client core
         run: cargo test -p larptrix-client-core
+
+      - name: Test browser/native protocol fixtures
+        run: node --test tests/matrix-interop.test.mjs
 
   windows-native:
     name: Check native GPUI app (Windows)
