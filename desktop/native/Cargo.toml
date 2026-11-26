@@ -10,6 +10,7 @@ description = "Native Larptrix desktop client built with GPUI"
 [dependencies]
 async-channel = "2.5"
 futures-util = "0.3"
+http = "1"
 base64 = "0.22"
 matrix-sdk-crypto = { version = "=0.19.1", features = ["automatic-room-key-forwarding"] }
 matrix-sdk-sqlite = { version = "=0.19.1", default-features = false, features = ["crypto-store", "bundled"] }
