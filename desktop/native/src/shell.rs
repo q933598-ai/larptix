@@ -536,6 +536,50 @@ impl LarptrixShell {
         }
     }
 
+    fn toggle_reaction(
+        &mut self,
+        peer_id: String,
+        message_id: String,
+        emoji: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(outgoing) = self.outgoing.clone() else {
+            self.connection_status = "Not connected to the message transport".into();
+            cx.notify();
+            return;
+        };
+
+        let add = self
+            .core
+            .state()
+            .chats
+            .get(&peer_id)
+            .and_then(|messages| messages.iter().find(|message| message.id == message_id))
+            .and_then(|message| {
+                message
+                    .reactions
+                    .iter()
+                    .find(|reaction| reaction.emoji == emoji)
+            })
+            .map(|reaction| !reaction.reacted)
+            .unwrap_or(true);
+
+        if outgoing
+            .try_send(ClientMessage::React {
+                peer_id,
+                message_id,
+                emoji,
+                add,
+            })
+            .is_err()
+        {
+            self.connection_status = "Could not queue reaction · try again".into();
+        } else {
+            self.connection_status = "Updating reaction…".into();
+        }
+        cx.notify();
+    }
+
     fn server_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .w(px(72.0))
@@ -953,7 +997,13 @@ impl LarptrixShell {
                             message.body.clone()
                         }
                     });
-                (author, body, mine)
+                (
+                    message.id.clone(),
+                    author,
+                    body,
+                    mine,
+                    message.reactions.clone(),
+                )
             })
             .collect();
 
@@ -1027,8 +1077,57 @@ impl LarptrixShell {
                     .justify_end()
                     .gap_4()
                     .p_6()
-                    .children(messages.iter().map(|(author, body, mine)| {
-                        message_bubble(author.clone(), body.clone(), *mine)
+                    .children(messages.iter().map(|(message_id, author, body, mine, reactions)| {
+                        let reaction_peer_id = peer_id.to_string();
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(message_bubble(author.clone(), body.clone(), *mine))
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_1()
+                                    .children(["👍", "❤️", "😂", "🔥"].into_iter().map(|emoji| {
+                                        let count = reactions
+                                            .iter()
+                                            .find(|reaction| reaction.emoji == emoji)
+                                            .map(|reaction| reaction.count)
+                                            .unwrap_or(0);
+                                        let reacted = reactions
+                                            .iter()
+                                            .any(|reaction| reaction.emoji == emoji && reaction.reacted);
+                                        let label = if count == 0 {
+                                            emoji.to_string()
+                                        } else {
+                                            format!("{emoji} {count}")
+                                        };
+                                        let peer_id = reaction_peer_id.clone();
+                                        let message_id = message_id.clone();
+                                        let emoji = emoji.to_string();
+
+                                        div()
+                                            .id(format!("reaction-{message_id}-{emoji}"))
+                                            .px_2()
+                                            .py_1()
+                                            .rounded_md()
+                                            .border_1()
+                                            .border_color(if reacted { rgb(ACCENT) } else { rgb(BORDER) })
+                                            .bg(if reacted { rgb(0x35495b) } else { rgb(SIDEBAR) })
+                                            .text_xs()
+                                            .text_color(if reacted { rgb(TEXT) } else { rgb(MUTED) })
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.toggle_reaction(
+                                                    peer_id.clone(),
+                                                    message_id.clone(),
+                                                    emoji.clone(),
+                                                    cx,
+                                                );
+                                            }))
+                                            .child(label)
+                                    })),
+                            )
                     }))
                     .when(messages.is_empty(), |element| {
                         element.child(empty_hint("No message history in this conversation"))
