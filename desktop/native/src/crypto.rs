@@ -463,7 +463,7 @@ impl NativeMatrixCrypto {
                         .try_into_http_request::<Vec<u8>>(
                             "https://matrix.invalid",
                             SendAccessToken::Always("serialization-only"),
-                            (),
+                            Cow::Owned(matrix_supported_versions()),
                         )
                         .map_err(|error| format!("Could not encode Matrix key claim: {error}"))?;
                     let request_body: Value = serde_json::from_slice(encoded_request.body())
