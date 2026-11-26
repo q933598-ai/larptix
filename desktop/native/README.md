@@ -9,6 +9,7 @@ This is the standalone native desktop client for Larptrix. It is a separate Carg
 - larptrix-client-core (shared application state and protocol state)
 - reqwest + tokio-tungstenite (HTTP session and authenticated WebSocket)
 - AES-256-GCM file encryption and native XDG/Windows/macOS file dialogs
+- GStreamer 1.14+ playback engine (Rust bindings pinned to 0.25.4) for local audio/video decoding
 
 The desktop UI is rendered natively by GPUI. It does not load the web client's HTML and does not embed Electron, Chromium, Tauri, or an OS WebView.
 
@@ -35,14 +36,19 @@ On Arch/CachyOS, install the normal Rust/C/C++ toolchain and GPUI's Linux develo
 ```bash
 sudo pacman -S --needed base-devel cmake clang fontconfig freetype2 glib2 \
   wayland libx11 libxcb libxkbcommon libxkbcommon-x11 vulkan-icd-loader \
-  libva openssl zstd pkgconf
+  libva openssl zstd pkgconf gstreamer gst-plugins-base gst-plugins-good \
+  gst-plugins-bad gst-plugins-ugly gst-libav
 ```
 
-On Linux, test both Wayland and X11 sessions; the intended primary path is Wayland/niri. File pickers use the XDG Desktop Portal backend. Install a supported portal backend for your desktop session; Zenity is used as a fallback if the portal is unavailable. GPUI's upstream Linux build requirements are documented in the [Zed repository](https://github.com/zed-industries/zed/blob/main/script/linux).
+On Linux, test both Wayland and X11 sessions; the intended primary path is Wayland/niri. The GStreamer development packages are needed to build; the plugin packages above provide common runtime decoders and audio/video sinks. Supported codecs depend on which plugins are installed. File pickers use the XDG Desktop Portal backend. Install a supported portal backend for your desktop session; Zenity is used as a fallback if the portal is unavailable. GPUI's upstream Linux build requirements are documented in the [Zed repository](https://github.com/zed-industries/zed/blob/main/script/linux).
 
-On Windows 10/11 x64, install the stable Rust toolchain with the MSVC target and
-the Visual Studio 2022 C++ Build Tools (including the Windows 10/11 SDK). Then run
-the same native client command from PowerShell:
+On Windows 10/11 x64, install the stable Rust toolchain with the MSVC target,
+the Visual Studio 2022 C++ Build Tools (including the Windows 10/11 SDK), and
+the official GStreamer MSVC x86_64 installer. The native build needs GStreamer
+development files as well as its runtime; the app also needs the installed
+GStreamer DLLs and plugins available on PATH when it runs. See the
+[GStreamer Windows installation guide](https://gstreamer.freedesktop.org/documentation/installing/on-windows.html).
+Then run the same native client command from PowerShell:
 
 ```powershell
 cargo run --manifest-path desktop/native/Cargo.toml
@@ -78,8 +84,9 @@ release work and are not implied by the current CI executable.
 - Multiple file attachments in direct and group messages using AES-256-GCM before upload.
 - Native multi-file selection and decrypted Save As downloads for documents and other files.
 - Built-in image viewer with fullscreen overlay, gallery navigation and 50–300% zoom.
-- Audio and video decryption followed by launch in the operating system's default media player.
-- Decrypted media is cached in a private temporary directory and removed when the client exits.
+- Built-in GStreamer audio/video player with pause, ±10-second skips, segmented seeking and volume control.
+- Video decoded to frames and rendered inside GPUI; audio is played through the system's default GStreamer audio sink.
+- Decrypted media is cached in a private temporary directory and removed when playback is closed or the client exits.
 - Attachment keys, nonces, MIME types and original filenames carried inside the Matrix-encrypted message payload.
 - Download validation, ciphertext authentication, optional gzip decompression and plaintext size verification.
 - Requests for missing room keys and retry of pending message decryption after key delivery.
@@ -96,7 +103,7 @@ The golden tests validate the wire contract but do not replace live Olm/Megolm t
 5. Send a group message from native and verify that the browser and another group member can decrypt it.
 6. Send an image and a document from the native client; verify the web client can open them.
 7. Open an image in native, zoom in/out, and navigate through multiple image attachments in one message.
-8. Open audio and video attachments in native and verify they launch in the system's default media player.
+8. Open audio and video attachments in native; verify in-window playback, pause/resume, seeking and volume control.
 9. Send an encrypted attachment from the web client; verify the native client can decrypt and save it.
 10. Restart the native client and verify that the existing room-key backup restores readable direct and group history.
 
@@ -105,7 +112,7 @@ Use a test account and a non-sensitive test conversation. Do not share the recov
 ## Not implemented yet
 
 - Device verification / cross-signing UX and visible trust/fingerprint confirmation.
-- Embedded audio/video playback controls and timeline seeking (audio/video currently open in the system's default player).
+- Bundling the GStreamer runtime and codec plugins into a self-contained Windows installer.
 - Automatic image thumbnail loading before the user opens an attachment (thumbnails are cached after first viewing).
 - Group/channel creation, membership management and richer channel controls.
 - Native audio/video calls, screen sharing and notifications.
