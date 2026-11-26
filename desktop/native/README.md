@@ -67,14 +67,23 @@ release work and are not implied by the current CI executable.
 - Authenticated WebSocket connection and reconnect loop.
 - Real server directory, groups, presence and DM history loading.
 - Shared Rust client core updates from incoming protocol events.
+- Matrix SDK 0.19.1 E2E device initialization, key upload/query/claim and to-device processing.
+- Persistent Matrix SQLite crypto store protected by the E2E recovery key.
+- Restore and refresh of the same encrypted Megolm room-key backup used by the web client.
+- Encryption of outgoing 1:1 text messages before sending; decryption of incoming Matrix-encrypted 1:1 messages.
+- Requests for missing room keys and retry of pending message decryption after key delivery.
+
+The native E2E implementation is experimental and has not yet completed live browser/native interoperability testing. Enter the E2E recovery key created by the web client when signing in; it is not the account access key. The local Matrix store is encrypted with this recovery key, and the server only receives Matrix public key material, encrypted room-key backup and opaque message ciphertext.
 
 ## Not implemented yet
 
-- Native Olm/Matrix E2E decryption and encrypted sending.
-- Message composition, uploads, attachments, reactions and read receipts.
+- Device verification / cross-signing UX and visible trust/fingerprint confirmation.
+- Encrypted attachments, reactions and read receipts.
+- Group message composition, group E2E and full conversation UI.
 - Native audio/video calls, screen sharing and notifications.
+- Signed Windows installer and automatic desktop updates.
 
-For that reason encrypted message bodies are intentionally shown as an E2E placeholder, and the composer is disabled. The native client does not send plaintext messages.
+The native composer only sends a message after Matrix encryption succeeds. There is no plaintext fallback.
 
 ## Notes
 
