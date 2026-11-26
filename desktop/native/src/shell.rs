@@ -60,8 +60,6 @@ enum LoginField {
 }
 
 struct ImageViewer {
-    peer_id: String,
-    message_id: String,
     images: Vec<EncryptedAttachmentMetadata>,
     index: usize,
     loading: bool,
@@ -830,8 +828,6 @@ impl LarptrixShell {
             .position(|image| image.id == attachment_id)
             .unwrap_or(0);
         self.image_viewer = Some(ImageViewer {
-            peer_id,
-            message_id,
             images,
             index,
             loading: false,
