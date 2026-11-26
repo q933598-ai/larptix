@@ -20,6 +20,11 @@ pub enum AppEvent {
         crypto: Arc<NativeMatrixCrypto>,
     },
     Server(ServerMessage),
+    Decrypted {
+        peer_id: String,
+        message_id: String,
+        body: String,
+    },
     Status(String),
     Error(String),
 }
