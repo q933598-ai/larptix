@@ -22,6 +22,14 @@
     "session_id": "fixture-session",
     "ciphertext": "opaque-fixture-ciphertext"
   },
+  "attachment_crypto": {
+    "key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+    "iv": "ICEiIyQlJicoKSor",
+    "plaintext": "Larptrix shared AES-256-GCM attachment fixture",
+    "ciphertext": "nlvUABjqc3Y6Dyqvs32Q2ZEMv7G1tVXDK7UhMij+KmgW5ohh4FEVvH2FGucqbHhLZl99+AV4lh0iMIeNMoA=",
+    "size": 46,
+    "stored_size": 62
+  },
   "recovery_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
   "envelope": {
     "version": 3,
