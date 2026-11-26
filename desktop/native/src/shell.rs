@@ -1082,10 +1082,11 @@ impl LarptrixShell {
         let events = self.event_tx.clone();
         self.runtime.spawn(async move {
             while player.is_active() {
-                let error = player
-                    .poll_bus_error()
-                    .or_else(|| player.poll_video_frame().err());
-                let finished = player.poll_finished();
+                let (finished, bus_error) = match player.poll_bus() {
+                    Ok(finished) => (finished, None),
+                    Err(error) => (false, Some(error)),
+                };
+                let error = bus_error.or_else(|| player.poll_video_frame().err());
                 let _ = events.send_blocking(AppEvent::MediaTick {
                     session_id: session_id.clone(),
                     position_ms: player.position_ms(),
