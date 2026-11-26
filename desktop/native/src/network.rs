@@ -27,6 +27,11 @@ pub enum AppEvent {
         attachments: Vec<EncryptedAttachmentMetadata>,
     },
     FilesPicked(Vec<PickedFile>),
+    ImageCached {
+        attachment_id: String,
+        path: PathBuf,
+        error: Option<String>,
+    },
     MessageSendFinished {
         body: String,
         success: bool,
