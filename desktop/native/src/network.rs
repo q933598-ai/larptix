@@ -22,6 +22,9 @@ pub enum AppEvent {
         crypto: Arc<NativeMatrixCrypto>,
         api: Arc<NativeApi>,
         generated_recovery_key: Option<String>,
+        remembered_access_key: Option<String>,
+        remembered_recovery_key: String,
+        remembered_server_url: String,
     },
     UsernameSuggestions {
         base_username: String,
@@ -364,6 +367,12 @@ pub async fn connect(
         None
     };
     let recovery_key = generated_recovery_key.clone().unwrap_or(entered_recovery_key);
+    let remembered_recovery_key = recovery_key.clone();
+    let remembered_access_key = match &credentials {
+        LoginCredentials::AccessKey(access_key) => Some(access_key.clone()),
+        LoginCredentials::EmailPassword { .. } => None,
+    };
+    let remembered_server_url = base.to_string();
     let fresh_e2e_identity = generated_recovery_key.is_some();
 
     let jar = Arc::new(Jar::default());
@@ -452,6 +461,9 @@ pub async fn connect(
             crypto: crypto.clone(),
             api: api.clone(),
             generated_recovery_key,
+            remembered_access_key,
+            remembered_recovery_key,
+            remembered_server_url,
         })
         .map_err(|_| "Application closed".to_string())?;
 

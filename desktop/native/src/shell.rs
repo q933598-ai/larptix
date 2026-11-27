@@ -113,6 +113,14 @@ struct SavedMessage {
     created_at: i64,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct SavedAccount {
+    server_url: String,
+    access_key: String,
+    #[serde(default)]
+    recovery_key: String,
+}
+
 struct ImageViewer {
     images: Vec<EncryptedAttachmentMetadata>,
     index: usize,
@@ -191,6 +199,7 @@ pub struct LarptrixShell {
     input_focus: FocusHandle,
     active_input: Option<LoginField>,
     connecting: bool,
+    restoring_saved_account: bool,
     sending_message: bool,
     connection_status: String,
     active_section: Section,
@@ -226,8 +235,10 @@ impl LarptrixShell {
             environment_server
         };
         let server_url = server_input_value(&server_url);
+        let startup_account = load_saved_account();
+        let startup_runtime = runtime.clone();
 
-        Self {
+        let mut shell = Self {
             runtime,
             event_tx,
             core: ClientCore::new(),
@@ -301,16 +312,52 @@ impl LarptrixShell {
             input_focus: cx.focus_handle(),
             active_input: Some(LoginField::Server),
             connecting: false,
+            restoring_saved_account: false,
             sending_message: false,
             connection_status: "Enter your server address and access key".into(),
             active_section: Section::Messages,
             selected_peer: None,
+        };
+
+        if let Some(account) = startup_account {
+            shell.server_url = server_input_value(&account.server_url);
+            shell.access_key = account.access_key.clone();
+            shell.recovery_key = account.recovery_key.clone();
+            shell.connecting = true;
+            shell.restoring_saved_account = true;
+            shell.connection_status = "Restoring your saved Larptrix account…".into();
+
+            let events = shell.event_tx.clone();
+            startup_runtime.spawn(async move {
+                if let Err(error) = network::connect(
+                    account.server_url,
+                    network::LoginCredentials::AccessKey(account.access_key),
+                    account.recovery_key,
+                    events.clone(),
+                ).await {
+                    let _ = events.send_blocking(AppEvent::Error(error));
+                }
+            });
         }
+
+        shell
     }
 
     fn handle_event(&mut self, event: AppEvent, cx: &mut Context<Self>) {
         match event {
-            AppEvent::Authenticated { user, outgoing, crypto, api, generated_recovery_key } => {
+            AppEvent::Authenticated {
+                user, outgoing, crypto, api, generated_recovery_key,
+                remembered_access_key, remembered_recovery_key, remembered_server_url,
+            } => {
+                self.restoring_saved_account = false;
+                if let Some(access_key) = remembered_access_key {
+                    let recovery_key = generated_recovery_key.clone().unwrap_or(remembered_recovery_key);
+                    let _ = save_saved_account(&SavedAccount {
+                        server_url: remembered_server_url,
+                        access_key,
+                        recovery_key,
+                    });
+                }
                 self.fresh_recovery_key = generated_recovery_key;
                 self.connecting = false;
                 self.access_key.clear();
@@ -387,6 +434,13 @@ impl LarptrixShell {
                 self.auth_mode = AuthMode::SignIn;
                 self.login_mode = LoginMode::AccessKey;
                 self.access_key = access_key.clone();
+                if let Ok(server) = network::normalize_server_url(&self.server_url) {
+                    let _ = save_saved_account(&SavedAccount {
+                        server_url: server.to_string(),
+                        access_key: access_key.clone(),
+                        recovery_key: String::new(),
+                    });
+                }
                 self.registration_access_key = Some(access_key);
                 self.username_suggestions.clear();
                 self.selected_register_username = None;
@@ -716,6 +770,12 @@ impl LarptrixShell {
             }
             AppEvent::Error(error) => {
                 self.connecting = false;
+                if self.restoring_saved_account {
+                    clear_saved_account();
+                    self.restoring_saved_account = false;
+                    self.access_key.clear();
+                    self.recovery_key.clear();
+                }
                 self.connection_status = error;
             }
         }
@@ -4930,6 +4990,61 @@ fn server_list_path() -> Option<PathBuf> {
         .or_else(|| std::env::var_os("APPDATA").map(PathBuf::from))
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
     Some(base.join("larptrix").join("servers.txt"))
+}
+
+fn saved_account_path() -> Option<PathBuf> {
+    server_list_path().map(|path| path.with_file_name("account.json"))
+}
+
+fn load_saved_account() -> Option<SavedAccount> {
+    let path = saved_account_path()?;
+    let bytes = std::fs::read(path).ok()?;
+    let account: SavedAccount = serde_json::from_slice(&bytes).ok()?;
+    let server = network::normalize_server_url(&account.server_url).ok()?;
+    let access_key: String = account.access_key.chars()
+        .filter(|ch| ch.is_ascii_hexdigit())
+        .collect();
+    if access_key.len() != 64 || !account.access_key.chars().all(|ch| ch.is_ascii_hexdigit() || ch == '-') {
+        return None;
+    }
+    Some(SavedAccount {
+        server_url: server.to_string(),
+        access_key,
+        recovery_key: account.recovery_key,
+    })
+}
+
+fn save_saved_account(account: &SavedAccount) -> Result<(), String> {
+    let path = saved_account_path().ok_or_else(|| "Could not locate the Larptrix configuration directory".to_string())?;
+    let parent = path.parent().ok_or_else(|| "Could not locate the Larptrix configuration directory".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|error| format!("Could not create Larptrix config directory: {error}"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("Could not protect Larptrix config directory: {error}"))?;
+    }
+
+    let bytes = serde_json::to_vec(account)
+        .map_err(|error| format!("Could not encode saved account: {error}"))?;
+    std::fs::write(&path, bytes)
+        .map_err(|error| format!("Could not save Larptrix account: {error}"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("Could not protect saved account file: {error}"))?;
+    }
+
+    Ok(())
+}
+
+fn clear_saved_account() {
+    if let Some(path) = saved_account_path() {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 fn load_saved_servers() -> Vec<String> {
