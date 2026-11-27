@@ -479,7 +479,7 @@ impl NativeMatrixCrypto {
                 .try_into_http_request::<Vec<u8>>(
                     "https://matrix.invalid",
                     SendAccessToken::Always("serialization-only"),
-                    Cow::Owned(matrix_supported_versions()),
+                    Cow::Owned(matrix_request_encoding_versions()),
                 )
                 .map_err(|error| format!("Could not encode Matrix key claim: {error}"))?;
             let request_body: Value = serde_json::from_slice(encoded_request.body())
@@ -640,7 +640,7 @@ impl NativeMatrixCrypto {
                         .try_into_http_request::<Vec<u8>>(
                             "https://matrix.invalid",
                             SendAccessToken::Always("serialization-only"),
-                            Cow::Owned(matrix_supported_versions()),
+                            Cow::Owned(matrix_request_encoding_versions()),
                         )
                         .map_err(|error| format!("Could not encode Matrix key upload: {error}"))?;
                     let request_body: Value = serde_json::from_slice(encoded_request.body())
@@ -667,7 +667,7 @@ impl NativeMatrixCrypto {
                         .try_into_http_request::<Vec<u8>>(
                             "https://matrix.invalid",
                             SendAccessToken::Always("serialization-only"),
-                            Cow::Owned(matrix_supported_versions()),
+                            Cow::Owned(matrix_request_encoding_versions()),
                         )
                         .map_err(|error| format!("Could not encode Matrix key claim: {error}"))?;
                     let request_body: Value = serde_json::from_slice(encoded_request.body())
@@ -783,10 +783,12 @@ fn matrix_encrypted_event(
         "content": ciphertext
     })
 }
-fn matrix_supported_versions() -> SupportedVersions {
-    // The Larptrix Matrix API implements the stable v1.0 endpoint paths used
-    // for device-key upload and one-time-key claiming.
-    let versions = vec!["v1.0".to_string()];
+fn matrix_request_encoding_versions() -> SupportedVersions {
+    // Ruma needs a Matrix spec version to choose the stable endpoint path
+    // while serializing request bodies. Matrix v1.1 introduced the /v3
+    // client API paths used by the key upload and key claim request types.
+    // Larptrix sends the resulting JSON bodies to its own /api/matrix routes.
+    let versions = vec!["v1.1".to_string()];
     SupportedVersions::from_parts(&versions, &BTreeMap::new())
 }
 
