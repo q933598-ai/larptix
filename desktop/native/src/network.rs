@@ -4,8 +4,9 @@ use std::time::Duration;
 use async_channel::{Receiver, Sender};
 use futures_util::{SinkExt, StreamExt};
 use larptrix_protocol::{ChatMessage, ClientMessage, ServerMessage, UserInfo};
+use serde_json::{json, Value};
 use reqwest::cookie::{CookieStore, Jar};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::time::{interval, sleep};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -19,6 +20,15 @@ pub enum AppEvent {
         user: UserInfo,
         outgoing: Sender<ClientMessage>,
         crypto: Arc<NativeMatrixCrypto>,
+        api: Arc<NativeApi>,
+    },
+    FriendListsLoaded {
+        friends: Vec<UserInfo>,
+        incoming: Vec<UserInfo>,
+        outgoing: Vec<UserInfo>,
+    },
+    UserSearchResults {
+        users: Vec<UserInfo>,
     },
     Server(ServerMessage),
     Decrypted {
@@ -64,6 +74,87 @@ pub enum AppEvent {
     E2ESynced,
     Status(String),
     Error(String),
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct FriendLists {
+    #[serde(default)]
+    pub friends: Vec<UserInfo>,
+    #[serde(default)]
+    pub incoming: Vec<UserInfo>,
+    #[serde(default)]
+    pub outgoing: Vec<UserInfo>,
+}
+
+#[derive(Clone)]
+pub struct NativeApi {
+    http: reqwest::Client,
+    base_url: Url,
+}
+
+impl NativeApi {
+    fn endpoint(&self, path: &str) -> Result<Url, String> {
+        self.base_url
+            .join(path.trim_start_matches('/'))
+            .map_err(|error| format!("Invalid API endpoint: {error}"))
+    }
+
+    async fn read_json(response: reqwest::Response) -> Result<Value, String> {
+        let status = response.status();
+        let body = response.text().await
+            .map_err(|error| format!("Could not read server response: {error}"))?;
+        if !status.is_success() {
+            return Err(if body.trim().is_empty() {
+                format!("Server request failed ({status})")
+            } else {
+                format!("Server request failed ({status}): {}", body.trim())
+            });
+        }
+        serde_json::from_str(&body)
+            .map_err(|error| format!("Server returned invalid JSON: {error}"))
+    }
+
+    async fn get_json(&self, path: &str) -> Result<Value, String> {
+        let url = self.endpoint(path)?;
+        let response = self.http.get(url).send().await
+            .map_err(|error| format!("Could not reach server API: {error}"))?;
+        Self::read_json(response).await
+    }
+
+    async fn post_json(&self, path: &str, body: Value) -> Result<Value, String> {
+        let url = self.endpoint(path)?;
+        let response = self.http.post(url).json(&body).send().await
+            .map_err(|error| format!("Could not reach server API: {error}"))?;
+        Self::read_json(response).await
+    }
+
+    pub async fn load_friends(&self) -> Result<FriendLists, String> {
+        let value = self.get_json("api/friends").await?;
+        serde_json::from_value(value)
+            .map_err(|error| format!("Could not decode friend list: {error}"))
+    }
+
+    pub async fn search_users(&self, query: &str) -> Result<Vec<UserInfo>, String> {
+        let mut url = self.endpoint("api/users/search")?;
+        url.query_pairs_mut().append_pair("q", query);
+        let response = self.http.get(url).send().await
+            .map_err(|error| format!("Could not search users: {error}"))?;
+        let value = Self::read_json(response).await?;
+        serde_json::from_value(value.get("users").cloned().unwrap_or_else(|| json!([])))
+            .map_err(|error| format!("Could not decode user search results: {error}"))
+    }
+
+    pub async fn send_friend_request(&self, user_id: &str) -> Result<(), String> {
+        let path = format!("api/friends/{user_id}");
+        self.post_json(&path, json!({})).await?;
+        Ok(())
+    }
+
+    pub async fn accept_friend_request(&self, user_id: &str) -> Result<(), String> {
+        let path = format!("api/friends/{user_id}/accept");
+        self.post_json(&path, json!({})).await?;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -160,6 +251,11 @@ pub async fn connect(
     )
     .await?;
 
+    let api = Arc::new(NativeApi {
+        http: http.clone(),
+        base_url: base.clone(),
+    });
+
     let cookie = jar
         .cookies(&base)
         .ok_or_else(|| "The server did not issue a session cookie".to_string())?
@@ -175,8 +271,30 @@ pub async fn connect(
             user,
             outgoing: outgoing.clone(),
             crypto: crypto.clone(),
+            api: api.clone(),
         })
         .map_err(|_| "Application closed".to_string())?;
+
+    {
+        let api = api.clone();
+        let events = events.clone();
+        tokio::spawn(async move {
+            match api.load_friends().await {
+                Ok(data) => {
+                    let _ = events.send_blocking(AppEvent::FriendListsLoaded {
+                        friends: data.friends,
+                        incoming: data.incoming,
+                        outgoing: data.outgoing,
+                    });
+                }
+                Err(error) => {
+                    let _ = events.send_blocking(AppEvent::Status(format!(
+                        "Could not load friends: {error}"
+                    )));
+                }
+            }
+        });
+    }
 
     let mut retry_delay = Duration::from_secs(1);
 
