@@ -78,9 +78,13 @@ release work and are not implied by the current CI executable.
 - Sign-in QR code generated from a valid access key.
 - Cookie-based HTTP login against the Larptrix API.
 - Authenticated WebSocket connection and reconnect loop.
-- Real server directory, groups, channels, presence, and direct/group conversation history.
-- Clickable group and channel entries that open the existing server-side conversation history.
+- Real server directory, direct/group conversation history and live presence updates.
+- User search, friend requests, incoming request acceptance and friend lists.
+- Profile display-name/username/about editing and message privacy settings.
+- Native group/channel creation, friend invitations and channel posting policy selection.
 - Shared Rust client core updates from incoming protocol events, including routing group messages by group ID.
+- User avatars and automatically decrypted inline image previews in conversations.
+- Local Saved Messages stored with authenticated AES-256-GCM encryption derived from the E2E recovery key.
 - Matrix SDK 0.19.0 E2E device initialization, key upload/query/claim and to-device processing.
 - Persistent Matrix SQLite crypto store protected by the E2E recovery key.
 - Restore and refresh of encrypted Megolm room-key backups; fresh identities use key-scoped backups to preserve older web-compatible backups.
@@ -117,15 +121,13 @@ Use a test account and a non-sensitive test conversation. Do not share the recov
 
 ## Not implemented yet
 
-- Device verification / cross-signing UX and visible trust/fingerprint confirmation.
-- Bundling the GStreamer runtime and codec plugins into a self-contained Windows installer.
-- Automatic image thumbnail loading before the user opens an attachment (thumbnails are cached after first viewing).
-- QR approval / device-to-device sign-in that does not require the user to enter an access key first.
+- QR approval / device-to-device sign-in that does not require an access key to be entered on the device displaying the QR.
 - Recovery-key rotation and a user-facing manager for multiple E2E identities and backups.
 - Device verification / cross-signing UX and visible trust/fingerprint confirmation.
+- Rich group/channel membership management, moderator tools and advanced channel controls.
+- Native audio/video calls, voice messages, video circles, screen sharing and call notifications.
+- Full settings parity with the web client, including notification, session and appearance controls.
 - Bundling the GStreamer runtime and codec plugins into a self-contained Windows installer.
-- Group/channel creation, membership management and richer channel controls.
-- Native audio/video calls, screen sharing and notifications.
 - Signed Windows installer and automatic desktop updates.
 
 The native composer only sends a message after Matrix encryption succeeds. There is no plaintext fallback.
