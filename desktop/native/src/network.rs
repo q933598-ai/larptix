@@ -145,6 +145,15 @@ pub struct NativeApi {
 }
 
 impl NativeApi {
+    pub fn anonymous(server_address: &str) -> Result<Self, String> {
+        let base_url = normalize_server_url(server_address)?;
+        let http = reqwest::Client::builder()
+            .user_agent(concat!("Larptrix-Native/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|error| format!("Could not create HTTP client: {error}"))?;
+        Ok(Self { http, base_url })
+    }
+
     fn endpoint(&self, path: &str) -> Result<Url, String> {
         self.base_url
             .join(path.trim_start_matches('/'))
