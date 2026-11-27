@@ -41,6 +41,7 @@ pub enum AppEvent {
         user: UserInfo,
         about: String,
     },
+    ProfileUpdateFailed(String),
     MessagePolicyUpdated {
         user: UserInfo,
     },
