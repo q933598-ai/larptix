@@ -564,6 +564,115 @@ impl LarptrixShell {
         });
     }
 
+    fn load_friend_lists(&mut self, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else {
+            self.connection_status = "Friends are unavailable until the server connection is ready".into();
+            cx.notify();
+            return;
+        };
+        let events = self.event_tx.clone();
+        self.runtime.spawn(async move {
+            match api.load_friends().await {
+                Ok(data) => {
+                    let _ = events.send_blocking(AppEvent::FriendListsLoaded {
+                        friends: data.friends,
+                        incoming: data.incoming,
+                        outgoing: data.outgoing,
+                    });
+                }
+                Err(error) => {
+                    let _ = events.send_blocking(AppEvent::Status(format!("Could not load friends: {error}")));
+                }
+            }
+        });
+    }
+
+    fn search_users(&mut self, cx: &mut Context<Self>) {
+        let query = self.user_search.trim().to_string();
+        if query.is_empty() {
+            self.connection_status = "Enter a username or display name to search".into();
+            self.user_search_results.clear();
+            cx.notify();
+            return;
+        }
+        let Some(api) = self.api.clone() else {
+            self.connection_status = "User search is unavailable until connected".into();
+            cx.notify();
+            return;
+        };
+
+        self.connection_status = format!("Searching for {query}…");
+        cx.notify();
+        let events = self.event_tx.clone();
+        self.runtime.spawn(async move {
+            match api.search_users(&query).await {
+                Ok(users) => {
+                    let _ = events.send_blocking(AppEvent::UserSearchResults { users });
+                    let _ = events.send_blocking(AppEvent::Status("User search completed".into()));
+                }
+                Err(error) => {
+                    let _ = events.send_blocking(AppEvent::Status(format!("User search failed: {error}")));
+                }
+            }
+        });
+    }
+
+    fn send_friend_request(&mut self, user_id: String, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else {
+            self.connection_status = "Friend requests are unavailable until connected".into();
+            cx.notify();
+            return;
+        };
+        self.connection_status = "Sending friend request…".into();
+        cx.notify();
+        let events = self.event_tx.clone();
+        self.runtime.spawn(async move {
+            match api.send_friend_request(&user_id).await {
+                Ok(()) => {
+                    let _ = events.send_blocking(AppEvent::Status("Friend request sent".into()));
+                    if let Ok(data) = api.load_friends().await {
+                        let _ = events.send_blocking(AppEvent::FriendListsLoaded {
+                            friends: data.friends,
+                            incoming: data.incoming,
+                            outgoing: data.outgoing,
+                        });
+                    }
+                }
+                Err(error) => {
+                    let _ = events.send_blocking(AppEvent::Status(format!("Could not send friend request: {error}")));
+                }
+            }
+        });
+    }
+
+    fn accept_friend_request(&mut self, user_id: String, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else {
+            self.connection_status = "Friend requests are unavailable until connected".into();
+            cx.notify();
+            return;
+        };
+        self.connection_status = "Accepting friend request…".into();
+        cx.notify();
+        let events = self.event_tx.clone();
+        self.runtime.spawn(async move {
+            match api.accept_friend_request(&user_id).await {
+                Ok(()) => {
+                    let _ = events.send_blocking(AppEvent::Status("Friend request accepted".into()));
+                    if let Ok(data) = api.load_friends().await {
+                        let _ = events.send_blocking(AppEvent::FriendListsLoaded {
+                            friends: data.friends,
+                            incoming: data.incoming,
+                            outgoing: data.outgoing,
+                        });
+                    }
+                }
+                Err(error) => {
+                    let _ = events.send_blocking(AppEvent::Status(format!("Could not accept friend request: {error}")));
+                }
+            }
+        });
+    }
+
     fn handle_input_key(
         &mut self,
         event: &KeyDownEvent,
@@ -1692,24 +1801,12 @@ impl LarptrixShell {
             })
     }
 
-    fn friends_list(&self) -> impl IntoElement {
-        let me_id = self
-            .core
-            .state()
-            .current_user
-            .as_ref()
-            .map(|user| user.user_id.as_str())
-            .unwrap_or_default();
-        let users: Vec<_> = self
-            .core
-            .state()
-            .users
-            .values()
-            .filter(|user| user.user_id != me_id && !user.is_group && !user.is_channel)
-            .map(|user| (user.display_name.clone(), user.username.clone(), user.online))
-            .collect();
-
-        let no_users = users.is_empty();
+    fn friends_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let friends = self.friends.clone();
+        let incoming = self.incoming_friend_requests.clone();
+        let outgoing = self.outgoing_friend_requests.clone();
+        let results = self.user_search_results.clone();
+        let query = self.user_search.trim().to_string();
 
         div()
             .flex_1()
@@ -1717,22 +1814,205 @@ impl LarptrixShell {
             .flex_col()
             .gap_2()
             .p_4()
-            .child(section_heading("PEOPLE ON THIS SERVER"))
-            .children(users.into_iter().map(|(name, username, online)| {
+            .child(section_heading("FIND PEOPLE"))
+            .child(self.login_field(
+                LoginField::PeopleSearch,
+                "USERNAME OR DISPLAY NAME",
+                "@username",
+                &self.user_search,
+                cx,
+            ))
+            .child(
+                div()
+                    .id("search-users-button")
+                    .w_full()
+                    .p_2()
+                    .rounded_md()
+                    .bg(rgb(ACCENT))
+                    .text_color(rgb(RAIL))
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| this.search_users(cx)))
+                    .child("Search users"),
+            )
+            .children(results.iter().map(|user| {
+                let user_id = user.user_id.clone();
+                let name = user.display_name.clone();
+                let username = user.username.clone();
+                let online = user.online;
+                let status = user.friend_status.clone();
+                let is_none = status == "none";
+                let is_incoming = status == "pending_incoming";
+                let action_label = match status.as_str() {
+                    "accepted" => "Friends",
+                    "pending_outgoing" => "Request sent",
+                    "pending_incoming" => "Accept",
+                    _ => "Add friend",
+                };
+                div()
+                    .id(format!("search-result-{user_id}"))
+                    .p_2()
+                    .rounded_md()
+                    .bg(rgb(SURFACE))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .size(px(32.0))
+                            .rounded_full()
+                            .bg(rgb(SURFACE_HOVER))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(rgb(ACCENT))
+                            .child(name.chars().next().unwrap_or('?').to_string()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .child(div().text_sm().text_color(rgb(TEXT)).child(name))
+                            .child(div().text_xs().text_color(rgb(MUTED)).child(
+                                if username.is_empty() {
+                                    if online { "Online".into() } else { "Offline".into() }
+                                } else {
+                                    format!("@{username} · {}", if online { "Online" } else { "Offline" })
+                                },
+                            )),
+                    )
+                    .child(div().flex_1())
+                    .when(is_none, |element| {
+                        let click_id = user_id.clone();
+                        element.child(
+                            div()
+                                .id(format!("add-friend-{user_id}"))
+                                .px_2()
+                                .py_2()
+                                .rounded_md()
+                                .bg(rgb(SURFACE_HOVER))
+                                .text_xs()
+                                .text_color(rgb(ACCENT))
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.send_friend_request(click_id.clone(), cx);
+                                }))
+                                .child(action_label),
+                        )
+                    })
+                    .when(is_incoming, |element| {
+                        let click_id = user_id.clone();
+                        element.child(
+                            div()
+                                .id(format!("accept-search-friend-{user_id}"))
+                                .px_2()
+                                .py_2()
+                                .rounded_md()
+                                .bg(rgb(ACCENT))
+                                .text_xs()
+                                .text_color(rgb(RAIL))
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.accept_friend_request(click_id.clone(), cx);
+                                }))
+                                .child(action_label),
+                        )
+                    })
+                    .when(!is_none && !is_incoming, |element| {
+                        element.child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(action_label),
+                        )
+                    })
+            }))
+            .when(!query.is_empty() && results.is_empty(), |element| {
+                element.child(empty_hint("No matching users. Try another username or name."))
+            })
+            .child(section_heading("INCOMING REQUESTS"))
+            .children(incoming.iter().map(|user| {
+                let user_id = user.user_id.clone();
+                let name = user.display_name.clone();
+                let username = user.username.clone();
+                let click_id = user_id.clone();
+                div()
+                    .id(format!("incoming-friend-{user_id}"))
+                    .p_2()
+                    .rounded_md()
+                    .bg(rgb(SURFACE))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .size(px(32.0))
+                            .rounded_full()
+                            .bg(rgb(SURFACE_HOVER))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(rgb(ACCENT))
+                            .child(name.chars().next().unwrap_or('?').to_string()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .child(div().text_sm().text_color(rgb(TEXT)).child(name))
+                            .child(div().text_xs().text_color(rgb(MUTED)).child(format!("@{username}"))),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .id(format!("accept-friend-{user_id}"))
+                            .px_2()
+                            .py_2()
+                            .rounded_md()
+                            .bg(rgb(ACCENT))
+                            .text_xs()
+                            .text_color(rgb(RAIL))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.accept_friend_request(click_id.clone(), cx);
+                            }))
+                            .child("Accept"),
+                    )
+            }))
+            .when(incoming.is_empty(), |element| {
+                element.child(empty_hint("No incoming requests"))
+            })
+            .child(section_heading("YOUR FRIENDS"))
+            .children(friends.iter().map(|user| {
                 person_row(
-                    name.chars().next().unwrap_or('?').to_string(),
-                    name,
-                    if online {
-                        "Online".into()
-                    } else if username.is_empty() {
-                        "Offline".into()
+                    user.display_name.chars().next().unwrap_or('?').to_string(),
+                    user.display_name.clone(),
+                    if user.username.is_empty() {
+                        if user.online { "Online".into() } else { "Offline".into() }
                     } else {
-                        format!("@{username}")
+                        format!("@{} · {}", user.username, if user.online { "Online" } else { "Offline" })
                     },
                 )
             }))
-            .when(no_users, |element| {
-                element.child(empty_hint("No other users were returned by the server"))
+            .when(friends.is_empty(), |element| {
+                element.child(empty_hint("You have no friends yet"))
+            })
+            .child(section_heading("OUTGOING REQUESTS"))
+            .children(outgoing.iter().map(|user| {
+                person_row(
+                    user.display_name.chars().next().unwrap_or('?').to_string(),
+                    user.display_name.clone(),
+                    format!("@{} · Request sent", user.username),
+                )
+            }))
+            .when(outgoing.is_empty(), |element| {
+                element.child(empty_hint("No outgoing requests"))
             })
     }
 
