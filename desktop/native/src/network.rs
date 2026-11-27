@@ -166,12 +166,13 @@ impl NativeApi {
         display_name: &str,
         username: &str,
         about: &str,
+        tags: &[String],
     ) -> Result<UserInfo, String> {
         let value = self.patch_json("api/me", json!({
             "display_name": display_name,
             "username": username,
             "about": about,
-            "tags": []
+            "tags": tags
         })).await?;
         serde_json::from_value(value)
             .map_err(|error| format!("Could not decode updated profile: {error}"))
