@@ -2622,7 +2622,7 @@ impl LarptrixShell {
     }
 
     fn server_picker_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let server_entries = self.saved_servers.iter().enumerate().map(|(index, server)| {
+        let server_entries: Vec<_> = self.saved_servers.iter().cloned().enumerate().map(|(index, server)| {
             let server_url = server.clone();
             div()
                 .id(format!("saved-server-{index}"))
@@ -2638,8 +2638,8 @@ impl LarptrixShell {
                     this.server_url = server_url.clone();
                     this.choose_server(cx);
                 }))
-                .child(server.clone())
-        });
+                .child(server)
+        }).collect();
 
         div()
             .size_full()
