@@ -1933,17 +1933,11 @@ impl LarptrixShell {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(
-                        div()
-                            .size(px(32.0))
-                            .rounded_full()
-                            .bg(rgb(SURFACE_HOVER))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_color(rgb(ACCENT))
-                            .child(name.chars().next().unwrap_or('?').to_string()),
-                    )
+                    .child(avatar_view(
+                        self.cached_avatar_paths.get(&user_id).cloned(),
+                        name.chars().next().unwrap_or('?').to_string(),
+                        32.0,
+                    ))
                     .child(
                         div()
                             .flex()
@@ -2021,17 +2015,11 @@ impl LarptrixShell {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(
-                        div()
-                            .size(px(32.0))
-                            .rounded_full()
-                            .bg(rgb(SURFACE_HOVER))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_color(rgb(ACCENT))
-                            .child(name.chars().next().unwrap_or('?').to_string()),
-                    )
+                    .child(avatar_view(
+                        self.cached_avatar_paths.get(&user_id).cloned(),
+                        name.chars().next().unwrap_or('?').to_string(),
+                        32.0,
+                    ))
                     .child(
                         div()
                             .flex()
@@ -2070,6 +2058,7 @@ impl LarptrixShell {
                     } else {
                         format!("@{} · {}", user.username, if user.online { "Online" } else { "Offline" })
                     },
+                    self.cached_avatar_paths.get(&user.user_id).cloned(),
                 )
             }))
             .when(friends.is_empty(), |element| {
@@ -2081,6 +2070,7 @@ impl LarptrixShell {
                     user.display_name.chars().next().unwrap_or('?').to_string(),
                     user.display_name.clone(),
                     format!("@{} · Request sent", user.username),
+                    self.cached_avatar_paths.get(&user.user_id).cloned(),
                 )
             }))
             .when(outgoing.is_empty(), |element| {
@@ -3630,25 +3620,14 @@ fn empty_hint(text: &'static str) -> impl IntoElement {
         .child(text)
 }
 
-fn person_row(initial: String, name: String, status: String) -> impl IntoElement {
+fn person_row(initial: String, name: String, status: String, avatar: Option<PathBuf>) -> impl IntoElement {
     div()
         .p_2()
         .rounded_md()
         .flex()
         .items_center()
         .gap_3()
-        .child(
-            div()
-                .size(px(34.0))
-                .rounded_full()
-                .bg(rgb(SURFACE_HOVER))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_sm()
-                .text_color(rgb(ACCENT))
-                .child(initial),
-        )
+        .child(avatar_view(avatar, initial, 34.0))
         .child(
             div()
                 .flex()
