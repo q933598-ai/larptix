@@ -348,6 +348,21 @@ impl LarptrixShell {
                     }
                 }
                 self.core.apply_server_message(ServerMessage::Directory { users: directory });
+                let mut statuses = HashMap::new();
+                for user in &friends {
+                    statuses.insert(user.user_id.clone(), "accepted".to_string());
+                }
+                for user in &incoming {
+                    statuses.insert(user.user_id.clone(), "pending_incoming".to_string());
+                }
+                for user in &outgoing {
+                    statuses.insert(user.user_id.clone(), "pending_outgoing".to_string());
+                }
+                for user in &mut self.user_search_results {
+                    if let Some(status) = statuses.get(&user.user_id) {
+                        user.friend_status = status.clone();
+                    }
+                }
                 self.friends = friends;
                 self.incoming_friend_requests = incoming;
                 self.outgoing_friend_requests = outgoing;
