@@ -9,12 +9,12 @@ use gpui::{
     div, img, prelude::*, rgb, px, App, Context, FocusHandle, KeyDownEvent, MouseButton, Window,
 };
 use larptrix_client_core::ClientCore;
-use larptrix_protocol::{ChatMessage, ClientMessage, ServerMessage};
+use larptrix_protocol::{ChatMessage, ClientMessage, ServerMessage, UserInfo};
 use tokio::runtime::Handle;
 
 use crate::crypto::{EncryptedAttachmentMetadata, NativeMatrixCrypto};
 use crate::media::MediaPlayback;
-use crate::network::{self, AppEvent, PickedFile};
+use crate::network::{self, AppEvent, NativeApi, PickedFile};
 
 const BG: u32 = 0x1b1f2a;
 const RAIL: u32 = 0x171b24;
@@ -79,6 +79,7 @@ enum LoginField {
     Password,
     RecoveryKey,
     Composer,
+    PeopleSearch,
 }
 
 struct ImageViewer {
@@ -119,6 +120,12 @@ pub struct LarptrixShell {
     decrypting_messages: HashSet<(String, String)>,
     server_url: String,
     saved_servers: Vec<String>,
+    api: Option<Arc<NativeApi>>,
+    friends: Vec<UserInfo>,
+    incoming_friend_requests: Vec<UserInfo>,
+    outgoing_friend_requests: Vec<UserInfo>,
+    user_search: String,
+    user_search_results: Vec<UserInfo>,
     connection_page: ConnectionPage,
     login_mode: LoginMode,
     access_key: String,
@@ -198,6 +205,12 @@ impl LarptrixShell {
             decrypting_messages: HashSet::new(),
             server_url,
             saved_servers,
+            api: None,
+            friends: Vec::new(),
+            incoming_friend_requests: Vec::new(),
+            outgoing_friend_requests: Vec::new(),
+            user_search: String::new(),
+            user_search_results: Vec::new(),
             connection_page: ConnectionPage::Servers,
             login_mode: LoginMode::AccessKey,
             access_key: String::new(),
@@ -217,7 +230,7 @@ impl LarptrixShell {
 
     fn handle_event(&mut self, event: AppEvent, cx: &mut Context<Self>) {
         match event {
-            AppEvent::Authenticated { user, outgoing, crypto } => {
+            AppEvent::Authenticated { user, outgoing, crypto, api } => {
                 self.connecting = false;
                 self.access_key.clear();
                 self.email.clear();
@@ -225,12 +238,29 @@ impl LarptrixShell {
                 self.recovery_key.clear();
                 self.outgoing = Some(outgoing);
                 self.crypto = Some(crypto);
+                self.api = Some(api);
                 self.core.apply_server_message(ServerMessage::Welcome {
                     user,
                     users: Vec::new(),
                 });
                 self.connection_status = "Signed in · synchronizing".into();
                 self.active_section = Section::Messages;
+            }
+            AppEvent::FriendListsLoaded { friends, incoming, outgoing } => {
+                let mut directory = Vec::new();
+                for user in friends.iter().chain(incoming.iter()).chain(outgoing.iter()) {
+                    if !directory.iter().any(|existing: &UserInfo| existing.user_id == user.user_id) {
+                        directory.push(user.clone());
+                    }
+                }
+                self.core.apply_server_message(ServerMessage::Directory { users: directory });
+                self.friends = friends;
+                self.incoming_friend_requests = incoming;
+                self.outgoing_friend_requests = outgoing;
+            }
+            AppEvent::UserSearchResults { users } => {
+                self.core.apply_server_message(ServerMessage::Directory { users: users.clone() });
+                self.user_search_results = users;
             }
             AppEvent::Server(message) => {
                 let decrypt_targets: Vec<(String, ChatMessage)> = match &message {
@@ -555,6 +585,7 @@ impl LarptrixShell {
                 LoginField::Password => { self.password.pop(); }
                 LoginField::RecoveryKey => { self.recovery_key.pop(); }
                 LoginField::Composer => { self.composer_text.pop(); }
+                LoginField::PeopleSearch => { self.user_search.pop(); }
             }
             cx.notify();
             return;
@@ -564,6 +595,7 @@ impl LarptrixShell {
             match field {
                 LoginField::Composer => self.send_message(cx),
                 LoginField::Server => self.choose_server(cx),
+                LoginField::PeopleSearch => self.search_users(cx),
                 _ => self.start_connection(cx),
             }
             return;
@@ -580,6 +612,7 @@ impl LarptrixShell {
                     LoginField::Password => self.password.len(),
                     LoginField::RecoveryKey => self.recovery_key.len(),
                     LoginField::Composer => self.composer_text.len(),
+                    LoginField::PeopleSearch => self.user_search.len(),
                 };
                 let max_len = match field {
                     LoginField::Server => 256usize,
@@ -588,6 +621,7 @@ impl LarptrixShell {
                     LoginField::Password => 256usize,
                     LoginField::RecoveryKey => 128usize,
                     LoginField::Composer => 12_000usize,
+                    LoginField::PeopleSearch => 64usize,
                 };
                 let remaining = max_len.saturating_sub(current_len);
                 let pasted: String = text.chars()
@@ -606,6 +640,7 @@ impl LarptrixShell {
                     LoginField::Password => self.password.push_str(&pasted),
                     LoginField::RecoveryKey => self.recovery_key.push_str(&pasted),
                     LoginField::Composer => self.composer_text.push_str(&pasted),
+                    LoginField::PeopleSearch => self.user_search.push_str(&pasted),
                 }
                 cx.notify();
             }
@@ -624,6 +659,7 @@ impl LarptrixShell {
                 LoginField::Password => (self.password.len(), 256usize),
                 LoginField::RecoveryKey => (self.recovery_key.len(), 128usize),
                 LoginField::Composer => (self.composer_text.len(), 12_000usize),
+                LoginField::PeopleSearch => (self.user_search.len(), 64usize),
             };
             if current_len + text.len() > max_len || text.chars().any(char::is_control) {
                 return;
@@ -643,6 +679,7 @@ impl LarptrixShell {
                 LoginField::Password => self.password.push_str(text),
                 LoginField::RecoveryKey => self.recovery_key.push_str(text),
                 LoginField::Composer => self.composer_text.push_str(text),
+                LoginField::PeopleSearch => self.user_search.push_str(text),
             }
             cx.notify();
         }
@@ -688,6 +725,7 @@ impl LarptrixShell {
                         LoginField::Password => "password-input",
                         LoginField::RecoveryKey => "recovery-key-input",
                         LoginField::Composer => "message-composer",
+                        LoginField::PeopleSearch => "people-search-input",
                     })
                     .track_focus(&self.input_focus)
                     .w_full()
@@ -1458,6 +1496,7 @@ impl LarptrixShell {
                     self.active_section == Section::Friends,
                     cx.listener(|this, _, _, cx| {
                         this.active_section = Section::Friends;
+                        this.load_friend_lists(cx);
                         cx.notify();
                     }),
                 ),
@@ -1490,7 +1529,7 @@ impl LarptrixShell {
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match self.active_section {
             Section::Messages => self.message_list(cx).into_any_element(),
-            Section::Friends => self.friends_list().into_any_element(),
+            Section::Friends => self.friends_list(cx).into_any_element(),
             Section::Groups => self.groups_list(cx).into_any_element(),
             Section::Settings => self.settings_list().into_any_element(),
         };
