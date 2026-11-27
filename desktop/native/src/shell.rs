@@ -1931,7 +1931,7 @@ impl LarptrixShell {
                                 .child(action_label),
                         )
                     })
-            }))
+            }).collect::<Vec<_>>())
             .when(!query.is_empty() && results.is_empty(), |element| {
                 element.child(empty_hint("No matching users. Try another username or name."))
             })
@@ -1984,7 +1984,7 @@ impl LarptrixShell {
                             }))
                             .child("Accept"),
                     )
-            }))
+            }).collect::<Vec<_>>())
             .when(incoming.is_empty(), |element| {
                 element.child(empty_hint("No incoming requests"))
             })
