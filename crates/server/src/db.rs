@@ -169,6 +169,15 @@ impl Database {
         }
     }
 
+    pub fn username_exists(&self, username: &str) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM users WHERE username = ?1 COLLATE NOCASE AND username <> '')",
+            [username],
+            |row| row.get(0),
+        )
+    }
+
     pub fn create_key_user(
         &self,
         display_name: &str,
