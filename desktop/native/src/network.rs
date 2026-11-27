@@ -21,7 +21,18 @@ pub enum AppEvent {
         outgoing: Sender<ClientMessage>,
         crypto: Arc<NativeMatrixCrypto>,
         api: Arc<NativeApi>,
+        generated_recovery_key: Option<String>,
     },
+    UsernameSuggestions {
+        base_username: String,
+        base_available: bool,
+        suggestions: Vec<String>,
+    },
+    RegistrationFinished {
+        user: UserInfo,
+        access_key: String,
+    },
+    RegistrationFailed(String),
     FriendListsLoaded {
         friends: Vec<UserInfo>,
         incoming: Vec<UserInfo>,
@@ -103,6 +114,20 @@ pub enum AppEvent {
     Error(String),
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct UsernameSuggestions {
+    pub base_username: String,
+    pub base_available: bool,
+    #[serde(default)]
+    pub suggestions: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct RegistrationResponse {
+    pub user: UserInfo,
+    pub access_key: String,
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct FriendLists {
     #[serde(default)]
@@ -160,6 +185,25 @@ impl NativeApi {
         let response = self.http.patch(url).json(&body).send().await
             .map_err(|error| format!("Could not reach server API: {error}"))?;
         Self::read_json(response).await
+    }
+
+    pub async fn suggest_usernames(&self, display_name: &str) -> Result<UsernameSuggestions, String> {
+        let mut url = self.endpoint("api/usernames/suggestions")?;
+        url.query_pairs_mut().append_pair("display_name", display_name);
+        let response = self.http.get(url).send().await
+            .map_err(|error| format!("Could not check username availability: {error}"))?;
+        let value = Self::read_json(response).await?;
+        serde_json::from_value(value)
+            .map_err(|error| format!("Could not decode username suggestions: {error}"))
+    }
+
+    pub async fn register(&self, display_name: &str, username: &str) -> Result<RegistrationResponse, String> {
+        let value = self.post_json("api/register", json!({
+            "display_name": display_name,
+            "username": username
+        })).await?;
+        serde_json::from_value(value)
+            .map_err(|error| format!("Could not decode registration response: {error}"))
     }
 
     pub async fn load_profile(&self, user_id: &str) -> Result<String, String> {
@@ -304,6 +348,15 @@ pub async fn connect(
     events: Sender<AppEvent>,
 ) -> Result<(), String> {
     let base = normalize_server_url(&server_address)?;
+    let entered_recovery_key = recovery_key.trim().to_string();
+    let generated_recovery_key = if entered_recovery_key.is_empty() {
+        Some(crate::crypto::generate_recovery_key()?)
+    } else {
+        None
+    };
+    let recovery_key = generated_recovery_key.clone().unwrap_or(entered_recovery_key);
+    let fresh_e2e_identity = generated_recovery_key.is_some();
+
     let jar = Arc::new(Jar::default());
     let http = reqwest::Client::builder()
         .cookie_provider(Arc::clone(&jar))
@@ -364,6 +417,7 @@ pub async fn connect(
         base.clone(),
         user.user_id.clone(),
         recovery_key,
+        fresh_e2e_identity,
     )
     .await?;
 
@@ -388,6 +442,7 @@ pub async fn connect(
             outgoing: outgoing.clone(),
             crypto: crypto.clone(),
             api: api.clone(),
+            generated_recovery_key,
         })
         .map_err(|_| "Application closed".to_string())?;
 
