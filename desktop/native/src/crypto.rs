@@ -75,6 +75,7 @@ pub struct NativeMatrixCrypto {
     server_name: String,
     internal_user_id: String,
     storage_dir: PathBuf,
+    backup_id: String,
     matrix_user_id: OwnedUserId,
     device_id: OwnedDeviceId,
     recovery_key: String,
@@ -112,7 +113,7 @@ impl NativeMatrixCrypto {
         // Keep pre-existing native stores at the legacy path for old recovery keys.
         // A newly generated key gets an isolated store, so skipping old-key recovery
         // never overwrites the user's previous encrypted history cache.
-        let account_dir = if fresh_start || keyed_dir.is_dir() {
+        let account_dir = if fresh_start || keyed_dir.is_dir() || !root_dir.join("matrix-store").exists() {
             keyed_dir
         } else {
             root_dir
@@ -146,6 +147,7 @@ impl NativeMatrixCrypto {
             base_url,
             server_name,
             internal_user_id,
+            backup_id: key_fingerprint,
             storage_dir: account_dir,
             matrix_user_id,
             device_id,
@@ -160,7 +162,9 @@ impl NativeMatrixCrypto {
             backup_lock: Mutex::new(()),
         });
 
-        client.restore_room_key_backup().await?;
+        if !fresh_start {
+            client.restore_room_key_backup().await?;
+        }
 
         // Match the web client's bootstrap so a fresh device publishes its
         // identity and one-time keys before attempting to send a message.
@@ -572,22 +576,37 @@ impl NativeMatrixCrypto {
     }
 
     async fn restore_room_key_backup(&self) -> Result<(), String> {
-        let response = self.api_get("api/matrix/key-backup").await?;
-        let Some(encrypted) = response.get("encrypted_backup").and_then(Value::as_str) else {
+        let scoped_path = format!("api/matrix/key-backups/{}", self.backup_id);
+        let scoped = self.api_get(&scoped_path).await?;
+        if let Some(encrypted) = scoped.get("encrypted_backup").and_then(Value::as_str) {
+            if !encrypted.is_empty() {
+                let exported = decrypt_room_key_export(encrypted.as_bytes(), &self.recovery_key)
+                    .map_err(|error| format!("Could not unlock this E2E identity's room-key backup: {error}"))?;
+                self.machine.store().import_room_keys(exported, None, |_, _| {})
+                    .await.map_err(|error| format!("Could not restore E2E room keys: {error}"))?;
+                return Ok(());
+            }
+        }
+
+        // Compatibility with backups created before key-scoped backup storage.
+        // If a recovery key is wrong, do not silently create an empty identity.
+        let legacy = self.api_get("api/matrix/key-backup").await?;
+        let Some(encrypted) = legacy.get("encrypted_backup").and_then(Value::as_str) else {
             return Ok(());
         };
         if encrypted.is_empty() {
             return Ok(());
         }
         let exported = decrypt_room_key_export(encrypted.as_bytes(), &self.recovery_key)
-            .map_err(|error| format!("Could not unlock the existing E2E room-key backup: {error}"))?;
+            .map_err(|error| format!("Could not unlock the previous E2E room-key backup: {error}"))?;
         self.machine.store().import_room_keys(exported, None, |_, _| {})
             .await.map_err(|error| format!("Could not restore E2E room keys: {error}"))?;
         Ok(())
     }
 
     async fn sync_room_key_backup(&self) -> Result<(), String> {
-        // Serialize snapshots so an older export cannot overwrite a newer backup.
+        // Backups are isolated by a hash of the recovery key so a fresh identity
+        // cannot overwrite the backup belonging to older encrypted conversations.
         let _guard = self.backup_lock.lock().await;
         let exported = self.machine.store().export_room_keys(|_| true).await
             .map_err(|error| format!("Could not export E2E room keys: {error}"))?;
@@ -597,11 +616,12 @@ impl NativeMatrixCrypto {
     }
 
     async fn api_request_put_key_backup(&self, encrypted_backup: String) -> Result<(), String> {
+        let path = format!("api/matrix/key-backups/{}", self.backup_id);
         api_request(
             &self.http,
             &self.base_url,
             Method::PUT,
-            "api/matrix/key-backup",
+            &path,
             Some(json!({ "encrypted_backup": encrypted_backup })),
         ).await.map(|_| ())
     }
