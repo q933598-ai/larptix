@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use async_channel::{Receiver, Sender};
 use futures_util::{SinkExt, StreamExt};
-use larptrix_protocol::{ChatMessage, ClientMessage, ServerMessage, UserInfo};
+use larptrix_protocol::{ChatMessage, ClientMessage, GroupInfo, ServerMessage, UserInfo};
 use serde_json::{json, Value};
 use reqwest::cookie::{CookieStore, Jar};
 use serde::{Deserialize, Serialize};
@@ -131,6 +131,30 @@ impl NativeApi {
         let response = self.http.post(url).json(&body).send().await
             .map_err(|error| format!("Could not reach server API: {error}"))?;
         Self::read_json(response).await
+    }
+
+    pub async fn create_group(&self, name: &str, member_ids: &[String]) -> Result<GroupInfo, String> {
+        let value = self.post_json("api/groups", json!({
+            "name": name,
+            "member_ids": member_ids
+        })).await?;
+        serde_json::from_value(value)
+            .map_err(|error| format!("Could not decode created group: {error}"))
+    }
+
+    pub async fn create_channel(
+        &self,
+        name: &str,
+        member_ids: &[String],
+        post_policy: &str,
+    ) -> Result<GroupInfo, String> {
+        let value = self.post_json("api/channels", json!({
+            "name": name,
+            "member_ids": member_ids,
+            "post_policy": post_policy
+        })).await?;
+        serde_json::from_value(value)
+            .map_err(|error| format!("Could not decode created channel: {error}"))
     }
 
     pub async fn download_asset(&self, path: &str) -> Result<(Vec<u8>, String), String> {
