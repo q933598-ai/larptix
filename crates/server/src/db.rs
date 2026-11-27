@@ -3569,4 +3569,45 @@ mod tests {
                 .e2e_enabled
         );
     }
+
+    #[test]
+    fn matrix_key_backups_are_isolated_per_recovery_key() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
+        let first = "a".repeat(64);
+        let second = "b".repeat(64);
+
+        assert!(
+            db.get_matrix_key_backup_for_key(&alice.id, &first)
+                .unwrap()
+                .is_none()
+        );
+
+        db.upsert_matrix_key_backup_for_key(&alice.id, &first, "backup-one")
+            .unwrap();
+        db.upsert_matrix_key_backup_for_key(&alice.id, &second, "backup-two")
+            .unwrap();
+
+        assert_eq!(
+            db.get_matrix_key_backup_for_key(&alice.id, &first)
+                .unwrap()
+                .as_deref(),
+            Some("backup-one")
+        );
+        assert_eq!(
+            db.get_matrix_key_backup_for_key(&alice.id, &second)
+                .unwrap()
+                .as_deref(),
+            Some("backup-two")
+        );
+
+        db.upsert_matrix_key_backup_for_key(&alice.id, &first, "backup-one-updated")
+            .unwrap();
+        assert_eq!(
+            db.get_matrix_key_backup_for_key(&alice.id, &second)
+                .unwrap()
+                .as_deref(),
+            Some("backup-two")
+        );
+    }
 }
