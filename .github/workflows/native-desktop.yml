@@ -1,0 +1,107 @@
+name: Native GPUI Desktop
+
+on:
+  pull_request:
+    paths:
+      - "desktop/native/**"
+      - "crates/client-core/**"
+      - "crates/protocol/**"
+      - "tests/**"
+      - ".github/workflows/native-desktop.yml"
+  push:
+    branches: ["main", "rewrite/rust-client"]
+    paths:
+      - "desktop/native/**"
+      - "crates/client-core/**"
+      - "crates/protocol/**"
+      - "tests/**"
+      - ".github/workflows/native-desktop.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  linux-native:
+    name: Check native GPUI app (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install GPUI Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang cmake lld llvm pkg-config \
+            libasound2-dev libfontconfig-dev libgit2-dev libglib2.0-dev \
+            libssl-dev libva-dev libvulkan1 libwayland-dev \
+            libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev libsqlite3-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav gstreamer1.0-alsa gstreamer1.0-pulseaudio
+
+      - name: Check native desktop
+        run: cargo check --manifest-path desktop/native/Cargo.toml
+
+      - name: Test native Matrix interoperability
+        run: cargo test --manifest-path desktop/native/Cargo.toml
+
+      - name: Test shared client core
+        run: cargo test -p larptrix-client-core
+
+      - name: Test browser/native protocol fixtures
+        run: node --test tests/matrix-interop.test.mjs
+
+  windows-native:
+    name: Check native GPUI app (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install GStreamer (MSVC x64)
+        shell: pwsh
+        run: |
+          $version = "1.28.9"
+          $root = "C:\gstreamer\1.0\msvc_x86_64"
+          $installer = "$env:RUNNER_TEMP\gstreamer-1.0-msvc-x86_64-$version.exe"
+          $url = "https://gstreamer.freedesktop.org/pkg/windows/$version/msvc/gstreamer-1.0-msvc-x86_64-$version.exe"
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          $process = Start-Process -FilePath $installer -Wait -PassThru -ArgumentList @(
+            "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/ALLUSERS",
+            "/TYPE=devel", "/DIR=$root"
+          )
+          if ($process.ExitCode -ne 0) {
+            throw "GStreamer installer failed with exit code $($process.ExitCode)"
+          }
+          "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "PKG_CONFIG=$root\bin\pkg-config.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "PKG_CONFIG_PATH=$root\lib\pkgconfig;$root\lib\gstreamer-1.0\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "GSTREAMER_1_0_ROOT_MSVC_X86_64=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "GST_PLUGIN_PATH=$root\lib\gstreamer-1.0" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Check native desktop
+        run: cargo check --manifest-path desktop/native/Cargo.toml
+
+      - name: Build native desktop
+        run: cargo build --release --manifest-path desktop/native/Cargo.toml
+
+      - name: Test native Matrix interoperability
+        run: cargo test --manifest-path desktop/native/Cargo.toml
+
+      - name: Test shared client core
+        run: cargo test -p larptrix-client-core

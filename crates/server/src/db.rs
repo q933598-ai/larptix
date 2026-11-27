@@ -169,6 +169,15 @@ impl Database {
         }
     }
 
+    pub fn username_exists(&self, username: &str) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM users WHERE username = ?1 COLLATE NOCASE AND username <> '')",
+            [username],
+            |row| row.get(0),
+        )
+    }
+
     pub fn create_key_user(
         &self,
         display_name: &str,
@@ -734,6 +743,38 @@ impl Database {
                 encrypted_backup = excluded.encrypted_backup,
                 updated_at = excluded.updated_at",
             params![user_id, encrypted_backup, crate::now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_matrix_key_backup_for_key(
+        &self,
+        user_id: &str,
+        backup_id: &str,
+    ) -> rusqlite::Result<Option<String>> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.query_row(
+            "SELECT encrypted_backup FROM matrix_key_backups_by_key WHERE user_id = ?1 AND backup_id = ?2",
+            params![user_id, backup_id],
+            |row| row.get(0),
+        )
+        .optional()
+    }
+
+    pub fn upsert_matrix_key_backup_for_key(
+        &self,
+        user_id: &str,
+        backup_id: &str,
+        encrypted_backup: &str,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "INSERT INTO matrix_key_backups_by_key (user_id, backup_id, encrypted_backup, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(user_id, backup_id) DO UPDATE SET
+                encrypted_backup = excluded.encrypted_backup,
+                updated_at = excluded.updated_at",
+            params![user_id, backup_id, encrypted_backup, crate::now_ms()],
         )?;
         Ok(())
     }
@@ -1865,15 +1906,11 @@ impl Database {
                 last_seen_at: row.get(6)?,
                 expires_at: row.get(7)?,
             })
-        ).optional()
+        )
+        .optional()
     }
 
-    pub fn touch_session(
-        &self,
-        token: &str,
-        now: i64,
-        user_agent: &str,
-    ) -> rusqlite::Result<()> {
+    pub fn touch_session(&self, token: &str, now: i64, user_agent: &str) -> rusqlite::Result<()> {
         let conn = self.conn.lock().expect("db lock");
         conn.execute(
             "UPDATE sessions
@@ -1885,22 +1922,28 @@ impl Database {
         Ok(())
     }
 
-    pub fn list_sessions_for_user(&self, user_id: &str, now: i64) -> rusqlite::Result<Vec<SessionRow>> {
+    pub fn list_sessions_for_user(
+        &self,
+        user_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<Vec<SessionRow>> {
         let conn = self.conn.lock().expect("db lock");
         let mut stmt = conn.prepare(
             "SELECT session_id, token, user_id, device_name, user_agent, created_at, last_seen_at, expires_at
              FROM sessions WHERE user_id=?1 AND expires_at>?2 ORDER BY last_seen_at DESC, created_at DESC"
         )?;
-        let rows = stmt.query_map(params![user_id, now], |row| Ok(SessionRow {
-            session_id: row.get(0)?,
-            token: row.get(1)?,
-            user_id: row.get(2)?,
-            device_name: row.get(3)?,
-            user_agent: row.get(4)?,
-            created_at: row.get(5)?,
-            last_seen_at: row.get(6)?,
-            expires_at: row.get(7)?,
-        }))?;
+        let rows = stmt.query_map(params![user_id, now], |row| {
+            Ok(SessionRow {
+                session_id: row.get(0)?,
+                token: row.get(1)?,
+                user_id: row.get(2)?,
+                device_name: row.get(3)?,
+                user_agent: row.get(4)?,
+                created_at: row.get(5)?,
+                last_seen_at: row.get(6)?,
+                expires_at: row.get(7)?,
+            })
+        })?;
         rows.collect()
     }
 
@@ -2830,6 +2873,15 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS matrix_key_backups_by_key (
+            user_id TEXT NOT NULL,
+            backup_id TEXT NOT NULL,
+            encrypted_backup TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (user_id, backup_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS matrix_to_device_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             recipient_user_id TEXT NOT NULL,
@@ -3080,9 +3132,8 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         }
     }
     let old_sessions: Vec<String> = {
-        let mut stmt = conn.prepare(
-            "SELECT token FROM sessions WHERE session_id IS NULL OR session_id = ''"
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT token FROM sessions WHERE session_id IS NULL OR session_id = ''")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         rows.collect::<Result<Vec<_>, _>>()?
     };
@@ -3516,6 +3567,46 @@ mod tests {
                 .find(|user| user.user_id == bob.id)
                 .unwrap()
                 .e2e_enabled
+        );
+    }
+
+    #[test]
+    fn matrix_key_backups_are_isolated_per_recovery_key() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        let alice = db.create_key_user("Alice", "alice", "hash-a", 1).unwrap();
+        let first = "a".repeat(64);
+        let second = "b".repeat(64);
+
+        assert!(db
+            .get_matrix_key_backup_for_key(&alice.id, &first)
+            .unwrap()
+            .is_none());
+
+        db.upsert_matrix_key_backup_for_key(&alice.id, &first, "backup-one")
+            .unwrap();
+        db.upsert_matrix_key_backup_for_key(&alice.id, &second, "backup-two")
+            .unwrap();
+
+        assert_eq!(
+            db.get_matrix_key_backup_for_key(&alice.id, &first)
+                .unwrap()
+                .as_deref(),
+            Some("backup-one")
+        );
+        assert_eq!(
+            db.get_matrix_key_backup_for_key(&alice.id, &second)
+                .unwrap()
+                .as_deref(),
+            Some("backup-two")
+        );
+
+        db.upsert_matrix_key_backup_for_key(&alice.id, &first, "backup-one-updated")
+            .unwrap();
+        assert_eq!(
+            db.get_matrix_key_backup_for_key(&alice.id, &second)
+                .unwrap()
+                .as_deref(),
+            Some("backup-two")
         );
     }
 }

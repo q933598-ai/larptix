@@ -29,6 +29,7 @@ use crate::AppState;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/register", post(register))
+        .route("/api/usernames/suggestions", get(username_suggestions))
         .route("/api/register/password", post(register_password))
         .route("/api/login", post(login))
         .route("/api/login/preview", post(login_preview))
@@ -118,6 +119,12 @@ pub fn router() -> Router<Arc<AppState>> {
                 .put(matrix_key_backup_put)
                 .layer(DefaultBodyLimit::max(16 * 1024 * 1024 + 64 * 1024)),
         )
+        .route(
+            "/api/matrix/key-backups/{backup_id}",
+            get(matrix_key_backup_for_key_get)
+                .put(matrix_key_backup_for_key_put)
+                .layer(DefaultBodyLimit::max(16 * 1024 * 1024 + 64 * 1024)),
+        )
         .route("/api/matrix/keys/upload", post(matrix_keys_upload))
         .route("/api/matrix/keys/query", post(matrix_keys_query))
         .route("/api/matrix/keys/claim", post(matrix_keys_claim))
@@ -149,6 +156,11 @@ pub fn router() -> Router<Arc<AppState>> {
 pub struct RegisterBody {
     pub display_name: String,
     pub username: String,
+}
+
+#[derive(Deserialize)]
+pub struct UsernameSuggestionQuery {
+    pub display_name: String,
 }
 
 #[derive(Deserialize)]
@@ -244,6 +256,112 @@ pub struct UpdateCryptoDeviceBody {
     pub bundle_json: String,
     pub encrypted_state: String,
     pub expected_version: i64,
+}
+
+async fn username_suggestions(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<UsernameSuggestionQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let display_name = sanitize_display_name(&query.display_name).map_err(ApiError::bad)?;
+    let base = username_from_display_name(&display_name);
+    let base_available = !state.db.username_exists(&base).map_err(ApiError::db)?;
+    let mut suggestions = Vec::new();
+
+    for suffix in [
+        "2", "3", "4", "5", "6", "7", "8", "9", "_2", "_3", "_4", "_5",
+    ] {
+        let keep = 24usize.saturating_sub(suffix.len());
+        let candidate = format!("{}{}", base.chars().take(keep).collect::<String>(), suffix);
+        if candidate.len() < 3 || candidate == base {
+            continue;
+        }
+        if !state.db.username_exists(&candidate).map_err(ApiError::db)? {
+            suggestions.push(candidate);
+        }
+        if suggestions.len() >= 5 {
+            break;
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "base_username": base,
+        "base_available": base_available,
+        "suggestions": suggestions
+    })))
+}
+
+fn username_from_display_name(display_name: &str) -> String {
+    let mut output = String::new();
+    let mut separator_pending = false;
+
+    for raw in display_name.chars() {
+        let lower = raw.to_lowercase().next().unwrap_or(raw);
+        let transliteration = match lower {
+            'а' => "a",
+            'б' => "b",
+            'в' => "v",
+            'г' => "g",
+            'д' => "d",
+            'е' => "e",
+            'ё' => "yo",
+            'ж' => "zh",
+            'з' => "z",
+            'и' => "i",
+            'й' => "y",
+            'к' => "k",
+            'л' => "l",
+            'м' => "m",
+            'н' => "n",
+            'о' => "o",
+            'п' => "p",
+            'р' => "r",
+            'с' => "s",
+            'т' => "t",
+            'у' => "u",
+            'ф' => "f",
+            'х' => "kh",
+            'ц' => "ts",
+            'ч' => "ch",
+            'ш' => "sh",
+            'щ' => "shch",
+            'ъ' | 'ь' => "",
+            'ы' => "y",
+            'э' => "e",
+            'ю' => "yu",
+            'я' => "ya",
+            _ => "",
+        };
+
+        if lower.is_ascii_alphanumeric() {
+            if separator_pending && !output.is_empty() {
+                output.push('_');
+            }
+            output.push(lower);
+            separator_pending = false;
+        } else if !transliteration.is_empty() {
+            if separator_pending && !output.is_empty() {
+                output.push('_');
+            }
+            output.push_str(transliteration);
+            separator_pending = false;
+        } else if lower.is_whitespace() || lower == '-' || lower == '_' || lower == '.' {
+            separator_pending = true;
+        }
+        if output.len() >= 24 {
+            break;
+        }
+    }
+
+    let base = output
+        .trim_matches('_')
+        .chars()
+        .take(24)
+        .collect::<String>();
+    if base.len() >= 3 {
+        base
+    } else {
+        "user".to_string()
+    }
 }
 
 async fn register(
@@ -418,7 +536,9 @@ async fn revoke_session(
         .map(|session| session.session_id);
 
     if current.as_deref() == Some(session_id.as_str()) {
-        return Err(ApiError::bad("use Log out to close the current device session"));
+        return Err(ApiError::bad(
+            "use Log out to close the current device session",
+        ));
     }
 
     if !state
@@ -780,6 +900,47 @@ async fn matrix_key_backup_put(
     state
         .db
         .upsert_matrix_key_backup(&user.id, &body.encrypted_backup)
+        .map_err(ApiError::db)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+fn validate_backup_id(raw: &str) -> Result<&str, ApiError> {
+    if raw.len() != 64 || !raw.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(ApiError::bad("invalid E2E backup identity"));
+    }
+    Ok(raw)
+}
+
+async fn matrix_key_backup_for_key_get(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(backup_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let backup_id = validate_backup_id(&backup_id)?;
+    let encrypted_backup = state
+        .db
+        .get_matrix_key_backup_for_key(&user.id, backup_id)
+        .map_err(ApiError::db)?;
+    Ok(Json(
+        serde_json::json!({ "encrypted_backup": encrypted_backup }),
+    ))
+}
+
+async fn matrix_key_backup_for_key_put(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(backup_id): Path<String>,
+    Json(body): Json<MatrixKeyBackupBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let backup_id = validate_backup_id(&backup_id)?;
+    if body.encrypted_backup.trim().is_empty() || body.encrypted_backup.len() > 16 * 1024 * 1024 {
+        return Err(ApiError::bad("invalid Matrix key backup"));
+    }
+    state
+        .db
+        .upsert_matrix_key_backup_for_key(&user.id, backup_id, &body.encrypted_backup)
         .map_err(ApiError::db)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -2703,7 +2864,14 @@ fn session_response(
     let expires_at = created_at + SESSION_MS;
     state
         .db
-        .create_session(&token, &user.id, device_name, user_agent, created_at, expires_at)
+        .create_session(
+            &token,
+            &user.id,
+            device_name,
+            user_agent,
+            created_at,
+            expires_at,
+        )
         .map_err(ApiError::db)?;
     let secure = std::env::var("LARPTRIX_COOKIE_SECURE")
         .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "yes"));
@@ -2893,10 +3061,12 @@ mod tests {
 
         let response = login(
             State(state),
+            HeaderMap::new(),
             Json(LoginBody {
                 access_key: Some(access_key),
                 email: None,
                 password: None,
+                device_name: None,
             }),
         )
         .await
@@ -2963,7 +3133,14 @@ mod tests {
             .unwrap();
         state
             .db
-            .create_session("e2e-session", &user.id, crate::now_ms() + 60_000)
+            .create_session(
+                "e2e-session",
+                &user.id,
+                "E2E Test",
+                "integration-test",
+                crate::now_ms(),
+                crate::now_ms() + 60_000,
+            )
             .unwrap();
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -3009,7 +3186,14 @@ mod tests {
         let token = "legacy-session-token";
         state
             .db
-            .create_session(token, &old_user.id, crate::now_ms() + 60_000)
+            .create_session(
+                token,
+                &old_user.id,
+                "Legacy Test",
+                "integration-test",
+                crate::now_ms(),
+                crate::now_ms() + 60_000,
+            )
             .unwrap();
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -3032,10 +3216,12 @@ mod tests {
 
         let response = login(
             State(state),
+            HeaderMap::new(),
             Json(LoginBody {
                 access_key: Some(access_key),
                 email: None,
                 password: None,
+                device_name: None,
             }),
         )
         .await

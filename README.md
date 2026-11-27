@@ -116,6 +116,37 @@ For calls between users behind different NATs, configure reachable STUN/TURN in
 some peer-to-peer calls may not connect. TURN credentials should be short-lived;
 do not put a permanent shared secret in this browser-readable setting.
 
+## Native desktop client (experimental)
+
+`desktop/native/` is a standalone Rust desktop client rendered with GPUI. It does
+not embed the web client, Chromium, Electron, Tauri, or an OS WebView. It is a
+separate Cargo workspace, so the native GPU/window-system dependencies do not enter
+the VPS server or Docker image.
+
+Run it from the repository root:
+
+```bash
+cargo run --manifest-path desktop/native/Cargo.toml
+```
+
+Enter your server URL and the 64-character access key in the native sign-in screen.
+The app uses the existing `/api/login` endpoint, keeps the returned session cookie
+in memory, and connects to the authenticated `/ws` endpoint. You can prefill the
+server URL with `LARPTRIX_SERVER_URL`.
+
+The current native client loads the server directory, presence, groups and 1:1 chat
+history. An experimental Matrix E2E implementation now initializes a native device,
+uses an encrypted local SQLite crypto store, restores the web client's encrypted
+Megolm room-key backup, and encrypts/decrypts 1:1 messages using the same Matrix SDK
+protocol. Enter the web client's E2E recovery key at sign-in; this is distinct from
+the account access key.
+
+Live browser/native interoperability and device verification are still being tested.
+Device verification/cross-signing UI, group messaging, encrypted attachments, calls
+and notifications remain unfinished. The native composer sends only after encryption
+succeeds and has no plaintext fallback. The existing Electron/Tauri builds remain
+available during migration.
+
 ## Desktop clients
 
 `desktop/` contains a Linux desktop client using Electron's Chromium runtime, so
