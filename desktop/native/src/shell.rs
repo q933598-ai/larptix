@@ -330,8 +330,7 @@ impl LarptrixShell {
                             let _ = events.send_blocking(AppEvent::SavedMessagesLoaded { data });
                         }
                         Err(error) => {
-                            let _ = events.send_blocking(AppEvent::Status(format!("Could not unlock saved messages: {error}")));
-                            let _ = events.send_blocking(AppEvent::SavedMessagesLoaded { data: "[]".into() });
+                            let _ = events.send_blocking(AppEvent::SavedMessagesLoadFailed(error));
                         }
                     }
                 });
@@ -411,14 +410,20 @@ impl LarptrixShell {
                 self.connection_status = "Message privacy updated".into();
             }
             AppEvent::SavedMessagesLoaded { data } => {
-                self.saved_messages_loaded = true;
                 match serde_json::from_str::<Vec<SavedMessage>>(&data) {
-                    Ok(messages) => self.saved_messages = messages,
+                    Ok(messages) => {
+                        self.saved_messages = messages;
+                        self.saved_messages_loaded = true;
+                    }
                     Err(error) => {
-                        self.saved_messages.clear();
-                        self.connection_status = format!("Could not decode saved messages: {error}");
+                        self.saved_messages_loaded = false;
+                        self.connection_status = format!("Could not decode saved messages; existing file was left untouched: {error}");
                     }
                 }
+            }
+            AppEvent::SavedMessagesLoadFailed(error) => {
+                self.saved_messages_loaded = false;
+                self.connection_status = format!("Could not unlock saved messages; existing file was left untouched: {error}");
             }
             AppEvent::SavedMessagesSaveFinished { error } => {
                 if let Some(error) = error {
