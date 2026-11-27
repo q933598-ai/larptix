@@ -119,6 +119,12 @@ pub fn router() -> Router<Arc<AppState>> {
                 .put(matrix_key_backup_put)
                 .layer(DefaultBodyLimit::max(16 * 1024 * 1024 + 64 * 1024)),
         )
+        .route(
+            "/api/matrix/key-backups/{backup_id}",
+            get(matrix_key_backup_for_key_get)
+                .put(matrix_key_backup_for_key_put)
+                .layer(DefaultBodyLimit::max(16 * 1024 * 1024 + 64 * 1024)),
+        )
         .route("/api/matrix/keys/upload", post(matrix_keys_upload))
         .route("/api/matrix/keys/query", post(matrix_keys_query))
         .route("/api/matrix/keys/claim", post(matrix_keys_claim))
@@ -894,6 +900,43 @@ async fn matrix_key_backup_put(
     state
         .db
         .upsert_matrix_key_backup(&user.id, &body.encrypted_backup)
+        .map_err(ApiError::db)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+fn validate_backup_id(raw: &str) -> Result<&str, ApiError> {
+    if raw.len() != 64 || !raw.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(ApiError::bad("invalid E2E backup identity"));
+    }
+    Ok(raw)
+}
+
+async fn matrix_key_backup_for_key_get(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(backup_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let backup_id = validate_backup_id(&backup_id)?;
+    let encrypted_backup = state.db
+        .get_matrix_key_backup_for_key(&user.id, backup_id)
+        .map_err(ApiError::db)?;
+    Ok(Json(serde_json::json!({ "encrypted_backup": encrypted_backup })))
+}
+
+async fn matrix_key_backup_for_key_put(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(backup_id): Path<String>,
+    Json(body): Json<MatrixKeyBackupBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_user(&state, &headers)?;
+    let backup_id = validate_backup_id(&backup_id)?;
+    if body.encrypted_backup.trim().is_empty() || body.encrypted_backup.len() > 16 * 1024 * 1024 {
+        return Err(ApiError::bad("invalid Matrix key backup"));
+    }
+    state.db
+        .upsert_matrix_key_backup_for_key(&user.id, backup_id, &body.encrypted_backup)
         .map_err(ApiError::db)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
