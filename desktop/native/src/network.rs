@@ -30,6 +30,9 @@ pub enum AppEvent {
     UserSearchResults {
         users: Vec<UserInfo>,
     },
+    GroupCreated {
+        group: GroupInfo,
+    },
     AvatarCached {
         user_id: String,
         path: PathBuf,
