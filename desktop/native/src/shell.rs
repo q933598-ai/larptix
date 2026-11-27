@@ -287,7 +287,7 @@ impl LarptrixShell {
                 self.password.clear();
                 self.recovery_key.clear();
                 self.outgoing = Some(outgoing);
-                self.crypto = Some(crypto);
+                self.crypto = Some(crypto.clone());
                 self.api = Some(api.clone());
                 self.preload_user_avatar(&user);
                 self.profile_display_name = user.display_name.clone();
@@ -402,7 +402,7 @@ impl LarptrixShell {
             }
             AppEvent::MessagePolicyUpdated { user } => {
                 // Preserve local device/E2E metadata that /api/me/settings does not return.
-                let mut merged_user = self.core.state().current_user.clone().unwrap_or(user);
+                let mut merged_user = self.core.state().current_user.clone().unwrap_or_else(|| user.clone());
                 merged_user.message_policy = user.message_policy;
                 self.core.apply_server_message(ServerMessage::Welcome {
                     user: merged_user,
@@ -1681,7 +1681,7 @@ impl LarptrixShell {
         });
     }
 
-    fn load_viewer_image(&mut self, cx: &mut Context<Self>) {
+    fn load_viewer_image(&mut self, _cx: &mut Context<Self>) {
         let Some(viewer) = self.image_viewer.as_mut() else {
             return;
         };
