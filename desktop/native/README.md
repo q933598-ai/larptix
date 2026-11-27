@@ -21,7 +21,9 @@ From the repository root:
 cargo run --manifest-path desktop/native/Cargo.toml
 ```
 
-Enter the server URL, your 64-character account access key, and the E2E recovery key saved when enabling encryption in the web client. They are separate credentials: the access key creates the HTTP session, while the recovery key unlocks the encrypted local Matrix store and the shared room-key backup. Neither key is written to disk as plaintext. The client then connects to `/ws` with the HttpOnly session cookie and matching `Origin` header. WebSocket reconnects use exponential backoff.
+The first screen lets you choose a saved server or enter a new self-hosted server URL. Server URLs are stored locally in the user's configuration directory (only the addresses are saved; credentials are not). The sign-in screen supports either a 64-character account access key or an email/password account. Both methods also require the separate E2E recovery key saved when enabling encryption in the web client. The sign-in credential creates the HTTP session, while the recovery key unlocks the encrypted local Matrix store and shared room-key backup. Neither credential is written to disk as plaintext. The client then connects to `/ws` with the HttpOnly session cookie and matching `Origin` header. WebSocket reconnects use exponential backoff.
+
+The native client currently signs in to existing accounts; account creation is still done in the web client. For accounts created with email/password, use the Email & password tab. For access-key accounts, use the Access key tab. The E2E recovery key is separate from both sign-in methods.
 
 You can prefill the server URL with `LARPTRIX_SERVER_URL`:
 
@@ -69,7 +71,8 @@ release work and are not implied by the current CI executable.
 ## Current scope
 
 - Native GPUI window and three-panel messenger layout.
-- Native server URL and access-key sign-in form with clipboard paste.
+- Initial server picker with locally saved self-hosted server addresses.
+- Native access-key and email/password sign-in modes with clipboard paste.
 - Cookie-based HTTP login against the existing Larptrix API.
 - Authenticated WebSocket connection and reconnect loop.
 - Real server directory, groups, channels, presence, and direct/group conversation history.
