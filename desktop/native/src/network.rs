@@ -34,6 +34,16 @@ pub enum AppEvent {
         group: GroupInfo,
     },
     GroupCreationFailed(String),
+    ProfileSettingsLoaded {
+        about: String,
+    },
+    ProfileUpdated {
+        user: UserInfo,
+        about: String,
+    },
+    MessagePolicyUpdated {
+        user: UserInfo,
+    },
     AvatarCached {
         user_id: String,
         path: PathBuf,
@@ -135,6 +145,43 @@ impl NativeApi {
         let response = self.http.post(url).json(&body).send().await
             .map_err(|error| format!("Could not reach server API: {error}"))?;
         Self::read_json(response).await
+    }
+
+    async fn patch_json(&self, path: &str, body: Value) -> Result<Value, String> {
+        let url = self.endpoint(path)?;
+        let response = self.http.patch(url).json(&body).send().await
+            .map_err(|error| format!("Could not reach server API: {error}"))?;
+        Self::read_json(response).await
+    }
+
+    pub async fn load_profile(&self, user_id: &str) -> Result<String, String> {
+        let path = format!("api/users/{user_id}/profile");
+        let value = self.get_json(&path).await?;
+        Ok(value.get("about").and_then(Value::as_str).unwrap_or_default().to_string())
+    }
+
+    pub async fn update_profile(
+        &self,
+        display_name: &str,
+        username: &str,
+        about: &str,
+    ) -> Result<UserInfo, String> {
+        let value = self.patch_json("api/me", json!({
+            "display_name": display_name,
+            "username": username,
+            "about": about,
+            "tags": []
+        })).await?;
+        serde_json::from_value(value)
+            .map_err(|error| format!("Could not decode updated profile: {error}"))
+    }
+
+    pub async fn update_message_policy(&self, message_policy: &str) -> Result<UserInfo, String> {
+        let value = self.patch_json("api/me/settings", json!({
+            "message_policy": message_policy
+        })).await?;
+        serde_json::from_value(value)
+            .map_err(|error| format!("Could not decode updated privacy settings: {error}"))
     }
 
     pub async fn create_group(&self, name: &str, member_ids: &[String]) -> Result<GroupInfo, String> {
