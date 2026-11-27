@@ -74,6 +74,7 @@ pub struct NativeMatrixCrypto {
     base_url: Url,
     server_name: String,
     internal_user_id: String,
+    storage_dir: PathBuf,
     matrix_user_id: OwnedUserId,
     device_id: OwnedDeviceId,
     recovery_key: String,
@@ -91,6 +92,7 @@ impl NativeMatrixCrypto {
         base_url: Url,
         internal_user_id: String,
         recovery_key: String,
+        fresh_start: bool,
     ) -> Result<Arc<Self>, String> {
         validate_recovery_key(&recovery_key)?;
 
@@ -104,7 +106,17 @@ impl NativeMatrixCrypto {
         let matrix_user_id = UserId::parse(format!("@{}:{}", internal_user_id, server_name))
             .map_err(|error| format!("Invalid Matrix account id: {error}"))?;
 
-        let account_dir = crypto_data_dir(&internal_user_id)?;
+        let root_dir = crypto_data_dir(&internal_user_id)?;
+        let key_fingerprint = format!("{:x}", Sha256::digest(recovery_key.as_bytes()));
+        let keyed_dir = root_dir.join("devices").join(key_fingerprint);
+        // Keep pre-existing native stores at the legacy path for old recovery keys.
+        // A newly generated key gets an isolated store, so skipping old-key recovery
+        // never overwrites the user's previous encrypted history cache.
+        let account_dir = if fresh_start || keyed_dir.is_dir() {
+            keyed_dir
+        } else {
+            root_dir
+        };
         std::fs::create_dir_all(&account_dir)
             .map_err(|error| format!("Could not create encrypted key directory: {error}"))?;
         #[cfg(unix)]
@@ -134,6 +146,7 @@ impl NativeMatrixCrypto {
             base_url,
             server_name,
             internal_user_id,
+            storage_dir: account_dir,
             matrix_user_id,
             device_id,
             recovery_key: recovery_key.clone(),
@@ -175,7 +188,7 @@ impl NativeMatrixCrypto {
     }
 
     pub fn saved_messages_path(&self) -> Result<PathBuf, String> {
-        Ok(crypto_data_dir(&self.internal_user_id)?.join("saved-messages.enc"))
+        Ok(self.storage_dir.join("saved-messages.enc"))
     }
 
     fn local_storage_key(&self) -> Result<[u8; 32], String> {
@@ -854,6 +867,13 @@ fn validate_recovery_key(key: &str) -> Result<(), String> {
         return Err("E2E recovery key must decode to exactly 32 bytes".into());
     }
     Ok(())
+}
+
+pub fn generate_recovery_key() -> Result<String, String> {
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes)
+        .map_err(|error| format!("Could not generate E2E recovery key: {error}"))?;
+    Ok(STANDARD_NO_PAD.encode(bytes))
 }
 
 fn crypto_data_dir(user_id: &str) -> Result<PathBuf, String> {
