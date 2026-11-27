@@ -2860,6 +2860,44 @@ impl LarptrixShell {
     fn saved_messages_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let messages: Vec<_> = self.saved_messages.iter().cloned().collect();
         let is_loaded = self.saved_messages_loaded;
+        let message_rows: Vec<_> = messages.iter().map(|message| {
+            let id = message.id.clone();
+            let created = format_saved_age(message.created_at);
+            let body = message.body.clone();
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(created),
+                        )
+                        .child(div().flex_1())
+                        .child(
+                            div()
+                                .id(format!("delete-saved-message-{id}"))
+                                .px_2()
+                                .py_1()
+                                .rounded_md()
+                                .bg(rgb(SURFACE))
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.delete_saved_message(&id, cx);
+                                }))
+                                .child("Delete"),
+                        ),
+                )
+                .child(message_bubble("You".into(), body, true))
+        }).collect();
 
         div()
             .flex_1()
@@ -2901,44 +2939,7 @@ impl LarptrixShell {
                     .when(!is_loaded, |element| {
                         element.child(empty_hint("Unlocking your saved notes…"))
                     })
-                    .children(messages.iter().map(|message| {
-                        let id = message.id.clone();
-                        let created = format_saved_age(message.created_at);
-                        let body = message.body.clone();
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(rgb(MUTED))
-                                            .child(created),
-                                    )
-                                    .child(div().flex_1())
-                                    .child(
-                                        div()
-                                            .id(format!("delete-saved-message-{id}"))
-                                            .px_2()
-                                            .py_1()
-                                            .rounded_md()
-                                            .bg(rgb(SURFACE))
-                                            .text_xs()
-                                            .text_color(rgb(MUTED))
-                                            .cursor_pointer()
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.delete_saved_message(&id, cx);
-                                            }))
-                                            .child("Delete"),
-                                    ),
-                            )
-                            .child(message_bubble("You".into(), body, true))
-                    }).collect::<Vec<_>>())
+                    .children(message_rows)
                     .when(is_loaded && messages.is_empty(), |element| {
                         element.child(empty_hint("Nothing saved yet. Add a note below."))
                     }),
