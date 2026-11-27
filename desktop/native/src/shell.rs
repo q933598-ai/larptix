@@ -771,10 +771,13 @@ impl LarptrixShell {
             AppEvent::Error(error) => {
                 self.connecting = false;
                 if self.restoring_saved_account {
-                    clear_saved_account();
+                    // A temporary network outage must not erase the remembered account.
+                    if error.contains("Sign-in failed (401)") || error.contains("Sign-in failed (403)") {
+                        clear_saved_account();
+                        self.access_key.clear();
+                        self.recovery_key.clear();
+                    }
                     self.restoring_saved_account = false;
-                    self.access_key.clear();
-                    self.recovery_key.clear();
                 }
                 self.connection_status = error;
             }
