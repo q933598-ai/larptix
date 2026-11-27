@@ -6,7 +6,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use gpui::{
-    div, img, prelude::*, rgb, px, App, Context, FocusHandle, KeyDownEvent, MouseButton, Window,
+    div, img, prelude::*, rgb, px, App, ClipboardItem, Context, FocusHandle, KeyDownEvent, MouseButton, Window,
 };
 use larptrix_client_core::ClientCore;
 use larptrix_protocol::{ChatMessage, ClientMessage, ServerMessage, UserInfo};
@@ -4658,6 +4658,166 @@ impl LarptrixShell {
             )
     }
 
+}
+
+fn server_input_value(raw: &str) -> String {
+    raw.trim()
+        .strip_prefix("https://")
+        .or_else(|| raw.trim().strip_prefix("http://"))
+        .unwrap_or(raw.trim())
+        .trim_end_matches('/')
+        .to_string()
+}
+
+fn space_background() -> impl IntoElement {
+    let stars = [
+        (32.0, 42.0, 2.0, 0x9bb7df), (120.0, 118.0, 2.0, 0x718cb5),
+        (220.0, 54.0, 3.0, 0xc2d7f0), (328.0, 168.0, 2.0, 0x91abc9),
+        (448.0, 82.0, 2.0, 0x718cb5), (560.0, 34.0, 2.0, 0xb5c9e6),
+        (680.0, 142.0, 3.0, 0x9bb7df), (804.0, 58.0, 2.0, 0x718cb5),
+        (936.0, 182.0, 2.0, 0xc2d7f0), (1088.0, 76.0, 2.0, 0x91abc9),
+        (1210.0, 130.0, 2.0, 0x718cb5), (1348.0, 48.0, 3.0, 0xb5c9e6),
+        (1482.0, 190.0, 2.0, 0x9bb7df), (1640.0, 96.0, 2.0, 0x718cb5),
+        (1760.0, 164.0, 2.0, 0xc2d7f0), (1840.0, 58.0, 2.0, 0x91abc9),
+        (74.0, 310.0, 2.0, 0x718cb5), (260.0, 370.0, 2.0, 0xb5c9e6),
+        (420.0, 300.0, 3.0, 0x9bb7df), (592.0, 410.0, 2.0, 0x718cb5),
+        (760.0, 330.0, 2.0, 0xc2d7f0), (930.0, 420.0, 2.0, 0x91abc9),
+        (1110.0, 300.0, 2.0, 0x718cb5), (1280.0, 388.0, 3.0, 0xb5c9e6),
+        (1460.0, 320.0, 2.0, 0x9bb7df), (1640.0, 420.0, 2.0, 0x718cb5),
+        (1800.0, 340.0, 2.0, 0xc2d7f0), (150.0, 610.0, 2.0, 0x91abc9),
+        (360.0, 540.0, 2.0, 0x718cb5), (550.0, 690.0, 3.0, 0xb5c9e6),
+        (760.0, 590.0, 2.0, 0x9bb7df), (970.0, 720.0, 2.0, 0x718cb5),
+        (1180.0, 560.0, 2.0, 0xc2d7f0), (1390.0, 700.0, 2.0, 0x91abc9),
+        (1580.0, 590.0, 3.0, 0x718cb5), (1770.0, 720.0, 2.0, 0xb5c9e6),
+        (60.0, 880.0, 2.0, 0x9bb7df), (280.0, 810.0, 2.0, 0x718cb5),
+        (480.0, 950.0, 2.0, 0xc2d7f0), (700.0, 840.0, 2.0, 0x91abc9),
+        (920.0, 990.0, 3.0, 0x718cb5), (1150.0, 860.0, 2.0, 0xb5c9e6),
+        (1370.0, 980.0, 2.0, 0x9bb7df), (1590.0, 850.0, 2.0, 0x718cb5),
+        (1800.0, 960.0, 2.0, 0xc2d7f0),
+    ];
+    let star_elements: Vec<_> = stars.into_iter().map(|(x, y, size, color)| {
+        div()
+            .absolute()
+            .left(px(x))
+            .top(px(y))
+            .size(px(size))
+            .bg(rgb(color))
+    }).collect();
+    let comets = vec![
+        comet_l(145.0, 235.0, 2.0, 0x88c0d0),
+        comet_l(520.0, 225.0, 1.5, 0x7898c2),
+        comet_l(1010.0, 225.0, 2.0, 0x88c0d0),
+        comet_l(1510.0, 260.0, 1.5, 0x7898c2),
+        comet_l(325.0, 735.0, 1.5, 0x88c0d0),
+        comet_l(875.0, 820.0, 2.0, 0x7898c2),
+        comet_l(1290.0, 760.0, 1.5, 0x88c0d0),
+        comet_l(1710.0, 650.0, 2.0, 0x7898c2),
+    ];
+
+    div()
+        .absolute()
+        .inset_0()
+        .bg(rgb(0x080d18))
+        .child(
+            div()
+                .absolute()
+                .top(px(120.0))
+                .left(px(260.0))
+                .size(px(620.0))
+                .rounded_full()
+                .bg(rgb(0x0c1729)),
+        )
+        .child(
+            div()
+                .absolute()
+                .top(px(360.0))
+                .left(px(1120.0))
+                .size(px(560.0))
+                .rounded_full()
+                .bg(rgb(0x0b1425)),
+        )
+        .children(star_elements)
+        .children(comets)
+}
+
+fn comet_l(x: f32, y: f32, scale: f32, color: u32) -> impl IntoElement {
+    div()
+        .absolute()
+        .left(px(x))
+        .top(px(y))
+        .flex()
+        .flex_col()
+        .gap(px(scale))
+        .child(div().w(px(scale * 2.0)).h(px(scale * 7.0)).bg(rgb(color)))
+        .child(div().w(px(scale * 8.0)).h(px(scale * 2.0)).bg(rgb(color)))
+        .child(
+            div()
+                .absolute()
+                .left(px(0.0))
+                .top(px(scale * 6.0))
+                .size(px(scale * 2.0))
+                .bg(rgb(0xd8dee9)),
+        )
+}
+
+fn pixel_l_logo() -> impl IntoElement {
+    div()
+        .size(px(48.0))
+        .rounded_lg()
+        .bg(rgb(0x88c0d0))
+        .flex()
+        .flex_col()
+        .justify_end()
+        .p(px(9.0))
+        .gap(px(0.0))
+        .child(div().w(px(6.0)).h(px(25.0)).bg(rgb(0x101827)))
+        .child(div().w(px(26.0)).h(px(6.0)).bg(rgb(0x101827)))
+}
+
+fn registration_side_card() -> impl IntoElement {
+    div()
+        .w(px(260.0))
+        .p_4()
+        .rounded_xl()
+        .border_1()
+        .border_color(rgb(0x34445f))
+        .bg(rgb(0x111a2b))
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap_4()
+        .child(
+            div()
+                .size(px(204.0))
+                .rounded_lg()
+                .bg(rgb(0x0c1422))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(comet_l(0.0, 0.0, 4.0, 0x88c0d0))
+                        .child(pixel_l_logo()),
+                ),
+        )
+        .child(
+            div()
+                .text_xs()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(rgb(ACCENT))
+                .child("MAKE THIS SERVER YOURS"),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .text_center()
+                .child("Choose a display name. Larptrix will create a unique username for you."),
+        )
 }
 
 fn server_list_path() -> Option<PathBuf> {
