@@ -30,6 +30,11 @@ pub enum AppEvent {
     UserSearchResults {
         users: Vec<UserInfo>,
     },
+    AvatarCached {
+        user_id: String,
+        path: PathBuf,
+        error: Option<String>,
+    },
     Server(ServerMessage),
     Decrypted {
         peer_id: String,
@@ -126,6 +131,33 @@ impl NativeApi {
         let response = self.http.post(url).json(&body).send().await
             .map_err(|error| format!("Could not reach server API: {error}"))?;
         Self::read_json(response).await
+    }
+
+    pub async fn download_asset(&self, path: &str) -> Result<(Vec<u8>, String), String> {
+        let url = self.endpoint(path)?;
+        let response = self.http.get(url).send().await
+            .map_err(|error| format!("Could not download profile image: {error}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(if body.trim().is_empty() {
+                format!("Profile image request failed ({status})")
+            } else {
+                format!("Profile image request failed ({status}): {}", body.trim())
+            });
+        }
+        let mime = response.headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .split(';')
+            .next()
+            .unwrap_or("application/octet-stream")
+            .to_string();
+        let bytes = response.bytes().await
+            .map_err(|error| format!("Could not read profile image: {error}"))?
+            .to_vec();
+        Ok((bytes, mime))
     }
 
     pub async fn load_friends(&self) -> Result<FriendLists, String> {
