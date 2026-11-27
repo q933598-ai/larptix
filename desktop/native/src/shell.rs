@@ -100,6 +100,8 @@ pub struct LarptrixShell {
     decrypted_attachments: HashMap<(String, String), Vec<EncryptedAttachmentMetadata>>,
     cached_attachment_paths: HashMap<String, PathBuf>,
     loading_attachment_ids: HashSet<String>,
+    cached_avatar_paths: HashMap<String, PathBuf>,
+    loading_avatar_ids: HashSet<String>,
     media_cache_dir: Option<Arc<tempfile::TempDir>>,
     image_viewer: Option<ImageViewer>,
     media_player: Option<Arc<MediaPlayback>>,
@@ -181,6 +183,8 @@ impl LarptrixShell {
             decrypted_attachments: HashMap::new(),
             cached_attachment_paths: HashMap::new(),
             loading_attachment_ids: HashSet::new(),
+            cached_avatar_paths: HashMap::new(),
+            loading_avatar_ids: HashSet::new(),
             media_cache_dir: tempfile::Builder::new()
                 .prefix("larptrix-media-")
                 .tempdir()
@@ -239,6 +243,7 @@ impl LarptrixShell {
                 self.outgoing = Some(outgoing);
                 self.crypto = Some(crypto);
                 self.api = Some(api);
+                self.preload_user_avatar(&user);
                 self.core.apply_server_message(ServerMessage::Welcome {
                     user,
                     users: Vec::new(),
@@ -247,6 +252,9 @@ impl LarptrixShell {
                 self.active_section = Section::Messages;
             }
             AppEvent::FriendListsLoaded { friends, incoming, outgoing } => {
+                for user in friends.iter().chain(incoming.iter()).chain(outgoing.iter()) {
+                    self.preload_user_avatar(user);
+                }
                 let mut directory = Vec::new();
                 for user in friends.iter().chain(incoming.iter()).chain(outgoing.iter()) {
                     if !directory.iter().any(|existing: &UserInfo| existing.user_id == user.user_id) {
@@ -259,10 +267,25 @@ impl LarptrixShell {
                 self.outgoing_friend_requests = outgoing;
             }
             AppEvent::UserSearchResults { users } => {
+                for user in &users {
+                    self.preload_user_avatar(user);
+                }
                 self.core.apply_server_message(ServerMessage::Directory { users: users.clone() });
                 self.user_search_results = users;
             }
+            AppEvent::AvatarCached { user_id, path, error: _ } => {
+                self.loading_avatar_ids.remove(&user_id);
+                self.cached_avatar_paths.insert(user_id, path);
+            }
             AppEvent::Server(message) => {
+                let avatar_users: Vec<UserInfo> = match &message {
+                    ServerMessage::Welcome { user, users } => {
+                        std::iter::once(user.clone()).chain(users.iter().cloned()).collect()
+                    }
+                    ServerMessage::Directory { users } => users.clone(),
+                    ServerMessage::Chat { peer, .. } => vec![peer.clone()],
+                    _ => Vec::new(),
+                };
                 let decrypt_targets: Vec<(String, ChatMessage)> = match &message {
                     ServerMessage::Chat { peer, history } => history
                         .iter()
@@ -307,6 +330,9 @@ impl LarptrixShell {
                 };
 
                 self.core.apply_server_message(message);
+                for user in &avatar_users {
+                    self.preload_user_avatar(user);
+                }
                 for (peer_id, message) in decrypt_targets {
                     self.queue_decryption(peer_id, message);
                 }
@@ -1181,6 +1207,55 @@ impl LarptrixShell {
         });
         self.load_viewer_image(cx);
         cx.notify();
+    }
+
+    fn preload_user_avatar(&mut self, user: &UserInfo) {
+        let Some(asset_url) = user.avatar_url.as_deref().filter(|url| !url.trim().is_empty()) else {
+            return;
+        };
+        if self.cached_avatar_paths.contains_key(&user.user_id)
+            || !self.loading_avatar_ids.insert(user.user_id.clone())
+        {
+            return;
+        }
+
+        let Some(api) = self.api.clone() else {
+            self.loading_avatar_ids.remove(&user.user_id);
+            return;
+        };
+        let Some(cache_dir) = self.media_cache_dir.clone() else {
+            self.loading_avatar_ids.remove(&user.user_id);
+            return;
+        };
+
+        let user_id = user.user_id.clone();
+        let asset_url = asset_url.to_string();
+        let events = self.event_tx.clone();
+        self.runtime.spawn(async move {
+            let result = async {
+                let (bytes, mime) = api.download_asset(&asset_url).await?;
+                let extension = media_extension(&mime);
+                let path = cache_dir.path().join(format!("avatar-{}.{}", uuid::Uuid::new_v4(), extension));
+                tokio::fs::write(&path, bytes)
+                    .await
+                    .map_err(|error| format!("Could not cache profile image: {error}"))?;
+                Ok::<PathBuf, String>(path)
+            }.await;
+
+            let event = match result {
+                Ok(path) => AppEvent::AvatarCached {
+                    user_id,
+                    path,
+                    error: None,
+                },
+                Err(error) => AppEvent::AvatarCached {
+                    user_id,
+                    path: PathBuf::new(),
+                    error: Some(error),
+                },
+            };
+            let _ = events.send_blocking(event);
+        });
     }
 
     fn preload_inline_image(&mut self, metadata: EncryptedAttachmentMetadata) {
