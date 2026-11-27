@@ -72,6 +72,12 @@ enum LoginMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GroupCreationMode {
+    Group,
+    Channel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LoginField {
     Server,
     AccessKey,
@@ -80,6 +86,7 @@ enum LoginField {
     RecoveryKey,
     Composer,
     PeopleSearch,
+    GroupName,
 }
 
 struct ImageViewer {
@@ -128,6 +135,11 @@ pub struct LarptrixShell {
     outgoing_friend_requests: Vec<UserInfo>,
     user_search: String,
     user_search_results: Vec<UserInfo>,
+    group_creation_mode: Option<GroupCreationMode>,
+    group_name: String,
+    selected_group_members: HashSet<String>,
+    group_post_policy: String,
+    creating_group: bool,
     connection_page: ConnectionPage,
     login_mode: LoginMode,
     access_key: String,
@@ -215,6 +227,11 @@ impl LarptrixShell {
             outgoing_friend_requests: Vec::new(),
             user_search: String::new(),
             user_search_results: Vec::new(),
+            group_creation_mode: None,
+            group_name: String::new(),
+            selected_group_members: HashSet::new(),
+            group_post_policy: "admins".into(),
+            creating_group: false,
             connection_page: ConnectionPage::Servers,
             login_mode: LoginMode::AccessKey,
             access_key: String::new(),
@@ -272,6 +289,19 @@ impl LarptrixShell {
                 }
                 self.core.apply_server_message(ServerMessage::Directory { users: users.clone() });
                 self.user_search_results = users;
+            }
+            AppEvent::GroupCreated { group } => {
+                let group_id = group.group_id.clone();
+                let mut groups: Vec<_> = self.core.state().groups.values().cloned().collect();
+                groups.retain(|existing| existing.group_id != group_id);
+                groups.push(group);
+                self.core.apply_server_message(ServerMessage::Groups { groups });
+                self.group_creation_mode = None;
+                self.group_name.clear();
+                self.selected_group_members.clear();
+                self.creating_group = false;
+                self.active_section = Section::Messages;
+                self.open_chat(group_id);
             }
             AppEvent::AvatarCached { user_id, path, error } => {
                 self.loading_avatar_ids.remove(&user_id);
@@ -701,6 +731,65 @@ impl LarptrixShell {
         });
     }
 
+    fn create_group_or_channel(&mut self, cx: &mut Context<Self>) {
+        if self.creating_group {
+            return;
+        }
+        let name = self.group_name.trim().to_string();
+        if name.is_empty() {
+            self.connection_status = "Enter a name first".into();
+            cx.notify();
+            return;
+        }
+        let Some(mode) = self.group_creation_mode else {
+            return;
+        };
+        let mut member_ids: Vec<String> = self.selected_group_members.iter().cloned().collect();
+        member_ids.sort();
+        if mode == GroupCreationMode::Group && member_ids.is_empty() {
+            self.connection_status = "Choose at least one friend for a group".into();
+            cx.notify();
+            return;
+        }
+        let Some(api) = self.api.clone() else {
+            self.connection_status = "Server API is not ready".into();
+            cx.notify();
+            return;
+        };
+
+        let post_policy = self.group_post_policy.clone();
+        self.creating_group = true;
+        self.connection_status = match mode {
+            GroupCreationMode::Group => "Creating encrypted group…".into(),
+            GroupCreationMode::Channel => "Creating encrypted channel…".into(),
+        };
+        cx.notify();
+
+        let events = self.event_tx.clone();
+        self.runtime.spawn(async move {
+            let result = match mode {
+                GroupCreationMode::Group => api.create_group(&name, &member_ids).await,
+                GroupCreationMode::Channel => api.create_channel(&name, &member_ids, &post_policy).await,
+            };
+            match result {
+                Ok(group) => {
+                    let _ = events.send_blocking(AppEvent::GroupCreated { group });
+                }
+                Err(error) => {
+                    let _ = events.send_blocking(AppEvent::Status(format!("Could not create conversation: {error}")));
+                    let _ = events.send_blocking(AppEvent::Status("Creation failed. Check that selected friends have completed E2E setup.".into()));
+                }
+            }
+        });
+    }
+
+    fn toggle_group_member(&mut self, user_id: String, cx: &mut Context<Self>) {
+        if !self.selected_group_members.insert(user_id.clone()) {
+            self.selected_group_members.remove(&user_id);
+        }
+        cx.notify();
+    }
+
     fn handle_input_key(
         &mut self,
         event: &KeyDownEvent,
@@ -723,6 +812,7 @@ impl LarptrixShell {
                 LoginField::RecoveryKey => { self.recovery_key.pop(); }
                 LoginField::Composer => { self.composer_text.pop(); }
                 LoginField::PeopleSearch => { self.user_search.pop(); }
+                LoginField::GroupName => { self.group_name.pop(); }
             }
             cx.notify();
             return;
@@ -733,6 +823,7 @@ impl LarptrixShell {
                 LoginField::Composer => self.send_message(cx),
                 LoginField::Server => self.choose_server(cx),
                 LoginField::PeopleSearch => self.search_users(cx),
+                LoginField::GroupName => self.create_group_or_channel(cx),
                 _ => self.start_connection(cx),
             }
             return;
@@ -750,6 +841,7 @@ impl LarptrixShell {
                     LoginField::RecoveryKey => self.recovery_key.len(),
                     LoginField::Composer => self.composer_text.len(),
                     LoginField::PeopleSearch => self.user_search.len(),
+                    LoginField::GroupName => self.group_name.len(),
                 };
                 let max_len = match field {
                     LoginField::Server => 256usize,
@@ -759,6 +851,7 @@ impl LarptrixShell {
                     LoginField::RecoveryKey => 128usize,
                     LoginField::Composer => 12_000usize,
                     LoginField::PeopleSearch => 64usize,
+                    LoginField::GroupName => 32usize,
                 };
                 let remaining = max_len.saturating_sub(current_len);
                 let pasted: String = text.chars()
@@ -778,6 +871,7 @@ impl LarptrixShell {
                     LoginField::RecoveryKey => self.recovery_key.push_str(&pasted),
                     LoginField::Composer => self.composer_text.push_str(&pasted),
                     LoginField::PeopleSearch => self.user_search.push_str(&pasted),
+                    LoginField::GroupName => self.group_name.push_str(&pasted),
                 }
                 cx.notify();
             }
@@ -797,6 +891,7 @@ impl LarptrixShell {
                 LoginField::RecoveryKey => (self.recovery_key.len(), 128usize),
                 LoginField::Composer => (self.composer_text.len(), 12_000usize),
                 LoginField::PeopleSearch => (self.user_search.len(), 64usize),
+                LoginField::GroupName => (self.group_name.len(), 32usize),
             };
             if current_len + text.len() > max_len || text.chars().any(char::is_control) {
                 return;
@@ -817,6 +912,7 @@ impl LarptrixShell {
                 LoginField::RecoveryKey => self.recovery_key.push_str(text),
                 LoginField::Composer => self.composer_text.push_str(text),
                 LoginField::PeopleSearch => self.user_search.push_str(text),
+                LoginField::GroupName => self.group_name.push_str(text),
             }
             cx.notify();
         }
@@ -863,6 +959,7 @@ impl LarptrixShell {
                         LoginField::RecoveryKey => "recovery-key-input",
                         LoginField::Composer => "message-composer",
                         LoginField::PeopleSearch => "people-search-input",
+                        LoginField::GroupName => "group-name-input",
                     })
                     .track_focus(&self.input_focus)
                     .w_full()
