@@ -48,6 +48,7 @@ pub enum AppEvent {
     SavedMessagesLoaded {
         data: String,
     },
+    SavedMessagesLoadFailed(String),
     SavedMessagesSaveFinished {
         error: Option<String>,
     },
