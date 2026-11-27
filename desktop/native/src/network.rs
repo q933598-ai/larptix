@@ -73,15 +73,26 @@ pub struct PickedFile {
     pub size_bytes: u64,
 }
 
+#[derive(Clone, Debug)]
+pub enum LoginCredentials {
+    AccessKey(String),
+    EmailPassword { email: String, password: String },
+}
+
 #[derive(Serialize)]
 struct LoginRequest<'a> {
-    access_key: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    access_key: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    email: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    password: Option<&'a str>,
     device_name: &'static str,
 }
 
 pub async fn connect(
     server_address: String,
-    access_key: String,
+    credentials: LoginCredentials,
     recovery_key: String,
     events: Sender<AppEvent>,
 ) -> Result<(), String> {
@@ -103,9 +114,19 @@ pub async fn connect(
 
     let response = http
         .post(login_url)
-        .json(&LoginRequest {
-            access_key: &access_key,
-            device_name: "Larptrix Native",
+        .json(&match &credentials {
+            LoginCredentials::AccessKey(access_key) => LoginRequest {
+                access_key: Some(access_key),
+                email: None,
+                password: None,
+                device_name: "Larptrix Native",
+            },
+            LoginCredentials::EmailPassword { email, password } => LoginRequest {
+                access_key: None,
+                email: Some(email),
+                password: Some(password),
+                device_name: "Larptrix Native",
+            },
         })
         .send()
         .await
@@ -224,7 +245,7 @@ pub async fn connect(
     }
 }
 
-fn normalize_server_url(raw: &str) -> Result<Url, String> {
+pub(crate) fn normalize_server_url(raw: &str) -> Result<Url, String> {
     let mut url = Url::parse(raw.trim())
         .map_err(|error| format!("Invalid server URL: {error}"))?;
 
