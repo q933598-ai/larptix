@@ -76,6 +76,7 @@ pub struct NativeMatrixCrypto {
     internal_user_id: String,
     storage_dir: PathBuf,
     backup_id: String,
+    use_scoped_backup: bool,
     matrix_user_id: OwnedUserId,
     device_id: OwnedDeviceId,
     recovery_key: String,
@@ -111,6 +112,7 @@ impl NativeMatrixCrypto {
         let key_fingerprint = format!("{:x}", Sha256::digest(recovery_key.as_bytes()));
         let keyed_dir = root_dir.join("devices").join(&key_fingerprint);
         let legacy_store_dir = root_dir.join("matrix-store");
+        let use_scoped_backup = fresh_start || has_scoped_backup;
 
         // First try to keep using a matching legacy native store. If this
         // recovery key belongs to a different E2E identity on this computer,
@@ -163,6 +165,7 @@ impl NativeMatrixCrypto {
             server_name,
             internal_user_id,
             backup_id: key_fingerprint,
+            use_scoped_backup,
             storage_dir: account_dir,
             matrix_user_id,
             device_id,
@@ -591,37 +594,31 @@ impl NativeMatrixCrypto {
     }
 
     async fn restore_room_key_backup(&self) -> Result<(), String> {
-        let scoped_path = format!("api/matrix/key-backups/{}", self.backup_id);
-        let scoped = self.api_get(&scoped_path).await?;
-        if let Some(encrypted) = scoped.get("encrypted_backup").and_then(Value::as_str) {
-            if !encrypted.is_empty() {
-                let exported = decrypt_room_key_export(encrypted.as_bytes(), &self.recovery_key)
-                    .map_err(|error| format!("Could not unlock this E2E identity's room-key backup: {error}"))?;
-                self.machine.store().import_room_keys(exported, None, |_, _| {})
-                    .await.map_err(|error| format!("Could not restore E2E room keys: {error}"))?;
-                return Ok(());
-            }
-        }
-
-        // Compatibility with backups created before key-scoped backup storage.
-        // If a recovery key is wrong, do not silently create an empty identity.
-        let legacy = self.api_get("api/matrix/key-backup").await?;
-        let Some(encrypted) = legacy.get("encrypted_backup").and_then(Value::as_str) else {
+        let (path, description) = if self.use_scoped_backup {
+            (
+                format!("api/matrix/key-backups/{}", self.backup_id),
+                "this E2E identity",
+            )
+        } else {
+            ("api/matrix/key-backup".to_string(), "the previous E2E identity")
+        };
+        let response = self.api_get(&path).await?;
+        let Some(encrypted) = response.get("encrypted_backup").and_then(Value::as_str) else {
             return Ok(());
         };
         if encrypted.is_empty() {
             return Ok(());
         }
         let exported = decrypt_room_key_export(encrypted.as_bytes(), &self.recovery_key)
-            .map_err(|error| format!("Could not unlock the previous E2E room-key backup: {error}"))?;
+            .map_err(|error| format!("Could not unlock {description}'s room-key backup: {error}"))?;
         self.machine.store().import_room_keys(exported, None, |_, _| {})
             .await.map_err(|error| format!("Could not restore E2E room keys: {error}"))?;
         Ok(())
     }
 
     async fn sync_room_key_backup(&self) -> Result<(), String> {
-        // Backups are isolated by a hash of the recovery key so a fresh identity
-        // cannot overwrite the backup belonging to older encrypted conversations.
+        // Fresh identities use a key-scoped backup so they cannot overwrite
+        // the legacy backup shared with the web client and older conversations.
         let _guard = self.backup_lock.lock().await;
         let exported = self.machine.store().export_room_keys(|_| true).await
             .map_err(|error| format!("Could not export E2E room keys: {error}"))?;
@@ -631,7 +628,11 @@ impl NativeMatrixCrypto {
     }
 
     async fn api_request_put_key_backup(&self, encrypted_backup: String) -> Result<(), String> {
-        let path = format!("api/matrix/key-backups/{}", self.backup_id);
+        let path = if self.use_scoped_backup {
+            format!("api/matrix/key-backups/{}", self.backup_id)
+        } else {
+            "api/matrix/key-backup".to_string()
+        };
         api_request(
             &self.http,
             &self.base_url,
