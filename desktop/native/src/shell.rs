@@ -3606,12 +3606,105 @@ impl Render for LarptrixShell {
                 .when(self.media_loading || self.media_player.is_some() || self.media_error.is_some(), |element| {
                     element.child(self.media_player_overlay(cx))
                 })
+                .when_some(self.fresh_recovery_key.clone(), |element, key| {
+                    element.child(self.fresh_recovery_key_overlay(key, cx))
+                })
                 .into_any_element()
         }
     }
 }
 
 impl LarptrixShell {
+    fn fresh_recovery_key_overlay(&self, key: String, cx: &mut Context<Self>) -> impl IntoElement {
+        let copy_key = key.clone();
+        div()
+            .absolute()
+            .inset_0()
+            .occlude()
+            .bg(rgb(0x080d18))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .w(px(520.0))
+                    .p_6()
+                    .rounded_xl()
+                    .border_1()
+                    .border_color(rgb(ACCENT))
+                    .bg(rgb(0x111a2b))
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(rgb(TEXT))
+                            .child("Your new E2E recovery key"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(MUTED))
+                            .child("You skipped restoring an old key, so Larptrix created a new encrypted identity. Save this key now. It is needed to restore this identity and its encrypted conversations on another device or after reinstalling."),
+                    )
+                    .child(
+                        div()
+                            .p_3()
+                            .rounded_md()
+                            .bg(rgb(0x0b1220))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .text_sm()
+                            .text_color(rgb(ACCENT))
+                            .child(key),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .id("copy-new-recovery-key")
+                                    .flex_1()
+                                    .p_3()
+                                    .rounded_md()
+                                    .bg(rgb(ACCENT))
+                                    .text_color(rgb(RAIL))
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(copy_key.clone()));
+                                    }))
+                                    .child("Copy recovery key"),
+                            )
+                            .child(
+                                div()
+                                    .id("dismiss-new-recovery-key")
+                                    .p_3()
+                                    .rounded_md()
+                                    .bg(rgb(SURFACE))
+                                    .text_color(rgb(TEXT))
+                                    .text_sm()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.fresh_recovery_key = None;
+                                        cx.notify();
+                                    }))
+                                    .child("I've saved it"),
+                            ),
+                    ),
+            )
+    }
+
     fn image_viewer_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(viewer) = self.image_viewer.as_ref() else {
             return div().into_any_element();
@@ -4445,6 +4538,7 @@ impl LarptrixShell {
                                             .child("The old E2E recovery key is only needed to restore your previous encrypted conversations. Leave it empty to create a fresh E2E identity and a new recovery key on this device."),
                                     )
                                     .when_some(self.registration_access_key.clone(), |element, key| {
+                                        let copy_key = key.clone();
                                         element.child(
                                             div()
                                                 .p_3()
@@ -4454,7 +4548,7 @@ impl LarptrixShell {
                                                 .border_color(rgb(ACCENT))
                                                 .flex()
                                                 .flex_col()
-                                                .gap_1()
+                                                .gap_2()
                                                 .child(
                                                     div()
                                                         .text_xs()
@@ -4467,6 +4561,22 @@ impl LarptrixShell {
                                                         .text_xs()
                                                         .text_color(rgb(TEXT))
                                                         .child(key),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .id("copy-access-key")
+                                                        .self_start()
+                                                        .px_3()
+                                                        .py_2()
+                                                        .rounded_md()
+                                                        .bg(rgb(SURFACE_HOVER))
+                                                        .text_xs()
+                                                        .text_color(rgb(ACCENT))
+                                                        .cursor_pointer()
+                                                        .on_click(cx.listener(move |_, _, _, cx| {
+                                                            cx.write_to_clipboard(ClipboardItem::new_string(copy_key.clone()));
+                                                        }))
+                                                        .child("Copy access key"),
                                                 ),
                                         )
                                     })
@@ -4788,21 +4898,15 @@ fn registration_side_card() -> impl IntoElement {
         .gap_4()
         .child(
             div()
+                .relative()
                 .size(px(204.0))
                 .rounded_lg()
                 .bg(rgb(0x0c1422))
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .gap(px(8.0))
-                        .child(comet_l(0.0, 0.0, 4.0, 0x88c0d0))
-                        .child(pixel_l_logo()),
-                ),
+                .child(comet_l(72.0, 52.0, 4.0, 0x88c0d0))
+                .child(pixel_l_logo()),
         )
         .child(
             div()
