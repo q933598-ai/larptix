@@ -922,7 +922,9 @@ async fn matrix_key_backup_for_key_get(
         .db
         .get_matrix_key_backup_for_key(&user.id, backup_id)
         .map_err(ApiError::db)?;
-    Ok(Json(serde_json::json!({ "encrypted_backup": encrypted_backup })))
+    Ok(Json(
+        serde_json::json!({ "encrypted_backup": encrypted_backup }),
+    ))
 }
 
 async fn matrix_key_backup_for_key_put(
@@ -933,9 +935,7 @@ async fn matrix_key_backup_for_key_put(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let user = require_user(&state, &headers)?;
     let backup_id = validate_backup_id(&backup_id)?;
-    if body.encrypted_backup.trim().is_empty()
-        || body.encrypted_backup.len() > 16 * 1024 * 1024
-    {
+    if body.encrypted_backup.trim().is_empty() || body.encrypted_backup.len() > 16 * 1024 * 1024 {
         return Err(ApiError::bad("invalid Matrix key backup"));
     }
     state
