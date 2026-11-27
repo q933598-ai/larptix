@@ -98,6 +98,7 @@ pub struct LarptrixShell {
     decrypted_messages: HashMap<(String, String), String>,
     decrypted_attachments: HashMap<(String, String), Vec<EncryptedAttachmentMetadata>>,
     cached_attachment_paths: HashMap<String, PathBuf>,
+    loading_attachment_ids: HashSet<String>,
     media_cache_dir: Option<Arc<tempfile::TempDir>>,
     image_viewer: Option<ImageViewer>,
     media_player: Option<Arc<MediaPlayback>>,
@@ -172,6 +173,7 @@ impl LarptrixShell {
             decrypted_messages: HashMap::new(),
             decrypted_attachments: HashMap::new(),
             cached_attachment_paths: HashMap::new(),
+            loading_attachment_ids: HashSet::new(),
             media_cache_dir: tempfile::Builder::new()
                 .prefix("larptrix-media-")
                 .tempdir()
@@ -300,10 +302,14 @@ impl LarptrixShell {
                 self.pending_decryptions.remove(&key);
                 self.decrypted_messages.insert(key.clone(), body);
                 if !attachments.is_empty() {
+                    for attachment in attachments.iter().filter(|item| item.mime.starts_with("image/")) {
+                        self.preload_inline_image(attachment.clone());
+                    }
                     self.decrypted_attachments.insert(key, attachments);
                 }
             }
             AppEvent::ImageCached { attachment_id, path, error } => {
+                self.loading_attachment_ids.remove(&attachment_id);
                 if let Some(error) = error {
                     if let Some(viewer) = self.image_viewer.as_mut() {
                         if viewer.images.get(viewer.index).is_some_and(|image| image.id == attachment_id) {
@@ -1028,6 +1034,50 @@ impl LarptrixShell {
         });
         self.load_viewer_image(cx);
         cx.notify();
+    }
+
+    fn preload_inline_image(&mut self, metadata: EncryptedAttachmentMetadata) {
+        if self.cached_attachment_paths.contains_key(&metadata.id)
+            || !self.loading_attachment_ids.insert(metadata.id.clone())
+        {
+            return;
+        }
+
+        let Some(crypto) = self.crypto.clone() else {
+            self.loading_attachment_ids.remove(&metadata.id);
+            return;
+        };
+        let Some(cache_dir) = self.media_cache_dir.clone() else {
+            self.loading_attachment_ids.remove(&metadata.id);
+            return;
+        };
+
+        let events = self.event_tx.clone();
+        self.runtime.spawn(async move {
+            let result = async {
+                let bytes = crypto.download_and_decrypt_attachment(&metadata).await?;
+                let extension = media_extension(&metadata.mime);
+                let path = cache_dir.path().join(format!("{}.{}", uuid::Uuid::new_v4(), extension));
+                tokio::fs::write(&path, bytes)
+                    .await
+                    .map_err(|error| format!("Could not cache decrypted image: {error}"))?;
+                Ok::<PathBuf, String>(path)
+            }.await;
+
+            let event = match result {
+                Ok(path) => AppEvent::ImageCached {
+                    attachment_id: metadata.id,
+                    path,
+                    error: None,
+                },
+                Err(error) => AppEvent::ImageCached {
+                    attachment_id: metadata.id,
+                    path: PathBuf::new(),
+                    error: Some(error),
+                },
+            };
+            let _ = events.send_blocking(event);
+        });
     }
 
     fn load_viewer_image(&mut self, cx: &mut Context<Self>) {
@@ -1897,6 +1947,7 @@ impl LarptrixShell {
                                 let target_peer = reaction_peer_id.clone();
                                 let target_message = message_id.clone();
                                 let cached_preview = self.cached_attachment_paths.get(&metadata.id).cloned();
+                                let has_cached_preview = cached_preview.is_some();
                                 let (icon, action) = if metadata.mime.starts_with("image/") {
                                     ("▧", "View")
                                 } else if metadata.mime.starts_with("video/") {
@@ -1926,11 +1977,12 @@ impl LarptrixShell {
                                     .when_some(cached_preview, |element, path| {
                                         element.child(
                                             img(path)
-                                                .w(px(220.0))
-                                                .h(px(150.0))
+                                                .w(px(280.0))
+                                                .h(px(190.0))
                                                 .object_fit(gpui::ObjectFit::Contain),
                                         )
                                     })
+                                    .when(!has_cached_preview, |element| element.child(label))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.open_attachment(
                                             target_peer.clone(),
@@ -1939,7 +1991,6 @@ impl LarptrixShell {
                                             cx,
                                         );
                                     }))
-                                    .child(label)
                             }))
                             .child(
                                 div()
