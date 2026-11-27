@@ -887,14 +887,8 @@ impl LarptrixShell {
         };
         let events = self.event_tx.clone();
         self.runtime.spawn(async move {
-            let result = async {
-                let temporary = path.with_extension("enc.tmp");
-                tokio::fs::write(&temporary, encrypted).await
-                    .map_err(|error| format!("Could not write saved-message store: {error}"))?;
-                tokio::fs::rename(&temporary, &path).await
-                    .map_err(|error| format!("Could not finalize saved-message store: {error}"))?;
-                Ok::<(), String>(())
-            }.await;
+            let result = tokio::fs::write(&path, encrypted).await
+                .map_err(|error| format!("Could not write saved-message store: {error}"));
             let _ = events.send_blocking(AppEvent::SavedMessagesSaveFinished {
                 error: result.err(),
             });
