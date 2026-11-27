@@ -747,6 +747,38 @@ impl Database {
         Ok(())
     }
 
+    pub fn get_matrix_key_backup_for_key(
+        &self,
+        user_id: &str,
+        backup_id: &str,
+    ) -> rusqlite::Result<Option<String>> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.query_row(
+            "SELECT encrypted_backup FROM matrix_key_backups_by_key WHERE user_id = ?1 AND backup_id = ?2",
+            params![user_id, backup_id],
+            |row| row.get(0),
+        )
+        .optional()
+    }
+
+    pub fn upsert_matrix_key_backup_for_key(
+        &self,
+        user_id: &str,
+        backup_id: &str,
+        encrypted_backup: &str,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "INSERT INTO matrix_key_backups_by_key (user_id, backup_id, encrypted_backup, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(user_id, backup_id) DO UPDATE SET
+                encrypted_backup = excluded.encrypted_backup,
+                updated_at = excluded.updated_at",
+            params![user_id, backup_id, encrypted_backup, crate::now_ms()],
+        )?;
+        Ok(())
+    }
+
     pub fn enqueue_matrix_to_device(
         &self,
         recipient_user_id: &str,
@@ -2838,6 +2870,15 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             user_id TEXT PRIMARY KEY,
             encrypted_backup TEXT NOT NULL,
             updated_at INTEGER NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS matrix_key_backups_by_key (
+            user_id TEXT NOT NULL,
+            backup_id TEXT NOT NULL,
+            encrypted_backup TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (user_id, backup_id),
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
 
