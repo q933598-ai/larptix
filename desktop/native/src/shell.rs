@@ -303,6 +303,10 @@ impl LarptrixShell {
                 self.active_section = Section::Messages;
                 self.open_chat(group_id);
             }
+            AppEvent::GroupCreationFailed(error) => {
+                self.creating_group = false;
+                self.connection_status = format!("Could not create group or channel: {error}");
+            }
             AppEvent::AvatarCached { user_id, path, error } => {
                 self.loading_avatar_ids.remove(&user_id);
                 if error.is_none() && !path.as_os_str().is_empty() {
@@ -776,8 +780,7 @@ impl LarptrixShell {
                     let _ = events.send_blocking(AppEvent::GroupCreated { group });
                 }
                 Err(error) => {
-                    let _ = events.send_blocking(AppEvent::Status(format!("Could not create conversation: {error}")));
-                    let _ = events.send_blocking(AppEvent::Status("Creation failed. Check that selected friends have completed E2E setup.".into()));
+                    let _ = events.send_blocking(AppEvent::GroupCreationFailed(error));
                 }
             }
         });
