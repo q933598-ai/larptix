@@ -9,7 +9,7 @@ This is the standalone native desktop client for Larptrix. It is a separate Carg
 - larptrix-client-core (shared application state and protocol state)
 - reqwest + tokio-tungstenite (HTTP session and authenticated WebSocket)
 - AES-256-GCM file encryption and native XDG/Windows/macOS file dialogs
-- GStreamer 1.14+ playback engine (Rust bindings pinned to 0.25.4) for local audio/video decoding
+- GStreamer 1.14+ playback engine (Rust bindings in the compatible 0.25.x series) for local audio/video decoding
 
 The desktop UI is rendered natively by GPUI. It does not load the web client's HTML and does not embed Electron, Chromium, Tauri, or an OS WebView.
 
