@@ -261,7 +261,9 @@ async fn username_suggestions(
     let base_available = !state.db.username_exists(&base).map_err(ApiError::db)?;
     let mut suggestions = Vec::new();
 
-    for suffix in ["2", "3", "4", "5", "6", "7", "8", "9", "_2", "_3", "_4", "_5"] {
+    for suffix in [
+        "2", "3", "4", "5", "6", "7", "8", "9", "_2", "_3", "_4", "_5",
+    ] {
         let keep = 24usize.saturating_sub(suffix.len());
         let candidate = format!("{}{}", base.chars().take(keep).collect::<String>(), suffix);
         if candidate.len() < 3 || candidate == base {
@@ -289,13 +291,38 @@ fn username_from_display_name(display_name: &str) -> String {
     for raw in display_name.chars() {
         let lower = raw.to_lowercase().next().unwrap_or(raw);
         let transliteration = match lower {
-            'а' => "a", 'б' => "b", 'в' => "v", 'г' => "g", 'д' => "d",
-            'е' => "e", 'ё' => "yo", 'ж' => "zh", 'з' => "z", 'и' => "i",
-            'й' => "y", 'к' => "k", 'л' => "l", 'м' => "m", 'н' => "n",
-            'о' => "o", 'п' => "p", 'р' => "r", 'с' => "s", 'т' => "t",
-            'у' => "u", 'ф' => "f", 'х' => "kh", 'ц' => "ts", 'ч' => "ch",
-            'ш' => "sh", 'щ' => "shch", 'ъ' | 'ь' => "", 'ы' => "y",
-            'э' => "e", 'ю' => "yu", 'я' => "ya",
+            'а' => "a",
+            'б' => "b",
+            'в' => "v",
+            'г' => "g",
+            'д' => "d",
+            'е' => "e",
+            'ё' => "yo",
+            'ж' => "zh",
+            'з' => "z",
+            'и' => "i",
+            'й' => "y",
+            'к' => "k",
+            'л' => "l",
+            'м' => "m",
+            'н' => "n",
+            'о' => "o",
+            'п' => "p",
+            'р' => "r",
+            'с' => "s",
+            'т' => "t",
+            'у' => "u",
+            'ф' => "f",
+            'х' => "kh",
+            'ц' => "ts",
+            'ч' => "ch",
+            'ш' => "sh",
+            'щ' => "shch",
+            'ъ' | 'ь' => "",
+            'ы' => "y",
+            'э' => "e",
+            'ю' => "yu",
+            'я' => "ya",
             _ => "",
         };
 
@@ -319,8 +346,16 @@ fn username_from_display_name(display_name: &str) -> String {
         }
     }
 
-    let base = output.trim_matches('_').chars().take(24).collect::<String>();
-    if base.len() >= 3 { base } else { "user".to_string() }
+    let base = output
+        .trim_matches('_')
+        .chars()
+        .take(24)
+        .collect::<String>();
+    if base.len() >= 3 {
+        base
+    } else {
+        "user".to_string()
+    }
 }
 
 async fn register(
