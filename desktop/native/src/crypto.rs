@@ -109,11 +109,28 @@ impl NativeMatrixCrypto {
 
         let root_dir = crypto_data_dir(&internal_user_id)?;
         let key_fingerprint = format!("{:x}", Sha256::digest(recovery_key.as_bytes()));
-        let keyed_dir = root_dir.join("devices").join(key_fingerprint);
-        // Keep pre-existing native stores at the legacy path for old recovery keys.
-        // A newly generated key gets an isolated store, so skipping old-key recovery
-        // never overwrites the user's previous encrypted history cache.
-        let account_dir = if fresh_start || keyed_dir.is_dir() || !root_dir.join("matrix-store").exists() {
+        let keyed_dir = root_dir.join("devices").join(&key_fingerprint);
+        let scoped_backup_path = format!("api/matrix/key-backups/{key_fingerprint}");
+        let has_scoped_backup = api_request(
+            &http,
+            &base_url,
+            Method::GET,
+            &scoped_backup_path,
+            None,
+        )
+        .await
+        .ok()
+        .and_then(|value| value.get("encrypted_backup").and_then(Value::as_str).map(str::to_string))
+        .is_some_and(|value| !value.is_empty());
+
+        // Preserve the legacy local store for old keys already used by this
+        // native client. A recovery key with a server-side key-scoped backup
+        // belongs to its own directory, even when this is a fresh computer.
+        let account_dir = if fresh_start
+            || keyed_dir.is_dir()
+            || has_scoped_backup
+            || !root_dir.join("matrix-store").exists()
+        {
             keyed_dir
         } else {
             root_dir
