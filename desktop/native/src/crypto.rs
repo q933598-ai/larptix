@@ -192,14 +192,15 @@ impl NativeMatrixCrypto {
         let key = self.local_storage_key()?;
         let cipher = Aes256Gcm::new_from_slice(&key)
             .map_err(|_| "Could not initialize local encryption".to_string())?;
-        let nonce_uuid = Uuid::new_v4();
-        let nonce_bytes = &nonce_uuid.as_bytes()[..12];
-        let nonce = Nonce::from_slice(nonce_bytes);
+        let mut nonce_bytes = [0u8; 12];
+        getrandom::getrandom(&mut nonce_bytes)
+            .map_err(|error| format!("Could not generate local encryption nonce: {error}"))?;
+        let nonce = Nonce::from_slice(&nonce_bytes);
         let ciphertext = cipher.encrypt(nonce, plaintext)
             .map_err(|_| "Could not encrypt local saved messages".to_string())?;
 
         let mut encoded = Vec::with_capacity(12 + ciphertext.len());
-        encoded.extend_from_slice(nonce_bytes);
+        encoded.extend_from_slice(&nonce_bytes);
         encoded.extend_from_slice(&ciphertext);
         Ok(encoded)
     }
