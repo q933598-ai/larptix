@@ -3577,11 +3577,10 @@ mod tests {
         let first = "a".repeat(64);
         let second = "b".repeat(64);
 
-        assert!(
-            db.get_matrix_key_backup_for_key(&alice.id, &first)
-                .unwrap()
-                .is_none()
-        );
+        assert!(db
+            .get_matrix_key_backup_for_key(&alice.id, &first)
+            .unwrap()
+            .is_none());
 
         db.upsert_matrix_key_backup_for_key(&alice.id, &first, "backup-one")
             .unwrap();
