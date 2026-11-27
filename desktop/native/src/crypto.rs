@@ -112,6 +112,23 @@ impl NativeMatrixCrypto {
         let key_fingerprint = format!("{:x}", Sha256::digest(recovery_key.as_bytes()));
         let keyed_dir = root_dir.join("devices").join(&key_fingerprint);
         let legacy_store_dir = root_dir.join("matrix-store");
+        let scoped_backup_path = format!("api/matrix/key-backups/{key_fingerprint}");
+        let has_scoped_backup = api_request(
+            &http,
+            &base_url,
+            Method::GET,
+            &scoped_backup_path,
+            None,
+        )
+        .await
+        .ok()
+        .and_then(|value| {
+            value
+                .get("encrypted_backup")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .is_some_and(|value| !value.is_empty());
         let use_scoped_backup = fresh_start || has_scoped_backup;
 
         // First try to keep using a matching legacy native store. If this
