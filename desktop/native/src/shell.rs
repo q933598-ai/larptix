@@ -1475,7 +1475,7 @@ impl LarptrixShell {
         placeholder: &'static str,
         value: &str,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + 'static {
         let focused = self.active_input == Some(field);
         let display_value = if matches!(field, LoginField::AccessKey | LoginField::Password | LoginField::RecoveryKey) && !value.is_empty() {
             "•".repeat(value.chars().count())
