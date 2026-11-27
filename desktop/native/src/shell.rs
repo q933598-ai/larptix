@@ -4731,18 +4731,9 @@ impl LarptrixShell {
     }
 
     fn sign_in_qr_view(&self) -> impl IntoElement {
-        let access_key: String = self.access_key
-            .chars()
-            .filter(|ch| ch.is_ascii_hexdigit())
-            .collect();
-        let qr_data = if self.login_mode == LoginMode::AccessKey && access_key.len() == 64 {
-            network::normalize_server_url(&self.server_url)
-                .ok()
-                .map(|url| format!("{}#access_key={access_key}", url))
-        } else {
-            None
-        };
-        let qr_rows = qr_data.and_then(|data| QrCode::new(data.as_bytes()).ok()).map(|code| {
+        // This is a visual preview only. Never place an account access key in a QR code.
+        let preview = QrCode::new(b"LARPTRIX_QR_LOGIN_PREVIEW").ok();
+        let qr_rows = preview.map(|code| {
             let width = code.width();
             (0..width).map(|y| {
                 let cells: Vec<_> = (0..width).map(|x| {
@@ -4793,23 +4784,6 @@ impl LarptrixShell {
                                 .gap(px(0.0))
                                 .children(rows),
                         )
-                    })
-                    .when(self.login_mode != LoginMode::AccessKey || access_key.len() != 64, |element| {
-                        element.child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .items_center()
-                                .gap_2()
-                                .child(pixel_l_logo())
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(0x45536a))
-                                        .text_center()
-                                        .child("Enter your access key to generate a sign-in QR"),
-                                ),
-                        )
                     }),
             )
             .child(
@@ -4817,14 +4791,14 @@ impl LarptrixShell {
                     .text_xs()
                     .text_color(rgb(MUTED))
                     .text_center()
-                    .child("Scan with your phone to open this server and sign in to the same account."),
+                    .child("QR sign-in is coming soon. Scan approval will use a one-time token from an authenticated device."),
             )
             .child(
                 div()
                     .text_xs()
                     .text_color(rgb(0x71819a))
                     .text_center()
-                    .child("The QR contains your access key. Keep it private."),
+                    .child("This preview QR does not sign you in. Your access key is never embedded in a QR code."),
             )
     }
 
