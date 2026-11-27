@@ -21,9 +21,9 @@ From the repository root:
 cargo run --manifest-path desktop/native/Cargo.toml
 ```
 
-The first screen lets you choose a saved server or enter a new self-hosted server URL. Server URLs are stored locally in the user's configuration directory (only the addresses are saved; credentials are not). The sign-in screen supports either a 64-character account access key or an email/password account. Both methods also require the separate E2E recovery key saved when enabling encryption in the web client. The sign-in credential creates the HTTP session, while the recovery key unlocks the encrypted local Matrix store and shared room-key backup. Neither credential is written to disk as plaintext. The client then connects to `/ws` with the HttpOnly session cookie and matching `Origin` header. WebSocket reconnects use exponential backoff.
+The welcome screen accepts a server host such as `larptrix.duckdns.org`; the scheme is added automatically (HTTPS by default). Saved server addresses are stored locally in the user's configuration directory (credentials are not). Sign-in supports a 64-character access key or a legacy email/password account. The separate E2E recovery key is optional: enter the previous key to restore older encrypted conversations, or leave it empty to create a fresh E2E identity. The fresh recovery key is shown once after sign-in and must be saved by the user. Legacy E2E backups keep using the web-compatible backup endpoint; fresh identities use a separate key-scoped backup so they do not overwrite older conversation history. Neither the access key nor the recovery key is stored as plaintext. The client then connects to `/ws` with the HttpOnly session cookie and matching `Origin` header. WebSocket reconnects use exponential backoff.
 
-The native client currently signs in to existing accounts; account creation is still done in the web client. For accounts created with email/password, use the Email & password tab. For access-key accounts, use the Access key tab. The E2E recovery key is separate from both sign-in methods.
+The native welcome screen also supports account registration with a display name only. Larptrix derives a username from the display name and, if it is already taken, offers available alternatives. New accounts receive an access key that must be saved. The sign-in panel can render a QR code from a valid access key for quick sign-in on another device; the QR code contains the access key and must be kept private. The legacy Email & password tab remains available for existing password accounts.
 
 You can prefill the server URL with `LARPTRIX_SERVER_URL`:
 
@@ -71,16 +71,19 @@ release work and are not implied by the current CI executable.
 ## Current scope
 
 - Native GPUI window and three-panel messenger layout.
-- Initial server picker with locally saved self-hosted server addresses.
-- Native access-key and email/password sign-in modes with clipboard paste.
-- Cookie-based HTTP login against the existing Larptrix API.
+- Welcome screen with a plain hostname input, locally saved server addresses and HTTPS-by-default normalization.
+- Native account registration from display name, automatic username generation and availability suggestions.
+- Access-key and legacy email/password sign-in modes with clipboard paste.
+- Optional old E2E recovery key; a blank value creates a fresh identity and displays its new key once.
+- Sign-in QR code generated from a valid access key.
+- Cookie-based HTTP login against the Larptrix API.
 - Authenticated WebSocket connection and reconnect loop.
 - Real server directory, groups, channels, presence, and direct/group conversation history.
 - Clickable group and channel entries that open the existing server-side conversation history.
 - Shared Rust client core updates from incoming protocol events, including routing group messages by group ID.
 - Matrix SDK 0.19.0 E2E device initialization, key upload/query/claim and to-device processing.
 - Persistent Matrix SQLite crypto store protected by the E2E recovery key.
-- Restore and refresh of the same encrypted Megolm room-key backup used by the web client.
+- Restore and refresh of encrypted Megolm room-key backups; fresh identities use key-scoped backups to preserve older web-compatible backups.
 - Encryption of outgoing 1:1 and group text messages before sending; decryption of incoming Matrix-encrypted messages.
 - Group room-key sharing with the current group membership before sending a new group message.
 - Message reactions with live counts and per-user toggle state in direct and group conversations.
@@ -117,6 +120,10 @@ Use a test account and a non-sensitive test conversation. Do not share the recov
 - Device verification / cross-signing UX and visible trust/fingerprint confirmation.
 - Bundling the GStreamer runtime and codec plugins into a self-contained Windows installer.
 - Automatic image thumbnail loading before the user opens an attachment (thumbnails are cached after first viewing).
+- QR approval / device-to-device sign-in that does not require the user to enter an access key first.
+- Recovery-key rotation and a user-facing manager for multiple E2E identities and backups.
+- Device verification / cross-signing UX and visible trust/fingerprint confirmation.
+- Bundling the GStreamer runtime and codec plugins into a self-contained Windows installer.
 - Group/channel creation, membership management and richer channel controls.
 - Native audio/video calls, screen sharing and notifications.
 - Signed Windows installer and automatic desktop updates.
