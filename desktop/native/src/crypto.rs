@@ -110,44 +110,42 @@ impl NativeMatrixCrypto {
         let root_dir = crypto_data_dir(&internal_user_id)?;
         let key_fingerprint = format!("{:x}", Sha256::digest(recovery_key.as_bytes()));
         let keyed_dir = root_dir.join("devices").join(&key_fingerprint);
-        let scoped_backup_path = format!("api/matrix/key-backups/{key_fingerprint}");
-        let has_scoped_backup = api_request(
-            &http,
-            &base_url,
-            Method::GET,
-            &scoped_backup_path,
-            None,
-        )
-        .await
-        .ok()
-        .and_then(|value| value.get("encrypted_backup").and_then(Value::as_str).map(str::to_string))
-        .is_some_and(|value| !value.is_empty());
+        let legacy_store_dir = root_dir.join("matrix-store");
 
-        // Preserve the legacy local store for old keys already used by this
-        // native client. A recovery key with a server-side key-scoped backup
-        // belongs to its own directory, even when this is a fresh computer.
-        let account_dir = if fresh_start
-            || keyed_dir.is_dir()
-            || has_scoped_backup
-            || !root_dir.join("matrix-store").exists()
-        {
-            keyed_dir
-        } else {
-            root_dir
-        };
-        std::fs::create_dir_all(&account_dir)
-            .map_err(|error| format!("Could not create encrypted key directory: {error}"))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&account_dir, std::fs::Permissions::from_mode(0o700))
-                .map_err(|error| format!("Could not secure encrypted key directory: {error}"))?;
-        }
-        let device_id = load_or_create_device_id(&account_dir)?;
-        let store_dir = account_dir.join("matrix-store");
-        let store = SqliteCryptoStore::open(&store_dir, Some(&recovery_key))
-            .await
-            .map_err(|error| format!("Could not open encrypted Matrix key store: {error}"))?;
+        // First try to keep using a matching legacy native store. If this
+        // recovery key belongs to a different E2E identity on this computer,
+        // fall back to its isolated key-fingerprint directory instead.
+        let (account_dir, device_id, store) =
+            if fresh_start || keyed_dir.is_dir() || !legacy_store_dir.exists() {
+                prepare_crypto_dir(&keyed_dir)?;
+                let device_id = load_or_create_device_id(&keyed_dir)?;
+                let store = SqliteCryptoStore::open(
+                    keyed_dir.join("matrix-store"),
+                    Some(&recovery_key),
+                )
+                .await
+                .map_err(|error| format!("Could not open encrypted Matrix key store: {error}"))?;
+                (keyed_dir, device_id, store)
+            } else {
+                prepare_crypto_dir(&root_dir)?;
+                let legacy_device_id = load_or_create_device_id(&root_dir)?;
+                match SqliteCryptoStore::open(&legacy_store_dir, Some(&recovery_key)).await {
+                    Ok(store) => (root_dir, legacy_device_id, store),
+                    Err(legacy_error) => {
+                        prepare_crypto_dir(&keyed_dir)?;
+                        let device_id = load_or_create_device_id(&keyed_dir)?;
+                        let store = SqliteCryptoStore::open(
+                            keyed_dir.join("matrix-store"),
+                            Some(&recovery_key),
+                        )
+                        .await
+                        .map_err(|error| format!(
+                            "Could not open encrypted Matrix key store: {error} (legacy store: {legacy_error})"
+                        ))?;
+                        (keyed_dir, device_id, store)
+                    }
+                }
+            };
         let machine = OlmMachineBuilder::new(&matrix_user_id, &device_id)
             .with_crypto_store(store)
             .build()
@@ -911,6 +909,18 @@ pub fn generate_recovery_key() -> Result<String, String> {
     getrandom::getrandom(&mut bytes)
         .map_err(|error| format!("Could not generate E2E recovery key: {error}"))?;
     Ok(STANDARD_NO_PAD.encode(bytes))
+}
+
+fn prepare_crypto_dir(account_dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(account_dir)
+        .map_err(|error| format!("Could not create encrypted key directory: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(account_dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("Could not secure encrypted key directory: {error}"))?;
+    }
+    Ok(())
 }
 
 fn crypto_data_dir(user_id: &str) -> Result<PathBuf, String> {
