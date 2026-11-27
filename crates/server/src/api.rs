@@ -29,6 +29,7 @@ use crate::AppState;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/register", post(register))
+        .route("/api/usernames/suggestions", get(username_suggestions))
         .route("/api/register/password", post(register_password))
         .route("/api/login", post(login))
         .route("/api/login/preview", post(login_preview))
@@ -152,6 +153,11 @@ pub struct RegisterBody {
 }
 
 #[derive(Deserialize)]
+pub struct UsernameSuggestionQuery {
+    pub display_name: String,
+}
+
+#[derive(Deserialize)]
 pub struct PasswordRegisterBody {
     pub display_name: String,
     pub username: String,
@@ -244,6 +250,77 @@ pub struct UpdateCryptoDeviceBody {
     pub bundle_json: String,
     pub encrypted_state: String,
     pub expected_version: i64,
+}
+
+async fn username_suggestions(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<UsernameSuggestionQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let display_name = sanitize_display_name(&query.display_name).map_err(ApiError::bad)?;
+    let base = username_from_display_name(&display_name);
+    let base_available = !state.db.username_exists(&base).map_err(ApiError::db)?;
+    let mut suggestions = Vec::new();
+
+    for suffix in ["2", "3", "4", "5", "6", "7", "8", "9", "_2", "_3", "_4", "_5"] {
+        let keep = 24usize.saturating_sub(suffix.len());
+        let candidate = format!("{}{}", base.chars().take(keep).collect::<String>(), suffix);
+        if candidate.len() < 3 || candidate == base {
+            continue;
+        }
+        if !state.db.username_exists(&candidate).map_err(ApiError::db)? {
+            suggestions.push(candidate);
+        }
+        if suggestions.len() >= 5 {
+            break;
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "base_username": base,
+        "base_available": base_available,
+        "suggestions": suggestions
+    })))
+}
+
+fn username_from_display_name(display_name: &str) -> String {
+    let mut output = String::new();
+    let mut separator_pending = false;
+
+    for raw in display_name.chars() {
+        let lower = raw.to_lowercase().next().unwrap_or(raw);
+        let transliteration = match lower {
+            'а' => "a", 'б' => "b", 'в' => "v", 'г' => "g", 'д' => "d",
+            'е' => "e", 'ё' => "yo", 'ж' => "zh", 'з' => "z", 'и' => "i",
+            'й' => "y", 'к' => "k", 'л' => "l", 'м' => "m", 'н' => "n",
+            'о' => "o", 'п' => "p", 'р' => "r", 'с' => "s", 'т' => "t",
+            'у' => "u", 'ф' => "f", 'х' => "kh", 'ц' => "ts", 'ч' => "ch",
+            'ш' => "sh", 'щ' => "shch", 'ъ' | 'ь' => "", 'ы' => "y",
+            'э' => "e", 'ю' => "yu", 'я' => "ya",
+            _ => "",
+        };
+
+        if lower.is_ascii_alphanumeric() {
+            if separator_pending && !output.is_empty() {
+                output.push('_');
+            }
+            output.push(lower);
+            separator_pending = false;
+        } else if !transliteration.is_empty() {
+            if separator_pending && !output.is_empty() {
+                output.push('_');
+            }
+            output.push_str(transliteration);
+            separator_pending = false;
+        } else if lower.is_whitespace() || lower == '-' || lower == '_' || lower == '.' {
+            separator_pending = true;
+        }
+        if output.len() >= 24 {
+            break;
+        }
+    }
+
+    let base = output.trim_matches('_').chars().take(24).collect::<String>();
+    if base.len() >= 3 { base } else { "user".to_string() }
 }
 
 async fn register(
