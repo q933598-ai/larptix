@@ -33,6 +33,7 @@ pub enum AppEvent {
     GroupCreated {
         group: GroupInfo,
     },
+    GroupCreationFailed(String),
     AvatarCached {
         user_id: String,
         path: PathBuf,
