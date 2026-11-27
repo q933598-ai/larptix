@@ -346,6 +346,10 @@ impl LarptrixShell {
                 });
                 self.connection_status = "Profile updated".into();
             }
+            AppEvent::ProfileUpdateFailed(error) => {
+                self.saving_profile = false;
+                self.connection_status = format!("Profile update failed: {error}");
+            }
             AppEvent::MessagePolicyUpdated { user } => {
                 self.core.apply_server_message(ServerMessage::Welcome {
                     user,
@@ -809,8 +813,7 @@ impl LarptrixShell {
                     let _ = events.send_blocking(AppEvent::ProfileUpdated { user, about });
                 }
                 Err(error) => {
-                    let _ = events.send_blocking(AppEvent::Status(format!("Profile update failed: {error}")));
-                    let _ = events.send_blocking(AppEvent::Error("Profile update failed".into()));
+                    let _ = events.send_blocking(AppEvent::ProfileUpdateFailed(error));
                 }
             }
         });
@@ -1946,7 +1949,7 @@ impl LarptrixShell {
             Section::Messages => self.message_list(cx).into_any_element(),
             Section::Friends => self.friends_list(cx).into_any_element(),
             Section::Groups => self.groups_list(cx).into_any_element(),
-            Section::Settings => self.settings_list().into_any_element(),
+            Section::Settings => self.settings_list(cx).into_any_element(),
         };
 
         let (account_name, username, account_user_id) = self
@@ -2576,15 +2579,94 @@ impl LarptrixShell {
             })
     }
 
-    fn settings_list(&self) -> impl IntoElement {
+    fn settings_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let message_policy = self.core.state().current_user.as_ref()
+            .map(|user| user.message_policy.as_str())
+            .unwrap_or("everyone");
+        let privacy_label = if message_policy == "friends" {
+            "Only friends can send you messages"
+        } else {
+            "Everyone can send you messages"
+        };
+
         div()
             .flex_1()
             .flex()
             .flex_col()
             .gap_3()
             .p_4()
+            .child(section_heading("PROFILE"))
+            .child(self.login_field(
+                LoginField::ProfileDisplayName,
+                "DISPLAY NAME",
+                "Your display name",
+                &self.profile_display_name,
+                cx,
+            ))
+            .child(self.login_field(
+                LoginField::ProfileUsername,
+                "USERNAME",
+                "@username",
+                &self.profile_username,
+                cx,
+            ))
+            .child(self.login_field(
+                LoginField::ProfileAbout,
+                "ABOUT",
+                "A short profile description",
+                &self.profile_about,
+                cx,
+            ))
+            .child(
+                div()
+                    .id("save-profile-button")
+                    .p_2()
+                    .rounded_md()
+                    .bg(if self.saving_profile { rgb(SURFACE_HOVER) } else { rgb(ACCENT) })
+                    .text_color(rgb(RAIL))
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| this.save_profile(cx)))
+                    .child(if self.saving_profile { "Saving profile…" } else { "Save profile" }),
+            )
+            .child(section_heading("PRIVACY"))
+            .child(
+                div()
+                    .p_3()
+                    .rounded_md()
+                    .bg(rgb(SURFACE))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .child(div().text_sm().text_color(rgb(TEXT)).child("Who can message you"))
+                            .child(div().text_xs().text_color(rgb(MUTED)).child(privacy_label)),
+                    )
+                    .child(
+                        div()
+                            .id("toggle-message-policy")
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .bg(rgb(SURFACE_HOVER))
+                            .text_xs()
+                            .text_color(rgb(ACCENT))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_message_policy(cx)))
+                            .child("Change"),
+                    ),
+            )
+            .child(section_heading("APPLICATION"))
             .child(settings_row("Connection", self.connection_status.clone()))
-            .child(settings_row("Account", "Account profile and active sessions".to_string()))
             .child(settings_row(
                 "End-to-end encryption",
                 self.crypto.as_ref()
@@ -2593,7 +2675,7 @@ impl LarptrixShell {
             ))
             .child(settings_row(
                 "Appearance",
-                "Native theme and layout preferences".to_string(),
+                "Native theme controls are not yet available".to_string(),
             ))
     }
 
