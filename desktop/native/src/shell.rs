@@ -4349,6 +4349,23 @@ fn chat_entry(
         )
 }
 
+fn format_saved_age(timestamp: i64) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(timestamp);
+    let elapsed = now.saturating_sub(timestamp).max(0);
+    if elapsed < 60 {
+        "just now".into()
+    } else if elapsed < 3_600 {
+        format!("{} min ago", elapsed / 60)
+    } else if elapsed < 86_400 {
+        format!("{} hr ago", elapsed / 3_600)
+    } else {
+        format!("{} days ago", elapsed / 86_400)
+    }
+}
+
 fn format_media_time(milliseconds: u64) -> String {
     let total_seconds = milliseconds / 1_000;
     let hours = total_seconds / 3_600;
