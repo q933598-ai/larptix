@@ -2052,6 +2052,17 @@ impl LarptrixShell {
             )
             .child(
                 rail_button(
+                    "rail-saved",
+                    "★",
+                    self.active_section == Section::Saved,
+                    cx.listener(|this, _, _, cx| {
+                        this.active_section = Section::Saved;
+                        cx.notify();
+                    }),
+                ),
+            )
+            .child(
+                rail_button(
                     "rail-friends",
                     "♙",
                     self.active_section == Section::Friends,
@@ -2090,6 +2101,7 @@ impl LarptrixShell {
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match self.active_section {
             Section::Messages => self.message_list(cx).into_any_element(),
+            Section::Saved => self.saved_messages_sidebar().into_any_element(),
             Section::Friends => self.friends_list(cx).into_any_element(),
             Section::Groups => self.groups_list(cx).into_any_element(),
             Section::Settings => self.settings_list(cx).into_any_element(),
@@ -2179,6 +2191,21 @@ impl LarptrixShell {
                     )
                     .child(div().size(px(7.0)).rounded_full().bg(rgb(GREEN))),
             )
+    }
+
+    fn saved_messages_sidebar(&self) -> impl IntoElement {
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_4()
+            .child(section_heading("PRIVATE LOCAL STORAGE"))
+            .child(settings_row(
+                "Saved Messages",
+                format!("{} saved note(s) · encrypted on this device", self.saved_messages.len()),
+            ))
+            .child(empty_hint("These notes are stored locally and are not sent to your Larptrix server."))
     }
 
     fn message_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2822,6 +2849,126 @@ impl LarptrixShell {
             ))
     }
 
+    fn saved_messages_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let messages: Vec<_> = self.saved_messages.iter().cloned().collect();
+        let is_loaded = self.saved_messages_loaded;
+
+        div()
+            .flex_1()
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(BG))
+            .child(
+                div()
+                    .h(px(64.0))
+                    .px_6()
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .gap_0p5()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .child(
+                        div()
+                            .text_base()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(rgb(TEXT))
+                            .child("Saved Messages"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child("Private notes · encrypted on this device"),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .p_6()
+                    .when(!is_loaded, |element| {
+                        element.child(empty_hint("Unlocking your saved notes…"))
+                    })
+                    .children(messages.iter().map(|message| {
+                        let id = message.id.clone();
+                        let created = format_saved_age(message.created_at);
+                        let body = message.body.clone();
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(MUTED))
+                                            .child(created),
+                                    )
+                                    .child(div().flex_1())
+                                    .child(
+                                        div()
+                                            .id(format!("delete-saved-message-{id}"))
+                                            .px_2()
+                                            .py_1()
+                                            .rounded_md()
+                                            .bg(rgb(SURFACE))
+                                            .text_xs()
+                                            .text_color(rgb(MUTED))
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.delete_saved_message(&id, cx);
+                                            }))
+                                            .child("Delete"),
+                                    ),
+                            )
+                            .child(message_bubble("You".into(), body, true))
+                    }).collect::<Vec<_>>())
+                    .when(is_loaded && messages.is_empty(), |element| {
+                        element.child(empty_hint("Nothing saved yet. Add a note below."))
+                    }),
+            )
+            .child(
+                div()
+                    .p_4()
+                    .border_t_1()
+                    .border_color(rgb(BORDER))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(self.login_field(
+                        LoginField::SavedComposer,
+                        "SAVE A NOTE",
+                        "Write a message, reminder, or link…",
+                        &self.saved_message_text,
+                        cx,
+                    ))
+                    .child(
+                        div()
+                            .id("save-message-button")
+                            .p_3()
+                            .rounded_md()
+                            .bg(if is_loaded { rgb(ACCENT) } else { rgb(SURFACE_HOVER) })
+                            .text_color(rgb(RAIL))
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| this.save_saved_message(cx)))
+                            .child("Save to this device"),
+                    ),
+            )
+    }
+
     fn conversation(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(peer_id) = self.selected_peer.as_deref() else {
             return div()
@@ -3233,7 +3380,11 @@ impl Render for LarptrixShell {
                 .relative()
                 .child(self.server_rail(cx))
                 .child(self.sidebar(cx))
-                .child(self.conversation(cx))
+                .child(if self.active_section == Section::Saved {
+                    self.saved_messages_view(cx).into_any_element()
+                } else {
+                    self.conversation(cx).into_any_element()
+                })
                 .when(self.image_viewer.is_some(), |element| {
                     element.child(self.image_viewer_overlay(cx))
                 })
