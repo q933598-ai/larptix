@@ -45,6 +45,12 @@ pub enum AppEvent {
     MessagePolicyUpdated {
         user: UserInfo,
     },
+    SavedMessagesLoaded {
+        data: String,
+    },
+    SavedMessagesSaveFinished {
+        error: Option<String>,
+    },
     AvatarCached {
         user_id: String,
         path: PathBuf,
