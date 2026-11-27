@@ -3,13 +3,14 @@ use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
     sync::Arc,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use gpui::{
     div, img, prelude::*, rgb, px, App, Context, FocusHandle, KeyDownEvent, MouseButton, Window,
 };
 use larptrix_client_core::ClientCore;
 use larptrix_protocol::{ChatMessage, ClientMessage, ServerMessage, UserInfo};
+use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
 
 use crate::crypto::{EncryptedAttachmentMetadata, NativeMatrixCrypto};
@@ -32,6 +33,7 @@ const RED: u32 = 0xbf616a;
 enum Section {
     #[default]
     Messages,
+    Saved,
     Friends,
     Groups,
     Settings,
@@ -41,6 +43,7 @@ impl Section {
     fn title(self) -> &'static str {
         match self {
             Self::Messages => "Messages",
+            Self::Saved => "Saved Messages",
             Self::Friends => "Friends",
             Self::Groups => "Groups",
             Self::Settings => "Settings",
@@ -50,6 +53,7 @@ impl Section {
     fn eyebrow(self) -> &'static str {
         match self {
             Self::Messages => "DIRECT MESSAGES",
+            Self::Saved => "PRIVATE NOTES",
             Self::Friends => "FRIENDS",
             Self::Groups => "YOUR GROUPS",
             Self::Settings => "PREFERENCES",
@@ -90,6 +94,14 @@ enum LoginField {
     ProfileDisplayName,
     ProfileUsername,
     ProfileAbout,
+    SavedComposer,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct SavedMessage {
+    id: String,
+    body: String,
+    created_at: i64,
 }
 
 struct ImageViewer {
@@ -138,6 +150,9 @@ pub struct LarptrixShell {
     outgoing_friend_requests: Vec<UserInfo>,
     user_search: String,
     user_search_results: Vec<UserInfo>,
+    saved_messages: Vec<SavedMessage>,
+    saved_message_text: String,
+    saved_messages_loaded: bool,
     profile_about: String,
     profile_display_name: String,
     profile_username: String,
@@ -234,6 +249,9 @@ impl LarptrixShell {
             outgoing_friend_requests: Vec::new(),
             user_search: String::new(),
             user_search_results: Vec::new(),
+            saved_messages: Vec::new(),
+            saved_message_text: String::new(),
+            saved_messages_loaded: false,
             profile_about: String::new(),
             profile_display_name: String::new(),
             profile_username: String::new(),
@@ -275,6 +293,7 @@ impl LarptrixShell {
                 self.profile_display_name = user.display_name.clone();
                 self.profile_username = user.username.clone();
                 let profile_user_id = user.user_id.clone();
+                let saved_crypto = crypto.clone();
                 self.core.apply_server_message(ServerMessage::Welcome {
                     user,
                     users: Vec::new(),
@@ -287,6 +306,32 @@ impl LarptrixShell {
                         }
                         Err(error) => {
                             let _ = events.send_blocking(AppEvent::Status(format!("Could not load profile settings: {error}")));
+                        }
+                    }
+                });
+
+                let events = self.event_tx.clone();
+                self.runtime.spawn(async move {
+                    let result = async {
+                        let path = saved_crypto.saved_messages_path()?;
+                        match tokio::fs::read(path).await {
+                            Ok(encrypted) => {
+                                let plaintext = saved_crypto.decrypt_local_data(&encrypted)?;
+                                String::from_utf8(plaintext)
+                                    .map_err(|error| format!("Saved messages are not valid UTF-8: {error}"))
+                            }
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("[]".to_string()),
+                            Err(error) => Err(format!("Could not read saved messages: {error}")),
+                        }
+                    }.await;
+
+                    match result {
+                        Ok(data) => {
+                            let _ = events.send_blocking(AppEvent::SavedMessagesLoaded { data });
+                        }
+                        Err(error) => {
+                            let _ = events.send_blocking(AppEvent::Status(format!("Could not unlock saved messages: {error}")));
+                            let _ = events.send_blocking(AppEvent::SavedMessagesLoaded { data: "[]".into() });
                         }
                     }
                 });
@@ -356,6 +401,23 @@ impl LarptrixShell {
                     users: Vec::new(),
                 });
                 self.connection_status = "Message privacy updated".into();
+            }
+            AppEvent::SavedMessagesLoaded { data } => {
+                self.saved_messages_loaded = true;
+                match serde_json::from_str::<Vec<SavedMessage>>(&data) {
+                    Ok(messages) => self.saved_messages = messages,
+                    Err(error) => {
+                        self.saved_messages.clear();
+                        self.connection_status = format!("Could not decode saved messages: {error}");
+                    }
+                }
+            }
+            AppEvent::SavedMessagesSaveFinished { error } => {
+                if let Some(error) = error {
+                    self.connection_status = format!("Could not save local notes: {error}");
+                } else {
+                    self.connection_status = "Saved messages updated · encrypted on this device".into();
+                }
             }
             AppEvent::AvatarCached { user_id, path, error } => {
                 self.loading_avatar_ids.remove(&user_id);
@@ -785,6 +847,76 @@ impl LarptrixShell {
         });
     }
 
+    fn persist_saved_messages(&mut self, cx: &mut Context<Self>) {
+        let Some(crypto) = self.crypto.clone() else {
+            self.connection_status = "E2E storage is locked".into();
+            cx.notify();
+            return;
+        };
+        let data = match serde_json::to_vec(&self.saved_messages) {
+            Ok(data) => data,
+            Err(error) => {
+                self.connection_status = format!("Could not encode saved messages: {error}");
+                cx.notify();
+                return;
+            }
+        };
+        let encrypted = match crypto.encrypt_local_data(&data) {
+            Ok(encrypted) => encrypted,
+            Err(error) => {
+                self.connection_status = error;
+                cx.notify();
+                return;
+            }
+        };
+        let path = match crypto.saved_messages_path() {
+            Ok(path) => path,
+            Err(error) => {
+                self.connection_status = error;
+                cx.notify();
+                return;
+            }
+        };
+        let events = self.event_tx.clone();
+        self.runtime.spawn(async move {
+            let result = async {
+                let temporary = path.with_extension("enc.tmp");
+                tokio::fs::write(&temporary, encrypted).await
+                    .map_err(|error| format!("Could not write saved-message store: {error}"))?;
+                tokio::fs::rename(&temporary, &path).await
+                    .map_err(|error| format!("Could not finalize saved-message store: {error}"))?;
+                Ok::<(), String>(())
+            }.await;
+            let _ = events.send_blocking(AppEvent::SavedMessagesSaveFinished {
+                error: result.err(),
+            });
+        });
+        cx.notify();
+    }
+
+    fn save_saved_message(&mut self, cx: &mut Context<Self>) {
+        let body = self.saved_message_text.trim().to_string();
+        if body.is_empty() || !self.saved_messages_loaded {
+            return;
+        }
+        let created_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs() as i64)
+            .unwrap_or_default();
+        self.saved_messages.push(SavedMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            body,
+            created_at,
+        });
+        self.saved_message_text.clear();
+        self.persist_saved_messages(cx);
+    }
+
+    fn delete_saved_message(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.saved_messages.retain(|message| message.id != id);
+        self.persist_saved_messages(cx);
+    }
+
     fn save_profile(&mut self, cx: &mut Context<Self>) {
         if self.saving_profile {
             return;
@@ -932,6 +1064,7 @@ impl LarptrixShell {
                 LoginField::ProfileDisplayName => { self.profile_display_name.pop(); }
                 LoginField::ProfileUsername => { self.profile_username.pop(); }
                 LoginField::ProfileAbout => { self.profile_about.pop(); }
+                LoginField::SavedComposer => { self.saved_message_text.pop(); }
             }
             cx.notify();
             return;
@@ -944,6 +1077,7 @@ impl LarptrixShell {
                 LoginField::PeopleSearch => self.search_users(cx),
                 LoginField::GroupName => self.create_group_or_channel(cx),
                 LoginField::ProfileDisplayName | LoginField::ProfileUsername | LoginField::ProfileAbout => self.save_profile(cx),
+                LoginField::SavedComposer => self.save_saved_message(cx),
                 _ => self.start_connection(cx),
             }
             return;
@@ -965,6 +1099,7 @@ impl LarptrixShell {
                     LoginField::ProfileDisplayName => self.profile_display_name.len(),
                     LoginField::ProfileUsername => self.profile_username.len(),
                     LoginField::ProfileAbout => self.profile_about.len(),
+                    LoginField::SavedComposer => self.saved_message_text.len(),
                 };
                 let max_len = match field {
                     LoginField::Server => 256usize,
@@ -978,6 +1113,7 @@ impl LarptrixShell {
                     LoginField::ProfileDisplayName => 32usize,
                     LoginField::ProfileUsername => 24usize,
                     LoginField::ProfileAbout => 160usize,
+                    LoginField::SavedComposer => 12_000usize,
                 };
                 let remaining = max_len.saturating_sub(current_len);
                 let pasted: String = text.chars()
@@ -1001,6 +1137,7 @@ impl LarptrixShell {
                     LoginField::ProfileDisplayName => self.profile_display_name.push_str(&pasted),
                     LoginField::ProfileUsername => self.profile_username.push_str(&pasted),
                     LoginField::ProfileAbout => self.profile_about.push_str(&pasted),
+                    LoginField::SavedComposer => self.saved_message_text.push_str(&pasted),
                 }
                 cx.notify();
             }
@@ -1024,6 +1161,7 @@ impl LarptrixShell {
                 LoginField::ProfileDisplayName => (self.profile_display_name.len(), 32usize),
                 LoginField::ProfileUsername => (self.profile_username.len(), 24usize),
                 LoginField::ProfileAbout => (self.profile_about.len(), 160usize),
+                LoginField::SavedComposer => (self.saved_message_text.len(), 12_000usize),
             };
             if current_len + text.len() > max_len || text.chars().any(char::is_control) {
                 return;
@@ -1048,6 +1186,7 @@ impl LarptrixShell {
                 LoginField::ProfileDisplayName => self.profile_display_name.push_str(text),
                 LoginField::ProfileUsername => self.profile_username.push_str(text),
                 LoginField::ProfileAbout => self.profile_about.push_str(text),
+                LoginField::SavedComposer => self.saved_message_text.push_str(text),
             }
             cx.notify();
         }
@@ -1098,6 +1237,7 @@ impl LarptrixShell {
                         LoginField::ProfileDisplayName => "profile-display-name-input",
                         LoginField::ProfileUsername => "profile-username-input",
                         LoginField::ProfileAbout => "profile-about-input",
+                        LoginField::SavedComposer => "saved-message-composer",
                     })
                     .track_focus(&self.input_focus)
                     .w_full()
