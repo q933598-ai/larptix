@@ -62,6 +62,13 @@ impl Section {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum AuthMode {
+    #[default]
+    SignIn,
+    Register,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum ConnectionPage {
     #[default]
     Servers,
@@ -84,6 +91,7 @@ enum GroupCreationMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LoginField {
     Server,
+    DisplayName,
     AccessKey,
     Email,
     Password,
@@ -150,6 +158,16 @@ pub struct LarptrixShell {
     outgoing_friend_requests: Vec<UserInfo>,
     user_search: String,
     user_search_results: Vec<UserInfo>,
+    auth_mode: AuthMode,
+    display_name: String,
+    username_base: String,
+    username_base_available: bool,
+    username_suggestions: Vec<String>,
+    selected_register_username: Option<String>,
+    checking_usernames: bool,
+    registering: bool,
+    registration_access_key: Option<String>,
+    fresh_recovery_key: Option<String>,
     saved_messages: Vec<SavedMessage>,
     saved_message_text: String,
     saved_messages_loaded: bool,
@@ -206,6 +224,7 @@ impl LarptrixShell {
         } else {
             environment_server
         };
+        let server_url = server_input_value(&server_url);
 
         Self {
             runtime,
@@ -249,6 +268,16 @@ impl LarptrixShell {
             outgoing_friend_requests: Vec::new(),
             user_search: String::new(),
             user_search_results: Vec::new(),
+            auth_mode: AuthMode::SignIn,
+            display_name: String::new(),
+            username_base: String::new(),
+            username_base_available: false,
+            username_suggestions: Vec::new(),
+            selected_register_username: None,
+            checking_usernames: false,
+            registering: false,
+            registration_access_key: None,
+            fresh_recovery_key: None,
             saved_messages: Vec::new(),
             saved_message_text: String::new(),
             saved_messages_loaded: false,
@@ -261,7 +290,7 @@ impl LarptrixShell {
             selected_group_members: HashSet::new(),
             group_post_policy: "admins".into(),
             creating_group: false,
-            connection_page: ConnectionPage::Servers,
+            connection_page: ConnectionPage::SignIn,
             login_mode: LoginMode::AccessKey,
             access_key: String::new(),
             email: String::new(),
@@ -280,7 +309,8 @@ impl LarptrixShell {
 
     fn handle_event(&mut self, event: AppEvent, cx: &mut Context<Self>) {
         match event {
-            AppEvent::Authenticated { user, outgoing, crypto, api } => {
+            AppEvent::Authenticated { user, outgoing, crypto, api, generated_recovery_key } => {
+                self.fresh_recovery_key = generated_recovery_key;
                 self.connecting = false;
                 self.access_key.clear();
                 self.email.clear();
@@ -336,6 +366,35 @@ impl LarptrixShell {
                 });
                 self.connection_status = "Signed in · synchronizing".into();
                 self.active_section = Section::Messages;
+            }
+            AppEvent::UsernameSuggestions { base_username, base_available, suggestions } => {
+                self.checking_usernames = false;
+                self.registering = false;
+                self.username_base = base_username;
+                self.username_base_available = base_available;
+                self.username_suggestions = suggestions;
+                self.selected_register_username = None;
+                self.connection_status = if base_available {
+                    "Your username is available. Creating your account…".into()
+                } else {
+                    "That username is already taken. Choose one of these alternatives.".into()
+                };
+            }
+            AppEvent::RegistrationFinished { user, access_key } => {
+                self.registering = false;
+                self.checking_usernames = false;
+                self.auth_mode = AuthMode::SignIn;
+                self.login_mode = LoginMode::AccessKey;
+                self.access_key = access_key.clone();
+                self.registration_access_key = Some(access_key);
+                self.username_suggestions.clear();
+                self.selected_register_username = None;
+                self.connection_status = format!("Account created · your username is @{}", user.username);
+            }
+            AppEvent::RegistrationFailed(error) => {
+                self.registering = false;
+                self.checking_usernames = false;
+                self.connection_status = format!("Registration failed: {error}");
             }
             AppEvent::FriendListsLoaded { friends, incoming, outgoing } => {
                 for user in friends.iter().chain(incoming.iter()).chain(outgoing.iter()) {
@@ -715,6 +774,14 @@ impl LarptrixShell {
             }
         };
         let recovery_key = self.recovery_key.trim().to_string();
+        self.server_url = server_input_value(&server_url);
+        if !self.saved_servers.iter().any(|saved| saved.eq_ignore_ascii_case(&server_url)) {
+            self.saved_servers.push(server_url.clone());
+            if self.saved_servers.len() > 20 {
+                self.saved_servers.remove(0);
+            }
+            save_saved_servers(&self.saved_servers);
+        }
 
         let credentials = match self.login_mode {
             LoginMode::AccessKey => {
@@ -748,12 +815,6 @@ impl LarptrixShell {
             }
         };
 
-        if recovery_key.is_empty() {
-            self.connection_status = "Enter the separate E2E recovery key from your web account".into();
-            cx.notify();
-            return;
-        }
-
         self.connecting = true;
         self.connection_status = "Starting secure session…".into();
         cx.notify();
@@ -764,6 +825,122 @@ impl LarptrixShell {
                 let _ = events.send_blocking(AppEvent::Error(error));
             }
         });
+    }
+
+    fn start_registration(&mut self, cx: &mut Context<Self>) {
+        if self.registering || self.connecting {
+            return;
+        }
+        let display_name = self.display_name.trim().to_string();
+        if display_name.is_empty() {
+            self.connection_status = "Enter your display name first".into();
+            cx.notify();
+            return;
+        }
+        let server_address = self.server_url.trim().to_string();
+        if server_address.is_empty() {
+            self.connection_status = "Enter your server address first".into();
+            cx.notify();
+            return;
+        }
+        if let Err(error) = network::normalize_server_url(&server_address) {
+            self.connection_status = error;
+            cx.notify();
+            return;
+        }
+
+        let selected_username = self.selected_register_username.clone();
+        let display_for_request = display_name.clone();
+        self.registering = true;
+        self.connection_status = "Checking username availability…".into();
+        cx.notify();
+        let events = self.event_tx.clone();
+        self.runtime.spawn(async move {
+            let api = match NativeApi::anonymous(&server_address) {
+                Ok(api) => api,
+                Err(error) => {
+                    let _ = events.send_blocking(AppEvent::RegistrationFailed(error));
+                    return;
+                }
+            };
+
+            if let Some(username) = selected_username {
+                match api.register(&display_for_request, &username).await {
+                    Ok(response) => {
+                        let _ = events.send_blocking(AppEvent::RegistrationFinished {
+                            user: response.user,
+                            access_key: response.access_key,
+                        });
+                    }
+                    Err(error) => {
+                        if error.to_ascii_lowercase().contains("username") {
+                            match api.suggest_usernames(&display_for_request).await {
+                                Ok(suggestions) => {
+                                    let _ = events.send_blocking(AppEvent::UsernameSuggestions {
+                                        base_username: suggestions.base_username,
+                                        base_available: suggestions.base_available,
+                                        suggestions: suggestions.suggestions,
+                                    });
+                                }
+                                Err(suggest_error) => {
+                                    let _ = events.send_blocking(AppEvent::RegistrationFailed(suggest_error));
+                                }
+                            }
+                        } else {
+                            let _ = events.send_blocking(AppEvent::RegistrationFailed(error));
+                        }
+                    }
+                }
+                return;
+            }
+
+            match api.suggest_usernames(&display_for_request).await {
+                Ok(suggestions) if suggestions.base_available => {
+                    match api.register(&display_for_request, &suggestions.base_username).await {
+                        Ok(response) => {
+                            let _ = events.send_blocking(AppEvent::RegistrationFinished {
+                                user: response.user,
+                                access_key: response.access_key,
+                            });
+                        }
+                        Err(error) if error.to_ascii_lowercase().contains("username") => {
+                            match api.suggest_usernames(&display_for_request).await {
+                                Ok(suggestions) => {
+                                    let _ = events.send_blocking(AppEvent::UsernameSuggestions {
+                                        base_username: suggestions.base_username,
+                                        base_available: suggestions.base_available,
+                                        suggestions: suggestions.suggestions,
+                                    });
+                                }
+                                Err(suggest_error) => {
+                                    let _ = events.send_blocking(AppEvent::RegistrationFailed(suggest_error));
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            let _ = events.send_blocking(AppEvent::RegistrationFailed(error));
+                        }
+                    }
+                }
+                Ok(suggestions) => {
+                    let _ = events.send_blocking(AppEvent::UsernameSuggestions {
+                        base_username: suggestions.base_username,
+                        base_available: suggestions.base_available,
+                        suggestions: suggestions.suggestions,
+                    });
+                }
+                Err(error) => {
+                    let _ = events.send_blocking(AppEvent::RegistrationFailed(error));
+                }
+            }
+        });
+    }
+
+    fn select_register_username(&mut self, username: String, cx: &mut Context<Self>) {
+        if self.username_suggestions.iter().any(|candidate| candidate == &username) {
+            self.selected_register_username = Some(username);
+            cx.notify();
+        }
     }
 
     fn load_friend_lists(&mut self, cx: &mut Context<Self>) {
@@ -1076,6 +1253,7 @@ impl LarptrixShell {
         if event.keystroke.key == "backspace" {
             match field {
                 LoginField::Server => { self.server_url.pop(); }
+                LoginField::DisplayName => { self.display_name.pop(); }
                 LoginField::AccessKey => { self.access_key.pop(); }
                 LoginField::Email => { self.email.pop(); }
                 LoginField::Password => { self.password.pop(); }
@@ -1095,7 +1273,14 @@ impl LarptrixShell {
         if event.keystroke.key == "enter" {
             match field {
                 LoginField::Composer => self.send_message(cx),
-                LoginField::Server => self.choose_server(cx),
+                LoginField::Server => {
+                    if self.auth_mode == AuthMode::Register {
+                        self.start_registration(cx);
+                    } else {
+                        self.start_connection(cx);
+                    }
+                }
+                LoginField::DisplayName => self.start_registration(cx),
                 LoginField::PeopleSearch => self.search_users(cx),
                 LoginField::GroupName => self.create_group_or_channel(cx),
                 LoginField::ProfileDisplayName | LoginField::ProfileUsername | LoginField::ProfileAbout => self.save_profile(cx),
@@ -1111,6 +1296,7 @@ impl LarptrixShell {
             if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
                 let current_len = match field {
                     LoginField::Server => self.server_url.len(),
+                    LoginField::DisplayName => self.display_name.len(),
                     LoginField::AccessKey => self.access_key.len(),
                     LoginField::Email => self.email.len(),
                     LoginField::Password => self.password.len(),
@@ -1125,6 +1311,7 @@ impl LarptrixShell {
                 };
                 let max_len = match field {
                     LoginField::Server => 256usize,
+                    LoginField::DisplayName => 32usize,
                     LoginField::AccessKey => 80usize,
                     LoginField::Email => 320usize,
                     LoginField::Password => 256usize,
@@ -1149,6 +1336,7 @@ impl LarptrixShell {
                     .collect();
                 match field {
                     LoginField::Server => self.server_url.push_str(&pasted),
+                    LoginField::DisplayName => self.display_name.push_str(&pasted),
                     LoginField::AccessKey => self.access_key.push_str(&pasted),
                     LoginField::Email => self.email.push_str(&pasted),
                     LoginField::Password => self.password.push_str(&pasted),
@@ -1173,6 +1361,7 @@ impl LarptrixShell {
         if let Some(text) = event.keystroke.key_char.as_ref() {
             let (current_len, max_len) = match field {
                 LoginField::Server => (self.server_url.len(), 256usize),
+                LoginField::DisplayName => (self.display_name.len(), 32usize),
                 LoginField::AccessKey => (self.access_key.len(), 80usize),
                 LoginField::Email => (self.email.len(), 320usize),
                 LoginField::Password => (self.password.len(), 256usize),
@@ -1198,6 +1387,7 @@ impl LarptrixShell {
             }
             match field {
                 LoginField::Server => self.server_url.push_str(text),
+                LoginField::DisplayName => self.display_name.push_str(text),
                 LoginField::AccessKey => self.access_key.push_str(text),
                 LoginField::Email => self.email.push_str(text),
                 LoginField::Password => self.password.push_str(text),
@@ -1249,6 +1439,7 @@ impl LarptrixShell {
                 div()
                     .id(match field {
                         LoginField::Server => "server-url-input",
+                        LoginField::DisplayName => "display-name-input",
                         LoginField::AccessKey => "access-key-input",
                         LoginField::Email => "email-input",
                         LoginField::Password => "password-input",
