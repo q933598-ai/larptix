@@ -87,6 +87,9 @@ enum LoginField {
     Composer,
     PeopleSearch,
     GroupName,
+    ProfileDisplayName,
+    ProfileUsername,
+    ProfileAbout,
 }
 
 struct ImageViewer {
@@ -135,6 +138,10 @@ pub struct LarptrixShell {
     outgoing_friend_requests: Vec<UserInfo>,
     user_search: String,
     user_search_results: Vec<UserInfo>,
+    profile_about: String,
+    profile_display_name: String,
+    profile_username: String,
+    saving_profile: bool,
     group_creation_mode: Option<GroupCreationMode>,
     group_name: String,
     selected_group_members: HashSet<String>,
@@ -227,6 +234,10 @@ impl LarptrixShell {
             outgoing_friend_requests: Vec::new(),
             user_search: String::new(),
             user_search_results: Vec::new(),
+            profile_about: String::new(),
+            profile_display_name: String::new(),
+            profile_username: String::new(),
+            saving_profile: false,
             group_creation_mode: None,
             group_name: String::new(),
             selected_group_members: HashSet::new(),
@@ -259,11 +270,25 @@ impl LarptrixShell {
                 self.recovery_key.clear();
                 self.outgoing = Some(outgoing);
                 self.crypto = Some(crypto);
-                self.api = Some(api);
+                self.api = Some(api.clone());
                 self.preload_user_avatar(&user);
+                self.profile_display_name = user.display_name.clone();
+                self.profile_username = user.username.clone();
+                let profile_user_id = user.user_id.clone();
                 self.core.apply_server_message(ServerMessage::Welcome {
                     user,
                     users: Vec::new(),
+                });
+                let events = self.event_tx.clone();
+                self.runtime.spawn(async move {
+                    match api.load_profile(&profile_user_id).await {
+                        Ok(about) => {
+                            let _ = events.send_blocking(AppEvent::ProfileSettingsLoaded { about });
+                        }
+                        Err(error) => {
+                            let _ = events.send_blocking(AppEvent::Status(format!("Could not load profile settings: {error}")));
+                        }
+                    }
                 });
                 self.connection_status = "Signed in · synchronizing".into();
                 self.active_section = Section::Messages;
@@ -306,6 +331,27 @@ impl LarptrixShell {
             AppEvent::GroupCreationFailed(error) => {
                 self.creating_group = false;
                 self.connection_status = format!("Could not create group or channel: {error}");
+            }
+            AppEvent::ProfileSettingsLoaded { about } => {
+                self.profile_about = about;
+            }
+            AppEvent::ProfileUpdated { user, about } => {
+                self.saving_profile = false;
+                self.profile_display_name = user.display_name.clone();
+                self.profile_username = user.username.clone();
+                self.profile_about = about;
+                self.core.apply_server_message(ServerMessage::Welcome {
+                    user,
+                    users: Vec::new(),
+                });
+                self.connection_status = "Profile updated".into();
+            }
+            AppEvent::MessagePolicyUpdated { user } => {
+                self.core.apply_server_message(ServerMessage::Welcome {
+                    user,
+                    users: Vec::new(),
+                });
+                self.connection_status = "Message privacy updated".into();
             }
             AppEvent::AvatarCached { user_id, path, error } => {
                 self.loading_avatar_ids.remove(&user_id);
@@ -735,6 +781,67 @@ impl LarptrixShell {
         });
     }
 
+    fn save_profile(&mut self, cx: &mut Context<Self>) {
+        if self.saving_profile {
+            return;
+        }
+        let Some(api) = self.api.clone() else {
+            self.connection_status = "Server API is not ready".into();
+            cx.notify();
+            return;
+        };
+        let display_name = self.profile_display_name.trim().to_string();
+        let username = self.profile_username.trim().to_string();
+        let about = self.profile_about.trim().to_string();
+        if display_name.is_empty() {
+            self.connection_status = "Display name cannot be empty".into();
+            cx.notify();
+            return;
+        }
+
+        self.saving_profile = true;
+        self.connection_status = "Saving profile…".into();
+        cx.notify();
+        let events = self.event_tx.clone();
+        self.runtime.spawn(async move {
+            match api.update_profile(&display_name, &username, &about).await {
+                Ok(user) => {
+                    let _ = events.send_blocking(AppEvent::ProfileUpdated { user, about });
+                }
+                Err(error) => {
+                    let _ = events.send_blocking(AppEvent::Status(format!("Profile update failed: {error}")));
+                    let _ = events.send_blocking(AppEvent::Error("Profile update failed".into()));
+                }
+            }
+        });
+    }
+
+    fn toggle_message_policy(&mut self, cx: &mut Context<Self>) {
+        let current = self.core.state().current_user.as_ref()
+            .map(|user| user.message_policy.as_str())
+            .unwrap_or("everyone");
+        let next = if current == "friends" { "everyone" } else { "friends" };
+        let Some(api) = self.api.clone() else {
+            self.connection_status = "Server API is not ready".into();
+            cx.notify();
+            return;
+        };
+        self.connection_status = "Updating message privacy…".into();
+        cx.notify();
+        let events = self.event_tx.clone();
+        let policy = next.to_string();
+        self.runtime.spawn(async move {
+            match api.update_message_policy(&policy).await {
+                Ok(user) => {
+                    let _ = events.send_blocking(AppEvent::MessagePolicyUpdated { user });
+                }
+                Err(error) => {
+                    let _ = events.send_blocking(AppEvent::Status(format!("Message privacy update failed: {error}")));
+                }
+            }
+        });
+    }
+
     fn create_group_or_channel(&mut self, cx: &mut Context<Self>) {
         if self.creating_group {
             return;
@@ -816,6 +923,9 @@ impl LarptrixShell {
                 LoginField::Composer => { self.composer_text.pop(); }
                 LoginField::PeopleSearch => { self.user_search.pop(); }
                 LoginField::GroupName => { self.group_name.pop(); }
+                LoginField::ProfileDisplayName => { self.profile_display_name.pop(); }
+                LoginField::ProfileUsername => { self.profile_username.pop(); }
+                LoginField::ProfileAbout => { self.profile_about.pop(); }
             }
             cx.notify();
             return;
@@ -827,6 +937,7 @@ impl LarptrixShell {
                 LoginField::Server => self.choose_server(cx),
                 LoginField::PeopleSearch => self.search_users(cx),
                 LoginField::GroupName => self.create_group_or_channel(cx),
+                LoginField::ProfileDisplayName | LoginField::ProfileUsername | LoginField::ProfileAbout => self.save_profile(cx),
                 _ => self.start_connection(cx),
             }
             return;
@@ -845,6 +956,9 @@ impl LarptrixShell {
                     LoginField::Composer => self.composer_text.len(),
                     LoginField::PeopleSearch => self.user_search.len(),
                     LoginField::GroupName => self.group_name.len(),
+                    LoginField::ProfileDisplayName => self.profile_display_name.len(),
+                    LoginField::ProfileUsername => self.profile_username.len(),
+                    LoginField::ProfileAbout => self.profile_about.len(),
                 };
                 let max_len = match field {
                     LoginField::Server => 256usize,
@@ -855,6 +969,9 @@ impl LarptrixShell {
                     LoginField::Composer => 12_000usize,
                     LoginField::PeopleSearch => 64usize,
                     LoginField::GroupName => 32usize,
+                    LoginField::ProfileDisplayName => 32usize,
+                    LoginField::ProfileUsername => 24usize,
+                    LoginField::ProfileAbout => 160usize,
                 };
                 let remaining = max_len.saturating_sub(current_len);
                 let pasted: String = text.chars()
@@ -875,6 +992,9 @@ impl LarptrixShell {
                     LoginField::Composer => self.composer_text.push_str(&pasted),
                     LoginField::PeopleSearch => self.user_search.push_str(&pasted),
                     LoginField::GroupName => self.group_name.push_str(&pasted),
+                    LoginField::ProfileDisplayName => self.profile_display_name.push_str(&pasted),
+                    LoginField::ProfileUsername => self.profile_username.push_str(&pasted),
+                    LoginField::ProfileAbout => self.profile_about.push_str(&pasted),
                 }
                 cx.notify();
             }
@@ -895,6 +1015,9 @@ impl LarptrixShell {
                 LoginField::Composer => (self.composer_text.len(), 12_000usize),
                 LoginField::PeopleSearch => (self.user_search.len(), 64usize),
                 LoginField::GroupName => (self.group_name.len(), 32usize),
+                LoginField::ProfileDisplayName => (self.profile_display_name.len(), 32usize),
+                LoginField::ProfileUsername => (self.profile_username.len(), 24usize),
+                LoginField::ProfileAbout => (self.profile_about.len(), 160usize),
             };
             if current_len + text.len() > max_len || text.chars().any(char::is_control) {
                 return;
@@ -916,6 +1039,9 @@ impl LarptrixShell {
                 LoginField::Composer => self.composer_text.push_str(text),
                 LoginField::PeopleSearch => self.user_search.push_str(text),
                 LoginField::GroupName => self.group_name.push_str(text),
+                LoginField::ProfileDisplayName => self.profile_display_name.push_str(text),
+                LoginField::ProfileUsername => self.profile_username.push_str(text),
+                LoginField::ProfileAbout => self.profile_about.push_str(text),
             }
             cx.notify();
         }
@@ -963,6 +1089,9 @@ impl LarptrixShell {
                         LoginField::Composer => "message-composer",
                         LoginField::PeopleSearch => "people-search-input",
                         LoginField::GroupName => "group-name-input",
+                        LoginField::ProfileDisplayName => "profile-display-name-input",
+                        LoginField::ProfileUsername => "profile-username-input",
+                        LoginField::ProfileAbout => "profile-about-input",
                     })
                     .track_focus(&self.input_focus)
                     .w_full()
