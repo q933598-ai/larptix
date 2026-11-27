@@ -2175,6 +2175,172 @@ impl LarptrixShell {
             })
     }
 
+    fn group_creation_view(
+        &self,
+        mode: GroupCreationMode,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let friends = self.friends.clone();
+        let selected = self.selected_group_members.clone();
+        let is_channel = mode == GroupCreationMode::Channel;
+        let heading = if is_channel { "NEW CHANNEL" } else { "NEW GROUP" };
+        let submit_label = match mode {
+            GroupCreationMode::Group => if self.creating_group { "Creating…" } else { "Create group" },
+            GroupCreationMode::Channel => if self.creating_group { "Creating…" } else { "Create channel" },
+        };
+
+        div()
+            .p_3()
+            .rounded_lg()
+            .border_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(SIDEBAR))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(section_heading(heading))
+            .child(self.login_field(
+                LoginField::GroupName,
+                "NAME",
+                if is_channel { "Channel name" } else { "Group name" },
+                &self.group_name,
+                cx,
+            ))
+            .when(is_channel, |element| {
+                let policy = self.group_post_policy.clone();
+                element.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .p_2()
+                        .rounded_md()
+                        .bg(rgb(SURFACE))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child("Who can publish?"),
+                        )
+                        .child(
+                            div()
+                                .id("channel-post-policy")
+                                .px_2()
+                                .py_1()
+                                .rounded_md()
+                                .bg(rgb(SURFACE_HOVER))
+                                .text_xs()
+                                .text_color(rgb(ACCENT))
+                                .cursor_pointer()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.group_post_policy = if this.group_post_policy == "admins" {
+                                        "members".into()
+                                    } else {
+                                        "admins".into()
+                                    };
+                                    cx.notify();
+                                }))
+                                .child(if policy == "admins" { "Admins only" } else { "All members" }),
+                        ),
+                )
+            })
+            .child(section_heading("INVITE FRIENDS"))
+            .children(friends.iter().map(|user| {
+                let user_id = user.user_id.clone();
+                let name = user.display_name.clone();
+                let username = user.username.clone();
+                let is_selected = selected.contains(&user_id);
+                let avatar = self.cached_avatar_paths.get(&user_id).cloned();
+                div()
+                    .id(format!("group-member-{user_id}"))
+                    .p_2()
+                    .rounded_md()
+                    .bg(if is_selected { rgb(SURFACE_HOVER) } else { rgb(SURFACE) })
+                    .border_1()
+                    .border_color(if is_selected { rgb(ACCENT) } else { rgb(BORDER) })
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.toggle_group_member(user_id.clone(), cx);
+                    }))
+                    .child(avatar_view(
+                        avatar,
+                        name.chars().next().unwrap_or('?').to_string(),
+                        30.0,
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .child(div().text_sm().text_color(rgb(TEXT)).child(name))
+                            .child(div().text_xs().text_color(rgb(MUTED)).child(format!("@{username}"))),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(if is_selected { rgb(ACCENT) } else { rgb(MUTED) })
+                            .child(if is_selected { "✓" } else { "○" }),
+                    )
+            }).collect::<Vec<_>>())
+            .when(friends.is_empty(), |element| {
+                element.child(empty_hint("Add friends before inviting people to a group or channel"))
+            })
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child(format!("{} friend(s) selected", selected.len())),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("create-group-submit")
+                            .flex_1()
+                            .p_2()
+                            .rounded_md()
+                            .bg(if self.creating_group { rgb(SURFACE_HOVER) } else { rgb(ACCENT) })
+                            .text_color(rgb(RAIL))
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| this.create_group_or_channel(cx)))
+                            .child(submit_label),
+                    )
+                    .child(
+                        div()
+                            .id("create-group-cancel")
+                            .p_2()
+                            .rounded_md()
+                            .bg(rgb(SURFACE))
+                            .text_color(rgb(MUTED))
+                            .text_sm()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.group_creation_mode = None;
+                                this.group_name.clear();
+                                this.selected_group_members.clear();
+                                this.creating_group = false;
+                                cx.notify();
+                            }))
+                            .child("Cancel"),
+                    ),
+            )
+    }
+
     fn groups_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let groups: Vec<_> = self
             .core
@@ -2193,6 +2359,11 @@ impl LarptrixShell {
             .collect();
 
         let no_groups = groups.is_empty();
+        let creation_view = if let Some(mode) = self.group_creation_mode {
+            self.group_creation_view(mode, cx).into_any_element()
+        } else {
+            div().into_any_element()
+        };
 
         div()
             .flex_1()
@@ -2200,6 +2371,57 @@ impl LarptrixShell {
             .flex_col()
             .gap_2()
             .p_4()
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("new-group-button")
+                            .flex_1()
+                            .p_2()
+                            .rounded_md()
+                            .bg(rgb(SURFACE_HOVER))
+                            .text_color(rgb(ACCENT))
+                            .text_xs()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.group_creation_mode = Some(GroupCreationMode::Group);
+                                this.group_name.clear();
+                                this.selected_group_members.clear();
+                                this.creating_group = false;
+                                cx.notify();
+                            }))
+                            .child("+ Group"),
+                    )
+                    .child(
+                        div()
+                            .id("new-channel-button")
+                            .flex_1()
+                            .p_2()
+                            .rounded_md()
+                            .bg(rgb(SURFACE_HOVER))
+                            .text_color(rgb(ACCENT))
+                            .text_xs()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.group_creation_mode = Some(GroupCreationMode::Channel);
+                                this.group_name.clear();
+                                this.selected_group_members.clear();
+                                this.creating_group = false;
+                                cx.notify();
+                            }))
+                            .child("+ Channel"),
+                    ),
+            )
+            .child(creation_view)
+            .child(section_heading("YOUR GROUPS & CHANNELS"))
             .children(groups.into_iter().map(|(group_id, name, members, is_channel, description)| {
                 let click_id = group_id.clone();
                 div()
