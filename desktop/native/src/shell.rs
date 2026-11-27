@@ -383,10 +383,15 @@ impl LarptrixShell {
             AppEvent::ProfileUpdated { user, about } => {
                 self.saving_profile = false;
                 self.profile_display_name = user.display_name.clone();
-                self.profile_username = user.username.clone();
                 self.profile_about = about;
+
+                // /api/me returns a deliberately small public profile. Preserve
+                // the richer current-user state already received over WebSocket.
+                let mut merged_user = self.core.state().current_user.clone().unwrap_or(user);
+                merged_user.display_name = self.profile_display_name.clone();
+                merged_user.username = self.profile_username.clone();
                 self.core.apply_server_message(ServerMessage::Welcome {
-                    user,
+                    user: merged_user,
                     users: Vec::new(),
                 });
                 self.connection_status = "Profile updated".into();
@@ -396,8 +401,11 @@ impl LarptrixShell {
                 self.connection_status = format!("Profile update failed: {error}");
             }
             AppEvent::MessagePolicyUpdated { user } => {
+                // Preserve local device/E2E metadata that /api/me/settings does not return.
+                let mut merged_user = self.core.state().current_user.clone().unwrap_or(user);
+                merged_user.message_policy = user.message_policy;
                 self.core.apply_server_message(ServerMessage::Welcome {
-                    user,
+                    user: merged_user,
                     users: Vec::new(),
                 });
                 self.connection_status = "Message privacy updated".into();
