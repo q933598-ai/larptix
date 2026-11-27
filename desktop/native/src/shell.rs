@@ -10,6 +10,7 @@ use gpui::{
 };
 use larptrix_client_core::ClientCore;
 use larptrix_protocol::{ChatMessage, ClientMessage, ServerMessage, UserInfo};
+use qrcode::{Color as QrColor, QrCode};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
 
@@ -4213,188 +4214,450 @@ impl LarptrixShell {
     }
 
     fn login_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let selected_server = self.server_url.clone();
+        let is_login = self.auth_mode == AuthMode::SignIn;
+        let is_register = self.auth_mode == AuthMode::Register;
+        let status_lower = self.connection_status.to_ascii_lowercase();
+        let status_is_error = status_lower.contains("failed")
+            || status_lower.contains("invalid")
+            || status_lower.contains("error")
+            || status_lower.contains("taken");
+
+        let suggestion_rows: Vec<_> = self.username_suggestions.iter().cloned().map(|username| {
+            let selected = self.selected_register_username.as_deref() == Some(username.as_str());
+            let click_value = username.clone();
+            div()
+                .id(format!("username-suggestion-{username}"))
+                .p_2()
+                .rounded_md()
+                .border_1()
+                .border_color(if selected { rgb(ACCENT) } else { rgb(BORDER) })
+                .bg(if selected { rgb(SURFACE_HOVER) } else { rgb(SURFACE) })
+                .text_color(if selected { rgb(TEXT) } else { rgb(MUTED) })
+                .text_sm()
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.select_register_username(click_value.clone(), cx);
+                }))
+                .child(format!("@{username}{}", if selected { "  ✓" } else { "" }))
+        }).collect();
+
+        let server_field = self.login_field(
+            LoginField::Server,
+            "SERVER",
+            "larptrix.duckdns.org",
+            &self.server_url,
+            cx,
+        );
+
+        let access_key_field = self.login_field(
+            LoginField::AccessKey,
+            "ACCESS KEY",
+            "Paste your 64-character access key",
+            &self.access_key,
+            cx,
+        );
+
+        let recovery_field = self.login_field(
+            LoginField::RecoveryKey,
+            "OLD E2E RECOVERY KEY  ·  OPTIONAL",
+            "Paste the key for your previous encrypted chats",
+            &self.recovery_key,
+            cx,
+        );
+
+        let email_field = self.login_field(
+            LoginField::Email,
+            "EMAIL",
+            "you@example.com",
+            &self.email,
+            cx,
+        );
+        let password_field = self.login_field(
+            LoginField::Password,
+            "PASSWORD",
+            "Account password",
+            &self.password,
+            cx,
+        );
+
+        let display_name_field = self.login_field(
+            LoginField::DisplayName,
+            "DISPLAY NAME",
+            "How should people see you?",
+            &self.display_name,
+            cx,
+        );
+
+        let qr_view = self.sign_in_qr_view();
+
         div()
             .size_full()
+            .relative()
             .flex()
             .items_center()
             .justify_center()
-            .bg(rgb(BG))
+            .overflow_hidden()
+            .bg(rgb(0x080d18))
+            .child(space_background())
             .child(
                 div()
-                    .w(px(460.0))
-                    .p_6()
-                    .rounded_xl()
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .bg(rgb(SIDEBAR))
+                    .w(px(1040.0))
+                    .max_w(px(1120.0))
                     .flex()
-                    .flex_col()
-                    .gap_4()
+                    .items_center()
+                    .justify_center()
+                    .gap_8()
                     .child(
                         div()
-                            .size(px(48.0))
+                            .w(px(650.0))
+                            .p_6()
                             .rounded_xl()
-                            .bg(rgb(ACCENT))
-                            .text_color(rgb(RAIL))
-                            .text_xl()
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child("L"),
-                    )
-                    .child(
-                        div()
+                            .border_1()
+                            .border_color(rgb(0x34445f))
+                            .bg(rgb(0x111a2b))
                             .flex()
                             .flex_col()
-                            .gap_1()
+                            .gap_4()
                             .child(
                                 div()
-                                    .text_2xl()
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .text_color(rgb(TEXT))
-                                    .child("Welcome to Larptrix"),
+                                    .flex()
+                                    .items_center()
+                                    .gap_3()
+                                    .child(pixel_l_logo())
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_0p5()
+                                            .child(
+                                                div()
+                                                    .text_2xl()
+                                                    .font_weight(gpui::FontWeight::BOLD)
+                                                    .text_color(rgb(TEXT))
+                                                    .child("Welcome to Larptrix"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(rgb(MUTED))
+                                                    .child("A little corner of the universe. Your server, your space."),
+                                            ),
+                                    ),
                             )
+                            .child(server_field)
                             .child(
                                 div()
-                                    .text_sm()
-                                    .text_color(rgb(MUTED))
-                                    .child(selected_server),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .id("change-server-button")
-                            .text_xs()
-                            .text_color(rgb(ACCENT))
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.connection_page = ConnectionPage::Servers;
-                                this.connection_status = "Choose a server to continue".into();
-                                cx.notify();
-                            }))
-                            .child("Change server"),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .id("login-mode-access-key")
-                                    .flex_1()
-                                    .p_2()
-                                    .rounded_md()
-                                    .bg(if self.login_mode == LoginMode::AccessKey { rgb(SURFACE_HOVER) } else { rgb(SURFACE) })
-                                    .text_color(rgb(TEXT))
-                                    .text_sm()
-                                    .text_center()
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.login_mode = LoginMode::AccessKey;
-                                        this.active_input = Some(LoginField::AccessKey);
-                                        cx.notify();
-                                    }))
-                                    .child("Access key"),
+                                    .flex()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .id("auth-tab-login")
+                                            .flex_1()
+                                            .p_3()
+                                            .rounded_md()
+                                            .bg(if is_login { rgb(SURFACE_HOVER) } else { rgb(0x0c1422) })
+                                            .border_1()
+                                            .border_color(if is_login { rgb(ACCENT) } else { rgb(BORDER) })
+                                            .text_sm()
+                                            .text_color(if is_login { rgb(TEXT) } else { rgb(MUTED) })
+                                            .text_center()
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.auth_mode = AuthMode::SignIn;
+                                                this.active_input = Some(LoginField::AccessKey);
+                                                this.connection_status.clear();
+                                                cx.notify();
+                                            }))
+                                            .child("Sign in"),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("auth-tab-register")
+                                            .flex_1()
+                                            .p_3()
+                                            .rounded_md()
+                                            .bg(if is_register { rgb(SURFACE_HOVER) } else { rgb(0x0c1422) })
+                                            .border_1()
+                                            .border_color(if is_register { rgb(ACCENT) } else { rgb(BORDER) })
+                                            .text_sm()
+                                            .text_color(if is_register { rgb(TEXT) } else { rgb(MUTED) })
+                                            .text_center()
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.auth_mode = AuthMode::Register;
+                                                this.active_input = Some(LoginField::DisplayName);
+                                                this.connection_status.clear();
+                                                this.registration_access_key = None;
+                                                cx.notify();
+                                            }))
+                                            .child("Create account"),
+                                    ),
                             )
-                            .child(
-                                div()
-                                    .id("login-mode-password")
-                                    .flex_1()
-                                    .p_2()
-                                    .rounded_md()
-                                    .bg(if self.login_mode == LoginMode::EmailPassword { rgb(SURFACE_HOVER) } else { rgb(SURFACE) })
-                                    .text_color(rgb(TEXT))
-                                    .text_sm()
-                                    .text_center()
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.login_mode = LoginMode::EmailPassword;
-                                        this.active_input = Some(LoginField::Email);
-                                        cx.notify();
-                                    }))
-                                    .child("Email & password"),
-                            ),
-                    )
-                    .when(self.login_mode == LoginMode::AccessKey, |element| {
-                        element.child(self.login_field(
-                            LoginField::AccessKey,
-                            "ACCESS KEY",
-                            "64-character access key",
-                            &self.access_key,
-                            cx,
-                        ))
-                    })
-                    .when(self.login_mode == LoginMode::EmailPassword, |element| {
-                        element
-                            .child(self.login_field(
-                                LoginField::Email,
-                                "EMAIL",
-                                "you@example.com",
-                                &self.email,
-                                cx,
-                            ))
-                            .child(self.login_field(
-                                LoginField::Password,
-                                "PASSWORD",
-                                "Account password",
-                                &self.password,
-                                cx,
-                            ))
-                    })
-                    .child(self.login_field(
-                        LoginField::RecoveryKey,
-                        "E2E RECOVERY KEY",
-                        "Separate Base64 recovery key from web setup",
-                        &self.recovery_key,
-                        cx,
-                    ))
-                    .child(
-                        div()
-                            .id("connect-button")
-                            .w_full()
-                            .p_3()
-                            .rounded_md()
-                            .bg(rgb(ACCENT))
-                            .text_color(rgb(RAIL))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.start_connection(cx);
-                            }))
-                            .child(if self.connecting {
-                                "Connecting…"
-                            } else {
-                                "Sign in"
-                            }),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(if self.connection_status.to_ascii_lowercase().contains("failed")
-                                || self.connection_status.to_ascii_lowercase().contains("invalid")
-                                || self.connection_status.to_ascii_lowercase().contains("error")
-                            {
-                                rgb(RED)
-                            } else {
-                                rgb(MUTED)
+                            .when(is_login, |element| {
+                                let key_mode = self.login_mode == LoginMode::AccessKey;
+                                element
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                    .text_color(rgb(MUTED))
+                                                    .child(if key_mode { "SIGN IN WITH ACCESS KEY" } else { "OLDER ACCOUNT" }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("toggle-legacy-login")
+                                                    .text_xs()
+                                                    .text_color(rgb(ACCENT))
+                                                    .cursor_pointer()
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.login_mode = if this.login_mode == LoginMode::AccessKey {
+                                                            LoginMode::EmailPassword
+                                                        } else {
+                                                            LoginMode::AccessKey
+                                                        };
+                                                        this.active_input = Some(if this.login_mode == LoginMode::AccessKey {
+                                                            LoginField::AccessKey
+                                                        } else {
+                                                            LoginField::Email
+                                                        });
+                                                        cx.notify();
+                                                    }))
+                                                    .child(if key_mode { "Use email/password" } else { "Use access key" }),
+                                            ),
+                                    )
+                                    .when(key_mode, |element| element.child(access_key_field))
+                                    .when(!key_mode, |element| element.child(email_field).child(password_field))
+                                    .child(recovery_field)
+                                    .child(
+                                        div()
+                                            .p_3()
+                                            .rounded_md()
+                                            .bg(rgb(0x0c1422))
+                                            .border_1()
+                                            .border_color(rgb(BORDER))
+                                            .text_xs()
+                                            .text_color(rgb(0xb4c4d9))
+                                            .child("The old E2E recovery key is only needed to restore your previous encrypted conversations. Leave it empty to create a fresh E2E identity and a new recovery key on this device."),
+                                    )
+                                    .when_some(self.registration_access_key.clone(), |element, key| {
+                                        element.child(
+                                            div()
+                                                .p_3()
+                                                .rounded_md()
+                                                .bg(rgb(0x172b32))
+                                                .border_1()
+                                                .border_color(rgb(ACCENT))
+                                                .flex()
+                                                .flex_col()
+                                                .gap_1()
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                        .text_color(rgb(ACCENT))
+                                                        .child("ACCOUNT CREATED · SAVE YOUR ACCESS KEY"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(rgb(TEXT))
+                                                        .child(key),
+                                                ),
+                                        )
+                                    })
+                                    .child(
+                                        div()
+                                            .id("connect-button")
+                                            .w_full()
+                                            .p_3()
+                                            .rounded_md()
+                                            .bg(rgb(ACCENT))
+                                            .text_color(rgb(RAIL))
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .text_sm()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, _, cx| this.start_connection(cx)))
+                                            .child(if self.connecting { "Connecting…" } else { "Sign in" }),
+                                    )
                             })
-                            .child(self.connection_status.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(MUTED))
+                            .when(is_register, |element| {
+                                element
+                                    .child(display_name_field)
+                                    .child(
+                                        div()
+                                            .p_3()
+                                            .rounded_md()
+                                            .bg(rgb(0x0c1422))
+                                            .border_1()
+                                            .border_color(rgb(BORDER))
+                                            .text_xs()
+                                            .text_color(rgb(0xb4c4d9))
+                                            .child("Your username is generated from your display name. You do not need to choose one unless the suggested username is already taken."),
+                                    )
+                                    .when(!self.username_suggestions.is_empty(), |element| {
+                                        element
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                    .text_color(rgb(MUTED))
+                                                    .child(format!("@{} is already taken · choose a similar username", self.username_base)),
+                                            )
+                                            .children(suggestion_rows)
+                                    })
+                                    .when_some(self.selected_register_username.clone(), |element, username| {
+                                        element.child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(ACCENT))
+                                                .child(format!("Your username will be @{username}")),
+                                        )
+                                    })
+                                    .child(
+                                        div()
+                                            .id("register-button")
+                                            .w_full()
+                                            .p_3()
+                                            .rounded_md()
+                                            .bg(rgb(ACCENT))
+                                            .text_color(rgb(RAIL))
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .text_sm()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, _, cx| this.start_registration(cx)))
+                                            .child(if self.registering {
+                                                "Creating account…"
+                                            } else if self.selected_register_username.is_some() {
+                                                "Create account with selected username"
+                                            } else {
+                                                "Create account"
+                                            }),
+                                    )
+                            })
                             .child(
-                                "The E2E recovery key is separate from your sign-in credential. It unlocks your encrypted chats and is never saved as plaintext.",
+                                div()
+                                    .text_xs()
+                                    .text_color(if status_is_error { rgb(RED) } else { rgb(MUTED) })
+                                    .child(self.connection_status.clone()),
                             ),
-                    ),
+                    )
+                    .child(if is_login {
+                        qr_view.into_any_element()
+                    } else {
+                        registration_side_card().into_any_element()
+                    }),
             )
     }
+
+    fn sign_in_qr_view(&self) -> impl IntoElement {
+        let access_key: String = self.access_key
+            .chars()
+            .filter(|ch| ch.is_ascii_hexdigit())
+            .collect();
+        let qr_data = if self.login_mode == LoginMode::AccessKey && access_key.len() == 64 {
+            network::normalize_server_url(&self.server_url)
+                .ok()
+                .map(|url| format!("{}#access_key={access_key}", url))
+        } else {
+            None
+        };
+        let qr_rows = qr_data.and_then(|data| QrCode::new(data.as_bytes()).ok()).map(|code| {
+            let width = code.width();
+            (0..width).map(|y| {
+                let cells: Vec<_> = (0..width).map(|x| {
+                    div()
+                        .size(px(4.0))
+                        .bg(if code[(x, y)] == QrColor::Dark {
+                            rgb(0x0b1220)
+                        } else {
+                            rgb(0xffffff)
+                        })
+                }).collect();
+                div().flex().gap(px(0.0)).children(cells)
+            }).collect::<Vec<_>>()
+        });
+
+        div()
+            .w(px(260.0))
+            .p_4()
+            .rounded_xl()
+            .border_1()
+            .border_color(rgb(0x34445f))
+            .bg(rgb(0x111a2b))
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap_3()
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(rgb(ACCENT))
+                    .child("QUICK SIGN IN"),
+            )
+            .child(
+                div()
+                    .size(px(204.0))
+                    .p_2()
+                    .rounded_lg()
+                    .bg(rgb(0xffffff))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when_some(qr_rows, |element, rows| {
+                        element.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(0.0))
+                                .children(rows),
+                        )
+                    })
+                    .when(self.login_mode != LoginMode::AccessKey || access_key.len() != 64, |element| {
+                        element.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap_2()
+                                .child(pixel_l_logo())
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(0x45536a))
+                                        .text_center()
+                                        .child("Enter your access key to generate a sign-in QR"),
+                                ),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .text_center()
+                    .child("Scan with your phone to open this server and sign in to the same account."),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(0x71819a))
+                    .text_center()
+                    .child("The QR contains your access key. Keep it private."),
+            )
+    }
+
 }
 
 fn server_list_path() -> Option<PathBuf> {
