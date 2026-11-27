@@ -797,6 +797,9 @@ impl LarptrixShell {
         let display_name = self.profile_display_name.trim().to_string();
         let username = self.profile_username.trim().to_string();
         let about = self.profile_about.trim().to_string();
+        let tags = self.core.state().current_user.as_ref()
+            .map(|user| user.tags.clone())
+            .unwrap_or_default();
         if display_name.is_empty() {
             self.connection_status = "Display name cannot be empty".into();
             cx.notify();
@@ -808,7 +811,7 @@ impl LarptrixShell {
         cx.notify();
         let events = self.event_tx.clone();
         self.runtime.spawn(async move {
-            match api.update_profile(&display_name, &username, &about).await {
+            match api.update_profile(&display_name, &username, &about, &tags).await {
                 Ok(user) => {
                     let _ = events.send_blocking(AppEvent::ProfileUpdated { user, about });
                 }
