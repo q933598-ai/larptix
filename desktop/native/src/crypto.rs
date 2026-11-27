@@ -174,6 +174,48 @@ impl NativeMatrixCrypto {
         self.device_id.as_str()
     }
 
+    pub fn saved_messages_path(&self) -> Result<PathBuf, String> {
+        Ok(crypto_data_dir(&self.internal_user_id)?.join("saved-messages.enc"))
+    }
+
+    fn local_storage_key(&self) -> Result<[u8; 32], String> {
+        let recovery_key = STANDARD_NO_PAD.decode(&self.recovery_key)
+            .or_else(|_| STANDARD.decode(&self.recovery_key))
+            .map_err(|_| "Could not decode local storage recovery key".to_string())?;
+        let mut hasher = Sha256::new();
+        hasher.update(b"Larptrix native saved messages v1");
+        hasher.update(recovery_key);
+        Ok(hasher.finalize().into())
+    }
+
+    pub fn encrypt_local_data(&self, plaintext: &[u8]) -> Result<Vec<u8>, String> {
+        let key = self.local_storage_key()?;
+        let cipher = Aes256Gcm::new_from_slice(&key)
+            .map_err(|_| "Could not initialize local encryption".to_string())?;
+        let nonce_uuid = Uuid::new_v4();
+        let nonce_bytes = &nonce_uuid.as_bytes()[..12];
+        let nonce = Nonce::from_slice(nonce_bytes);
+        let ciphertext = cipher.encrypt(nonce, plaintext)
+            .map_err(|_| "Could not encrypt local saved messages".to_string())?;
+
+        let mut encoded = Vec::with_capacity(12 + ciphertext.len());
+        encoded.extend_from_slice(nonce_bytes);
+        encoded.extend_from_slice(&ciphertext);
+        Ok(encoded)
+    }
+
+    pub fn decrypt_local_data(&self, encrypted: &[u8]) -> Result<Vec<u8>, String> {
+        if encrypted.len() < 12 + 16 {
+            return Err("Encrypted saved-message store is truncated".into());
+        }
+        let key = self.local_storage_key()?;
+        let cipher = Aes256Gcm::new_from_slice(&key)
+            .map_err(|_| "Could not initialize local decryption".to_string())?;
+        let (nonce_bytes, ciphertext) = encrypted.split_at(12);
+        cipher.decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
+            .map_err(|_| "Could not unlock saved messages; check the E2E recovery key".to_string())
+    }
+
     pub fn room_id_for_dm(&self, peer_id: &str) -> String {
         matrix_dm_room_id(&self.server_name, &self.internal_user_id, peer_id)
     }
