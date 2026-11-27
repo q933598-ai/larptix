@@ -535,8 +535,14 @@ pub async fn connect(
 }
 
 pub(crate) fn normalize_server_url(raw: &str) -> Result<Url, String> {
-    let mut url = Url::parse(raw.trim())
-        .map_err(|error| format!("Invalid server URL: {error}"))?;
+    let raw = raw.trim();
+    let candidate = if raw.contains("://") {
+        raw.to_string()
+    } else {
+        format!("https://{raw}")
+    };
+    let mut url = Url::parse(&candidate)
+        .map_err(|error| format!("Invalid server address: {error}"))?;
 
     if !matches!(url.scheme(), "http" | "https") {
         return Err("Server URL must start with http:// or https://".into());
@@ -659,6 +665,12 @@ mod tests {
         assert_eq!(url.as_str(), "https://chat.example.test/");
         assert_eq!(url.join("api/login").unwrap().as_str(), "https://chat.example.test/api/login");
         assert_eq!(url.join("ws").unwrap().as_str(), "https://chat.example.test/ws");
+    }
+
+    #[test]
+    fn accepts_a_bare_server_domain_without_a_scheme() {
+        let url = normalize_server_url("larptrix.duckdns.org").unwrap();
+        assert_eq!(url.as_str(), "https://larptrix.duckdns.org/");
     }
 
     #[test]
