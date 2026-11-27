@@ -57,10 +57,26 @@ impl Section {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum ConnectionPage {
+    #[default]
+    Servers,
+    SignIn,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum LoginMode {
+    #[default]
+    AccessKey,
+    EmailPassword,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LoginField {
     Server,
     AccessKey,
+    Email,
+    Password,
     RecoveryKey,
     Composer,
 }
@@ -101,7 +117,12 @@ pub struct LarptrixShell {
     pending_decryptions: HashMap<(String, String), ChatMessage>,
     decrypting_messages: HashSet<(String, String)>,
     server_url: String,
+    saved_servers: Vec<String>,
+    connection_page: ConnectionPage,
+    login_mode: LoginMode,
     access_key: String,
+    email: String,
+    password: String,
     recovery_key: String,
     composer_text: String,
     input_focus: FocusHandle,
@@ -128,6 +149,19 @@ impl LarptrixShell {
             }
         })
         .detach();
+
+        let environment_server = std::env::var("LARPTRIX_SERVER_URL").unwrap_or_default();
+        let mut saved_servers = load_saved_servers();
+        if !environment_server.trim().is_empty()
+            && !saved_servers.iter().any(|saved| saved.eq_ignore_ascii_case(environment_server.trim()))
+        {
+            saved_servers.insert(0, environment_server.trim().to_string());
+        }
+        let server_url = if environment_server.trim().is_empty() {
+            saved_servers.first().cloned().unwrap_or_default()
+        } else {
+            environment_server
+        };
 
         Self {
             runtime,
@@ -160,8 +194,13 @@ impl LarptrixShell {
             pending_attachments: Vec::new(),
             pending_decryptions: HashMap::new(),
             decrypting_messages: HashSet::new(),
-            server_url: std::env::var("LARPTRIX_SERVER_URL").unwrap_or_default(),
+            server_url,
+            saved_servers,
+            connection_page: ConnectionPage::Servers,
+            login_mode: LoginMode::AccessKey,
             access_key: String::new(),
+            email: String::new(),
+            password: String::new(),
             recovery_key: String::new(),
             composer_text: String::new(),
             input_focus: cx.focus_handle(),
@@ -179,6 +218,8 @@ impl LarptrixShell {
             AppEvent::Authenticated { user, outgoing, crypto } => {
                 self.connecting = false;
                 self.access_key.clear();
+                self.email.clear();
+                self.password.clear();
                 self.recovery_key.clear();
                 self.outgoing = Some(outgoing);
                 self.crypto = Some(crypto);
@@ -383,35 +424,94 @@ impl LarptrixShell {
         cx.notify();
     }
 
+    fn choose_server(&mut self, cx: &mut Context<Self>) {
+        let raw = self.server_url.trim();
+        if raw.is_empty() {
+            self.connection_status = "Enter a server address first".into();
+            cx.notify();
+            return;
+        }
+        let candidate = if raw.contains("://") {
+            raw.to_string()
+        } else {
+            format!("https://{raw}")
+        };
+        let normalized = match network::normalize_server_url(&candidate) {
+            Ok(url) => url.to_string(),
+            Err(error) => {
+                self.connection_status = error;
+                cx.notify();
+                return;
+            }
+        };
+
+        self.server_url = normalized.clone();
+        if !self.saved_servers.iter().any(|saved| saved.eq_ignore_ascii_case(&normalized)) {
+            self.saved_servers.push(normalized);
+            if self.saved_servers.len() > 20 {
+                self.saved_servers.remove(0);
+            }
+            save_saved_servers(&self.saved_servers);
+        }
+        self.connection_page = ConnectionPage::SignIn;
+        self.connection_status = "Server selected. Sign in to continue.".into();
+        self.active_input = Some(match self.login_mode {
+            LoginMode::AccessKey => LoginField::AccessKey,
+            LoginMode::EmailPassword => LoginField::Email,
+        });
+        cx.notify();
+    }
+
     fn start_connection(&mut self, cx: &mut Context<Self>) {
         if self.connecting || self.core.state().current_user.is_some() {
             return;
         }
 
-        let server_url = self.server_url.trim().to_string();
-        let entered_key = self.access_key.trim().to_string();
+        let candidate = self.server_url.trim().to_string();
+        let server_url = match network::normalize_server_url(&candidate) {
+            Ok(url) => url.to_string(),
+            Err(error) => {
+                self.connection_status = error;
+                cx.notify();
+                return;
+            }
+        };
         let recovery_key = self.recovery_key.trim().to_string();
-        let access_key: String = entered_key
-            .chars()
-            .filter(|ch| ch.is_ascii_hexdigit())
-            .collect();
-        let key_format_is_valid = entered_key
-            .chars()
-            .all(|ch| ch.is_ascii_hexdigit() || ch == '-' || ch.is_ascii_whitespace());
 
-        if server_url.is_empty() {
-            self.connection_status = "Enter your Larptrix server URL".into();
-            cx.notify();
-            return;
-        }
-        if !key_format_is_valid || access_key.len() != 64 {
-            self.connection_status =
-                "Enter the 64-hex access key (with or without grouping dashes)".into();
-            cx.notify();
-            return;
-        }
+        let credentials = match self.login_mode {
+            LoginMode::AccessKey => {
+                let entered_key = self.access_key.trim().to_string();
+                let access_key: String = entered_key
+                    .chars()
+                    .filter(|ch| ch.is_ascii_hexdigit())
+                    .collect();
+                let key_format_is_valid = entered_key
+                    .chars()
+                    .all(|ch| ch.is_ascii_hexdigit() || ch == '-' || ch.is_ascii_whitespace());
+                if !key_format_is_valid || access_key.len() != 64 {
+                    self.connection_status =
+                        "Enter the 64-hex access key (with or without grouping dashes)".into();
+                    cx.notify();
+                    return;
+                }
+                network::LoginCredentials::AccessKey(access_key)
+            }
+            LoginMode::EmailPassword => {
+                let email = self.email.trim().to_string();
+                if email.is_empty() || self.password.is_empty() {
+                    self.connection_status = "Enter your account email and password".into();
+                    cx.notify();
+                    return;
+                }
+                network::LoginCredentials::EmailPassword {
+                    email,
+                    password: self.password.clone(),
+                }
+            }
+        };
+
         if recovery_key.is_empty() {
-            self.connection_status = "Enter the E2E recovery key from your existing web account".into();
+            self.connection_status = "Enter the separate E2E recovery key from your web account".into();
             cx.notify();
             return;
         }
@@ -422,7 +522,7 @@ impl LarptrixShell {
 
         let events: Sender<AppEvent> = Sender::clone(&self.event_tx);
         self.runtime.spawn(async move {
-            if let Err(error) = network::connect(server_url, access_key, recovery_key, events.clone()).await {
+            if let Err(error) = network::connect(server_url, credentials, recovery_key, events.clone()).await {
                 let _ = events.send_blocking(AppEvent::Error(error));
             }
         });
@@ -445,6 +545,8 @@ impl LarptrixShell {
             match field {
                 LoginField::Server => { self.server_url.pop(); }
                 LoginField::AccessKey => { self.access_key.pop(); }
+                LoginField::Email => { self.email.pop(); }
+                LoginField::Password => { self.password.pop(); }
                 LoginField::RecoveryKey => { self.recovery_key.pop(); }
                 LoginField::Composer => { self.composer_text.pop(); }
             }
@@ -453,10 +555,10 @@ impl LarptrixShell {
         }
 
         if event.keystroke.key == "enter" {
-            if field == LoginField::Composer {
-                self.send_message(cx);
-            } else {
-                self.start_connection(cx);
+            match field {
+                LoginField::Composer => self.send_message(cx),
+                LoginField::Server => self.choose_server(cx),
+                _ => self.start_connection(cx),
             }
             return;
         }
@@ -468,13 +570,17 @@ impl LarptrixShell {
                 let current_len = match field {
                     LoginField::Server => self.server_url.len(),
                     LoginField::AccessKey => self.access_key.len(),
+                    LoginField::Email => self.email.len(),
+                    LoginField::Password => self.password.len(),
                     LoginField::RecoveryKey => self.recovery_key.len(),
                     LoginField::Composer => self.composer_text.len(),
                 };
                 let max_len = match field {
                     LoginField::Server => 256usize,
                     LoginField::AccessKey => 80usize,
-                    LoginField::RecoveryKey => 80usize,
+                    LoginField::Email => 320usize,
+                    LoginField::Password => 256usize,
+                    LoginField::RecoveryKey => 128usize,
                     LoginField::Composer => 12_000usize,
                 };
                 let remaining = max_len.saturating_sub(current_len);
@@ -490,6 +596,8 @@ impl LarptrixShell {
                 match field {
                     LoginField::Server => self.server_url.push_str(&pasted),
                     LoginField::AccessKey => self.access_key.push_str(&pasted),
+                    LoginField::Email => self.email.push_str(&pasted),
+                    LoginField::Password => self.password.push_str(&pasted),
                     LoginField::RecoveryKey => self.recovery_key.push_str(&pasted),
                     LoginField::Composer => self.composer_text.push_str(&pasted),
                 }
@@ -506,7 +614,9 @@ impl LarptrixShell {
             let (current_len, max_len) = match field {
                 LoginField::Server => (self.server_url.len(), 256usize),
                 LoginField::AccessKey => (self.access_key.len(), 80usize),
-                LoginField::RecoveryKey => (self.recovery_key.len(), 80usize),
+                LoginField::Email => (self.email.len(), 320usize),
+                LoginField::Password => (self.password.len(), 256usize),
+                LoginField::RecoveryKey => (self.recovery_key.len(), 128usize),
                 LoginField::Composer => (self.composer_text.len(), 12_000usize),
             };
             if current_len + text.len() > max_len || text.chars().any(char::is_control) {
@@ -523,6 +633,8 @@ impl LarptrixShell {
             match field {
                 LoginField::Server => self.server_url.push_str(text),
                 LoginField::AccessKey => self.access_key.push_str(text),
+                LoginField::Email => self.email.push_str(text),
+                LoginField::Password => self.password.push_str(text),
                 LoginField::RecoveryKey => self.recovery_key.push_str(text),
                 LoginField::Composer => self.composer_text.push_str(text),
             }
@@ -539,7 +651,7 @@ impl LarptrixShell {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let focused = self.active_input == Some(field);
-        let display_value = if matches!(field, LoginField::AccessKey | LoginField::RecoveryKey) && !value.is_empty() {
+        let display_value = if matches!(field, LoginField::AccessKey | LoginField::Password | LoginField::RecoveryKey) && !value.is_empty() {
             "•".repeat(value.chars().count())
         } else {
             value.to_string()
@@ -566,6 +678,8 @@ impl LarptrixShell {
                     .id(match field {
                         LoginField::Server => "server-url-input",
                         LoginField::AccessKey => "access-key-input",
+                        LoginField::Email => "email-input",
+                        LoginField::Password => "password-input",
                         LoginField::RecoveryKey => "recovery-key-input",
                         LoginField::Composer => "message-composer",
                     })
@@ -2003,7 +2117,10 @@ impl Drop for LarptrixShell {
 impl Render for LarptrixShell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.core.state().current_user.is_none() {
-            self.login_view(cx).into_any_element()
+            match self.connection_page {
+                ConnectionPage::Servers => self.server_picker_view(cx).into_any_element(),
+                ConnectionPage::SignIn => self.login_view(cx).into_any_element(),
+            }
         } else {
             div()
                 .size_full()
@@ -2504,7 +2621,132 @@ impl LarptrixShell {
             .into_any_element()
     }
 
+    fn server_picker_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let server_entries = self.saved_servers.iter().enumerate().map(|(index, server)| {
+            let server_url = server.clone();
+            div()
+                .id(format!("saved-server-{index}"))
+                .w_full()
+                .p_3()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(BORDER))
+                .bg(rgb(SURFACE))
+                .text_color(rgb(TEXT))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.server_url = server_url.clone();
+                    this.choose_server(cx);
+                }))
+                .child(server.clone())
+        });
+
+        div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgb(BG))
+            .child(
+                div()
+                    .w(px(520.0))
+                    .p_6()
+                    .rounded_xl()
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .bg(rgb(SIDEBAR))
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(
+                        div()
+                            .size(px(48.0))
+                            .rounded_xl()
+                            .bg(rgb(ACCENT))
+                            .text_color(rgb(RAIL))
+                            .text_xl()
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child("L"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_2xl()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .text_color(rgb(TEXT))
+                                    .child("Choose a Larptrix server"),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(rgb(MUTED))
+                                    .child("Connect to your own server or choose one saved on this device."),
+                            ),
+                    )
+                    .child(self.login_field(
+                        LoginField::Server,
+                        "SERVER ADDRESS",
+                        "https://chat.example.com",
+                        &self.server_url,
+                        cx,
+                    ))
+                    .child(
+                        div()
+                            .id("choose-server-button")
+                            .w_full()
+                            .p_3()
+                            .rounded_md()
+                            .bg(rgb(ACCENT))
+                            .text_color(rgb(RAIL))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| this.choose_server(cx)))
+                            .child("Continue"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(rgb(MUTED))
+                            .child("SAVED SERVERS"),
+                    )
+                    .children(server_entries)
+                    .when(self.saved_servers.is_empty(), |element| {
+                        element.child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(MUTED))
+                                .child("No saved servers yet. Add your server address above."),
+                        )
+                    })
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(if self.connection_status.contains("Invalid")
+                                || self.connection_status.contains("Enter")
+                                || self.connection_status.contains("must")
+                            {
+                                rgb(RED)
+                            } else {
+                                rgb(MUTED)
+                            })
+                            .child(self.connection_status.clone()),
+                    ),
+            )
+    }
+
     fn login_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let selected_server = self.server_url.clone();
         div()
             .size_full()
             .flex()
@@ -2551,27 +2793,93 @@ impl LarptrixShell {
                                 div()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
-                                    .child("Connect to your self-hosted server"),
+                                    .child(selected_server),
                             ),
                     )
-                    .child(self.login_field(
-                        LoginField::Server,
-                        "SERVER ADDRESS",
-                        "https://chat.example.com",
-                        &self.server_url,
-                        cx,
-                    ))
-                    .child(self.login_field(
-                        LoginField::AccessKey,
-                        "ACCESS KEY",
-                        "64-character access key",
-                        &self.access_key,
-                        cx,
-                    ))
+                    .child(
+                        div()
+                            .id("change-server-button")
+                            .text_xs()
+                            .text_color(rgb(ACCENT))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.connection_page = ConnectionPage::Servers;
+                                this.connection_status = "Choose a server to continue".into();
+                                cx.notify();
+                            }))
+                            .child("Change server"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .id("login-mode-access-key")
+                                    .flex_1()
+                                    .p_2()
+                                    .rounded_md()
+                                    .bg(if self.login_mode == LoginMode::AccessKey { rgb(SURFACE_HOVER) } else { rgb(SURFACE) })
+                                    .text_color(rgb(TEXT))
+                                    .text_sm()
+                                    .text_center()
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.login_mode = LoginMode::AccessKey;
+                                        this.active_input = Some(LoginField::AccessKey);
+                                        cx.notify();
+                                    }))
+                                    .child("Access key"),
+                            )
+                            .child(
+                                div()
+                                    .id("login-mode-password")
+                                    .flex_1()
+                                    .p_2()
+                                    .rounded_md()
+                                    .bg(if self.login_mode == LoginMode::EmailPassword { rgb(SURFACE_HOVER) } else { rgb(SURFACE) })
+                                    .text_color(rgb(TEXT))
+                                    .text_sm()
+                                    .text_center()
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.login_mode = LoginMode::EmailPassword;
+                                        this.active_input = Some(LoginField::Email);
+                                        cx.notify();
+                                    }))
+                                    .child("Email & password"),
+                            ),
+                    )
+                    .when(self.login_mode == LoginMode::AccessKey, |element| {
+                        element.child(self.login_field(
+                            LoginField::AccessKey,
+                            "ACCESS KEY",
+                            "64-character access key",
+                            &self.access_key,
+                            cx,
+                        ))
+                    })
+                    .when(self.login_mode == LoginMode::EmailPassword, |element| {
+                        element
+                            .child(self.login_field(
+                                LoginField::Email,
+                                "EMAIL",
+                                "you@example.com",
+                                &self.email,
+                                cx,
+                            ))
+                            .child(self.login_field(
+                                LoginField::Password,
+                                "PASSWORD",
+                                "Account password",
+                                &self.password,
+                                cx,
+                            ))
+                    })
                     .child(self.login_field(
                         LoginField::RecoveryKey,
                         "E2E RECOVERY KEY",
-                        "Base64 recovery key from web setup",
+                        "Separate Base64 recovery key from web setup",
                         &self.recovery_key,
                         cx,
                     ))
@@ -2594,16 +2902,15 @@ impl LarptrixShell {
                             .child(if self.connecting {
                                 "Connecting…"
                             } else {
-                                "Connect securely"
+                                "Sign in"
                             }),
                     )
                     .child(
                         div()
                             .text_xs()
-                            .text_color(if self.connection_status.contains("failed")
-                                || self.connection_status.contains("invalid")
-                                || self.connection_status.contains("must")
-                                || self.connection_status.contains("failed")
+                            .text_color(if self.connection_status.to_ascii_lowercase().contains("failed")
+                                || self.connection_status.to_ascii_lowercase().contains("invalid")
+                                || self.connection_status.to_ascii_lowercase().contains("error")
                             {
                                 rgb(RED)
                             } else {
@@ -2616,11 +2923,61 @@ impl LarptrixShell {
                             .text_xs()
                             .text_color(rgb(MUTED))
                             .child(
-                                "Use the E2E recovery key from your existing web account. It unlocks your encrypted device store and is never saved as plaintext.",
+                                "The E2E recovery key is separate from your sign-in credential. It unlocks your encrypted chats and is never saved as plaintext.",
                             ),
                     ),
             )
     }
+}
+
+fn server_list_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("APPDATA").map(PathBuf::from))
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+    Some(base.join("larptrix").join("servers.txt"))
+}
+
+fn load_saved_servers() -> Vec<String> {
+    let Some(path) = server_list_path() else {
+        return Vec::new();
+    };
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+
+    let mut servers = Vec::new();
+    for raw in contents.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let candidate = if raw.contains("://") {
+            raw.to_string()
+        } else {
+            format!("https://{raw}")
+        };
+        if let Ok(url) = network::normalize_server_url(&candidate) {
+            let normalized = url.to_string();
+            if !servers.iter().any(|saved: &String| saved.eq_ignore_ascii_case(&normalized)) {
+                servers.push(normalized);
+            }
+        }
+        if servers.len() == 20 {
+            break;
+        }
+    }
+    servers
+}
+
+fn save_saved_servers(servers: &[String]) {
+    let Some(path) = server_list_path() else {
+        return;
+    };
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let contents = servers.join("\n");
+    let _ = std::fs::write(path, contents);
 }
 
 fn rail_button(
