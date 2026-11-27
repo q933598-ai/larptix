@@ -273,9 +273,11 @@ impl LarptrixShell {
                 self.core.apply_server_message(ServerMessage::Directory { users: users.clone() });
                 self.user_search_results = users;
             }
-            AppEvent::AvatarCached { user_id, path, error: _ } => {
+            AppEvent::AvatarCached { user_id, path, error } => {
                 self.loading_avatar_ids.remove(&user_id);
-                self.cached_avatar_paths.insert(user_id, path);
+                if error.is_none() && !path.as_os_str().is_empty() {
+                    self.cached_avatar_paths.insert(user_id, path);
+                }
             }
             AppEvent::Server(message) => {
                 let avatar_users: Vec<UserInfo> = match &message {
@@ -1718,13 +1720,14 @@ impl LarptrixShell {
             Section::Settings => self.settings_list().into_any_element(),
         };
 
-        let (account_name, username) = self
+        let (account_name, username, account_user_id) = self
             .core
             .state()
             .current_user
             .as_ref()
-            .map(|user| (user.display_name.clone(), user.username.clone()))
-            .unwrap_or_else(|| ("Account".into(), String::new()));
+            .map(|user| (user.display_name.clone(), user.username.clone(), user.user_id.clone()))
+            .unwrap_or_else(|| ("Account".into(), String::new(), String::new()));
+        let account_avatar = self.cached_avatar_paths.get(&account_user_id).cloned();
 
         div()
             .w(px(264.0))
@@ -1770,19 +1773,11 @@ impl LarptrixShell {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(
-                        div()
-                            .size(px(36.0))
-                            .rounded_full()
-                            .bg(rgb(SURFACE_HOVER))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(rgb(ACCENT))
-                            .child(account_name.chars().next().unwrap_or('U').to_string()),
-                    )
+                    .child(avatar_view(
+                        account_avatar,
+                        account_name.chars().next().unwrap_or('U').to_string(),
+                        36.0,
+                    ))
                     .child(
                         div()
                             .flex_1()
@@ -1830,6 +1825,7 @@ impl LarptrixShell {
                 let peer_id = user.user_id.clone();
                 let name = user.display_name.clone();
                 let online = user.online;
+                let avatar = self.cached_avatar_paths.get(&peer_id).cloned();
                 let preview = self
                     .core
                     .state()
@@ -1844,7 +1840,7 @@ impl LarptrixShell {
                             "Offline".into()
                         }
                     });
-                (peer_id, name, preview, online)
+                (peer_id, name, preview, online, avatar)
             })
             .collect();
         let no_peers = rows.is_empty();
@@ -1855,7 +1851,7 @@ impl LarptrixShell {
             .flex_col()
             .gap_1()
             .px_2()
-            .children(rows.into_iter().map(|(peer_id, name, preview, online)| {
+            .children(rows.into_iter().map(|(peer_id, name, preview, online, avatar)| {
                 let selected = self.selected_peer.as_deref() == Some(peer_id.as_str());
                 let click_id = peer_id.clone();
                 chat_entry(
@@ -1863,6 +1859,7 @@ impl LarptrixShell {
                     name,
                     preview,
                     if online { "ONLINE" } else { "OFFLINE" }.into(),
+                    avatar,
                     selected,
                     cx.listener(move |this, _, _, cx| {
                         this.active_section = Section::Messages;
@@ -2252,6 +2249,7 @@ impl LarptrixShell {
             .collect();
 
         let display_name = peer.display_name.clone();
+        let peer_avatar = self.cached_avatar_paths.get(peer_id).cloned();
         let handle = if peer.username.is_empty() {
             String::new()
         } else {
@@ -2280,18 +2278,11 @@ impl LarptrixShell {
                     .gap_3()
                     .border_b_1()
                     .border_color(rgb(BORDER))
-                    .child(
-                        div()
-                            .size(px(36.0))
-                            .rounded_full()
-                            .bg(rgb(SURFACE_HOVER))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(rgb(ACCENT))
-                            .child(display_name.chars().next().unwrap_or('?').to_string()),
-                    )
+                    .child(avatar_view(
+                        peer_avatar,
+                        display_name.chars().next().unwrap_or('?').to_string(),
+                        36.0,
+                    ))
                     .child(
                         div()
                             .flex()
@@ -3449,16 +3440,42 @@ fn rail_button(
         .child(icon)
 }
 
+fn avatar_view(path: Option<PathBuf>, initials: String, size: f32) -> impl IntoElement {
+    let has_image = path.is_some();
+    div()
+        .size(px(size))
+        .rounded_full()
+        .bg(rgb(SURFACE_HOVER))
+        .flex()
+        .items_center()
+        .justify_center()
+        .overflow_hidden()
+        .when_some(path, |element, path| {
+            element.child(
+                img(path)
+                    .w(px(size))
+                    .h(px(size))
+                    .object_fit(gpui::ObjectFit::Contain),
+            )
+        })
+        .when(!has_image, |element| {
+            element
+                .text_sm()
+                .font_weight(gpui::FontWeight::BOLD)
+                .text_color(rgb(ACCENT))
+                .child(initials)
+        })
+}
+
 fn chat_entry(
     id: String,
     name: String,
     preview: String,
     time: String,
+    avatar: Option<PathBuf>,
     selected: bool,
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let initials = name.chars().next().unwrap_or('?').to_string();
-
     div()
         .id(id)
         .px_3()
@@ -3475,19 +3492,11 @@ fn chat_entry(
         })
         .hover(|style| style.bg(rgb(SURFACE)))
         .on_click(on_click)
-        .child(
-            div()
-                .size(px(40.0))
-                .rounded_full()
-                .bg(rgb(SURFACE_HOVER))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_sm()
-                .font_weight(gpui::FontWeight::BOLD)
-                .text_color(rgb(ACCENT))
-                .child(initials),
-        )
+        .child(avatar_view(
+            avatar,
+            name.chars().next().unwrap_or('?').to_string(),
+            40.0,
+        ))
         .child(
             div()
                 .flex_1()
